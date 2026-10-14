@@ -8,6 +8,8 @@ export interface SavedServer {
   userId: string;
   username: string;
   accessToken: string;
+  /** 明文记住的登录密码（仅保存在本机 localStorage，用于查看与自动重新登录） */
+  password?: string;
   lastActive: number;
 }
 
@@ -18,6 +20,7 @@ interface AuthState {
 
   // Actions
   addOrUpdateServer: (server: Omit<SavedServer, 'lastActive'>) => void;
+  updateServer: (id: string, updates: Partial<Omit<SavedServer, 'id' | 'lastActive'>>) => void;
   removeServer: (id: string) => void;
   setCurrentServer: (id: string) => void;
   updateDanmuConfig: (config: Partial<DanmuConfig>) => void;
@@ -105,6 +108,26 @@ export const useAuthStore = create<AuthState>((set, get) => {
           servers: newServers,
           currentServerId: updatedServer.id,
         };
+      });
+    },
+
+    /**
+     * 就地更新已保存服务器的信息（名称 / 地址 / 账号 / 令牌等）。
+     * 不改变当前选中的服务器，也不刷新 lastActive 排序，仅用于"编辑服务器信息"场景。
+     */
+    updateServer: (id, updates) => {
+      set((state) => {
+        if (!state.servers.some((s) => s.id === id)) return state;
+
+        const newServers = state.servers.map((s) => (s.id === id ? { ...s, ...updates } : s));
+
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(newServers));
+        } catch (e) {
+          console.error(e);
+        }
+
+        return { servers: newServers };
       });
     },
 

@@ -1,9 +1,20 @@
 import React, { useEffect, useState, useCallback, useLayoutEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { LogOut, RefreshCw, Film, Tv, Play, History, Server } from 'lucide-react';
+import {
+  LogOut,
+  RefreshCw,
+  Film,
+  Tv,
+  Play,
+  History,
+  Server,
+  MessagesSquare,
+  Pencil,
+} from 'lucide-react';
 import { useAuthStore } from '../stores/useAuthStore';
 import { useMediaStore } from '../stores/useMediaStore';
 import { DanmuServerModal } from '../components/danmu/DanmuServerModal';
+import { EmbyServerModal } from '../components/settings/EmbyServerModal';
 import {
   EmbyItem,
   getUserViews,
@@ -60,6 +71,7 @@ export const HomePage: React.FC = () => {
   const isCached = isLoaded && serverId === currentServer?.id;
   const [loading, setLoading] = useState(!isCached);
   const [isDanmuModalOpen, setIsDanmuModalOpen] = useState(false);
+  const [isServerModalOpen, setIsServerModalOpen] = useState(false);
 
   const loadData = useCallback(
     async (isManualRefresh = false) => {
@@ -144,7 +156,8 @@ export const HomePage: React.FC = () => {
     }
 
     loadData(false);
-  }, [currentServer?.id]);
+    // 服务器地址或令牌被编辑后，即便 id 不变也需重新拉取媒体库
+  }, [currentServer?.id, currentServer?.url, currentServer?.accessToken]);
 
   // Restore scroll position when returning from video/detail pages
   useLayoutEffect(() => {
@@ -234,9 +247,14 @@ export const HomePage: React.FC = () => {
           <h1 className="text-2xl font-bold tracking-tight text-white flex items-center space-x-2">
             <span>媒体库</span>
             {currentServer && (
-              <span className="text-xs px-2.5 py-1 bg-white/10 rounded-full font-normal text-gray-300">
-                {currentServer.name}
-              </span>
+              <button
+                onClick={() => setIsServerModalOpen(true)}
+                className="text-xs px-2.5 py-1 bg-white/10 hover:bg-white/20 rounded-full font-normal text-gray-300 hover:text-white transition cursor-pointer flex items-center space-x-1.5 group"
+                title="编辑服务器信息"
+              >
+                <span>{currentServer.name}</span>
+                <Pencil className="w-3 h-3 opacity-60 group-hover:opacity-100" />
+              </button>
             )}
           </h1>
           <p className="text-xs text-gray-400 mt-1">欢迎回来，{currentServer?.username || '用户'}</p>
@@ -244,11 +262,18 @@ export const HomePage: React.FC = () => {
 
         <div className="flex items-center space-x-2">
           <button
+            onClick={() => setIsServerModalOpen(true)}
+            className="p-2 rounded-xl bg-surface hover:bg-white/10 text-gray-300 hover:text-white transition cursor-pointer"
+            title="Emby 服务器管理 / 编辑服务器信息"
+          >
+            <Server className="w-4 h-4" />
+          </button>
+          <button
             onClick={() => setIsDanmuModalOpen(true)}
             className="p-2 rounded-xl bg-surface hover:bg-white/10 text-gray-300 hover:text-white transition cursor-pointer"
             title="弹幕 API 节点设置"
           >
-            <Server className="w-4 h-4" />
+            <MessagesSquare className="w-4 h-4" />
           </button>
           <button
             onClick={() => loadData(true)}
@@ -360,6 +385,12 @@ export const HomePage: React.FC = () => {
           })}
         </div>
       )}
+
+      {/* Emby 服务器管理弹窗 */}
+      <EmbyServerModal
+        isOpen={isServerModalOpen}
+        onClose={() => setIsServerModalOpen(false)}
+      />
 
       {/* 弹幕 API 节点设置弹窗 */}
       <DanmuServerModal

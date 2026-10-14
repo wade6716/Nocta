@@ -1,12 +1,24 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Server, User, Lock, PlayCircle, Trash2, ArrowRight } from 'lucide-react';
+import {
+  Server,
+  User,
+  Lock,
+  PlayCircle,
+  Trash2,
+  ArrowRight,
+  Edit2,
+  Settings2,
+  Eye,
+  EyeOff,
+} from 'lucide-react';
 import {
   testServerConnection,
   authenticateByName,
   normalizeServerUrl,
 } from '../api/embyClient';
 import { useAuthStore } from '../stores/useAuthStore';
+import { EmbyServerModal } from '../components/settings/EmbyServerModal';
 
 export const LoginPage: React.FC = () => {
   const navigate = useNavigate();
@@ -17,6 +29,9 @@ export const LoginPage: React.FC = () => {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [isServerModalOpen, setIsServerModalOpen] = useState(false);
+  const [editingServerId, setEditingServerId] = useState<string | null>(null);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -39,6 +54,7 @@ export const LoginPage: React.FC = () => {
         userId: auth.User.Id,
         username: auth.User.Name,
         accessToken: auth.AccessToken,
+        password,
       });
 
       navigate('/');
@@ -52,6 +68,11 @@ export const LoginPage: React.FC = () => {
   const handleQuickLogin = (serverId: string) => {
     setCurrentServer(serverId);
     navigate('/');
+  };
+
+  const handleEditServer = (serverId: string) => {
+    setEditingServerId(serverId);
+    setIsServerModalOpen(true);
   };
 
   return (
@@ -74,9 +95,22 @@ export const LoginPage: React.FC = () => {
         {/* Saved servers quick entry */}
         {servers.length > 0 && (
           <div className="bg-surface/80 border border-white/5 rounded-2xl p-4 shadow-xl space-y-3">
-            <span className="text-xs font-semibold uppercase tracking-wider text-gray-400 block px-1">
-              已保存的服务器
-            </span>
+            <div className="flex items-center justify-between px-1">
+              <span className="text-xs font-semibold uppercase tracking-wider text-gray-400">
+                已保存的服务器
+              </span>
+              <button
+                onClick={() => {
+                  setEditingServerId(null);
+                  setIsServerModalOpen(true);
+                }}
+                className="text-xs text-primary hover:text-primary-hover transition flex items-center space-x-1 cursor-pointer"
+                title="服务器管理"
+              >
+                <Settings2 className="w-3.5 h-3.5" />
+                <span>管理</span>
+              </button>
+            </div>
             <div className="space-y-2 max-h-48 overflow-y-auto">
               {servers.map((srv) => (
                 <div
@@ -99,6 +133,13 @@ export const LoginPage: React.FC = () => {
                       title="直接进入"
                     >
                       <ArrowRight className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => handleEditServer(srv.id)}
+                      className="p-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 transition cursor-pointer"
+                      title="编辑服务器信息"
+                    >
+                      <Edit2 className="w-4 h-4" />
                     </button>
                     <button
                       onClick={() => removeServer(srv.id)}
@@ -162,12 +203,20 @@ export const LoginPage: React.FC = () => {
             <div className="relative flex items-center">
               <Lock className="w-4 h-4 absolute left-3 text-gray-400" />
               <input
-                type="password"
+                type={showPassword ? 'text' : 'password'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="密码（留空代表无密码）"
-                className="w-full bg-card border border-white/10 rounded-xl pl-9 pr-3 py-2.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-primary transition"
+                className="w-full bg-card border border-white/10 rounded-xl pl-9 pr-10 py-2.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-primary transition"
               />
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                title={showPassword ? '隐藏密码' : '显示密码'}
+                className="absolute right-2.5 p-1 rounded-md text-gray-400 hover:text-white hover:bg-white/10 transition cursor-pointer"
+              >
+                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
             </div>
           </div>
 
@@ -180,6 +229,13 @@ export const LoginPage: React.FC = () => {
           </button>
         </form>
       </div>
+
+      {/* Emby 服务器管理 / 编辑弹窗 */}
+      <EmbyServerModal
+        isOpen={isServerModalOpen}
+        onClose={() => setIsServerModalOpen(false)}
+        initialEditId={editingServerId}
+      />
     </div>
   );
 };

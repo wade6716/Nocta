@@ -30,6 +30,24 @@
 - 客户端在启动或登录时，通过 `useAuthStore` 自动将当前选中的服务器 ID 持久化至 `emby_current_server_id`。
 - 启动时自动恢复并加载最后一次使用的服务器；如果配置了多个 Emby 服务器，可在首页或登录页随时切换。
 
+### 2.1.1 服务器信息的编辑（Emby Server Management）
+- **入口**：
+  - 首页顶栏 `Server` 图标按钮，或点击标题旁当前的服务器名称徽标（带铅笔提示）；
+  - 登录页「已保存的服务器」列表中的编辑按钮与右上角「管理」按钮。
+- **组件**：[`EmbyServerModal.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/settings/EmbyServerModal.tsx)
+  （支持列表查看、新增、编辑、切换、删除，样式与弹幕节点弹窗保持一致）。
+- **编辑规则（关键）**：
+  - 仅修改**名称**时不做网络请求，直接经 `useAuthStore.updateServer` 落库；
+  - 修改**地址 / 用户名**或填写了**新密码**时，先 `testServerConnection` 再做 `authenticateByName`，成功后一次性更新 `url / userId / username / accessToken`；
+  - 编辑采用**原地更新**（保留原有服务器 ID 与 `lastActive` 排序，不改变当前选中项），避免产生重复条目；
+  - 若被编辑的正是当前使用的服务器，必须调用 `useMediaStore.clearMediaCache()` 作废旧媒体库缓存，并且 [`HomePage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/HomePage.tsx) 的加载 effect 依赖 `currentServer?.url` 与 `currentServer?.accessToken`，确保换址/换令牌后自动重新拉取媒体库。
+- **记住并可查看密码**：
+  - `SavedServer` 增加可选字段 `password`，登录/新增/重新认证成功后与 `accessToken` 一起写入本机 `localStorage`（`emby_auth_store`）。
+  - 查看入口：服务器列表每行的眼睛按钮（明文展开，同时只展开一台）；编辑弹窗密码框会自动预填，配合右侧眼睛按钮查看。
+  - 判定重连的依据是 `password !== (original.password ?? '')`，而非"密码框非空"，因此预填密码后仅改名称不会误触发重新登录。
+  - 早期版本保存、未留存密码的服务器：列表不显示眼睛按钮，编辑时给出"重新输入并保存一次即可查看"的提示。
+  - **安全边界**：密码为明文本地存储（与既有 `accessToken` 同一安全等级），弹窗内已向用户明示，勿在共享设备上使用。
+
 ### 2.2 “继续观看”与“最近播放”过滤与聚合规则
 1. **坚决排除非视频内容**：
    - 音乐、音频（Audio）、歌单（MusicAlbum/Playlist）等**一律不展示**在“继续观看”和“最近播放”中。

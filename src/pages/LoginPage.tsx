@@ -62,8 +62,13 @@ export const LoginPage: React.FC = () => {
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-tr from-primary to-cyan-400 text-white shadow-xl shadow-primary/20">
             <PlayCircle className="w-10 h-10" />
           </div>
-          <h1 className="text-2xl font-bold tracking-tight text-white">Emby 桌面播放器</h1>
-          <p className="text-sm text-gray-400">Tauri 2 + 原生 libmpv 硬解 + 弹幕全网匹配</p>
+          <h1 className="text-2xl font-bold tracking-tight text-white flex items-center justify-center space-x-2">
+            <span>Nocta</span>
+            <span className="text-sm px-2.5 py-0.5 rounded-full bg-primary/20 text-primary font-medium tracking-normal">
+              夜幕
+            </span>
+          </h1>
+          <p className="text-xs text-gray-400">暗色沉浸式私人影院 · 银幕与弹幕的双重盛宴</p>
         </div>
 
         {/* Saved servers quick entry */}

@@ -1,12 +1,12 @@
 [package]
-name = "emby-tauri-player"
+name = "nocta"
 version = "0.1.0"
-description = "Modern lightweight Emby Desktop Player with libmpv hardware acceleration and Danmaku"
+description = "Nocta - 夜幕: 沉浸式 Emby 弹幕播放器"
 authors = ["wade"]
 edition = "2021"
 
 [lib]
-name = "emby_tauri_player_lib"
+name = "nocta_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

@@ -7,7 +7,7 @@ interface TitleBarProps {
   title?: string;
 }
 
-export const TitleBar: React.FC<TitleBarProps> = ({ title = 'Emby Player' }) => {
+export const TitleBar: React.FC<TitleBarProps> = ({ title = 'Nocta · 夜幕' }) => {
   const [isMaximized, setIsMaximized] = useState(false);
   const isTauri = isTauriEnvironment();
 

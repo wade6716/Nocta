@@ -31,8 +31,7 @@ const LEGACY_KEY = 'emby_danmu_config';
 const DEFAULT_SERVER: DanmuServerEntry = {
   id: 'default-local',
   name: '本地 Danmu API',
-  baseUrl: 'http://127.0.0.1:9321',
-  token: '87654321',
+  baseUrl: 'http://127.0.0.1:9321/87654321',
   preferredPlatform: '',
   status: 'idle',
 };
@@ -43,7 +42,17 @@ function loadInitialServers(): DanmuServerEntry[] {
     if (raw) {
       const parsed: DanmuServerEntry[] = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed;
+        // 自动合并历史数据中分离的 token 到 baseUrl 中
+        return parsed.map((s) => {
+          let cleanBase = (s.baseUrl || '').replace(/\/+$/, '');
+          if (s.token && !cleanBase.endsWith(`/${s.token}`)) {
+            cleanBase = `${cleanBase}/${s.token.replace(/^\/+|\/+$/g, '')}`;
+          }
+          return {
+            ...s,
+            baseUrl: cleanBase || DEFAULT_SERVER.baseUrl,
+          };
+        });
       }
     }
 
@@ -52,12 +61,15 @@ function loadInitialServers(): DanmuServerEntry[] {
     if (legacyRaw) {
       const leg = JSON.parse(legacyRaw);
       if (leg?.baseUrl) {
+        let base = leg.baseUrl.replace(/\/+$/, '');
+        if (leg.token && !base.endsWith(`/${leg.token}`)) {
+          base = `${base}/${leg.token.replace(/^\/+|\/+$/g, '')}`;
+        }
         return [
           {
             id: 'legacy-migrated',
             name: '默认配置节点',
-            baseUrl: leg.baseUrl,
-            token: leg.token || '87654321',
+            baseUrl: base,
             preferredPlatform: leg.preferredPlatform || '',
             status: 'idle',
           },
@@ -157,9 +169,11 @@ export const useDanmuStore = create<DanmuState>((set, get) => {
       get().updateServer(id, { status: 'testing' });
 
       const startTime = performance.now();
-      const base = server.baseUrl.replace(/\/+$/, '');
-      const tokenPath = server.token ? `/${server.token.replace(/^\/+|\/+$/g, '')}` : '';
-      const testUrl = `${base}${tokenPath}/api/v2/version`;
+      let base = server.baseUrl.replace(/\/+$/, '');
+      if (server.token && !base.endsWith(`/${server.token}`)) {
+        base = `${base}/${server.token.replace(/^\/+|\/+$/g, '')}`;
+      }
+      const testUrl = `${base}/api/v2/version`;
 
       try {
         const res = await httpClient(testUrl, {

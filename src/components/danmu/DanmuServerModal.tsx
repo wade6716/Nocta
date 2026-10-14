@@ -35,7 +35,6 @@ export const DanmuServerModal: React.FC<DanmuServerModalProps> = ({ isOpen, onCl
   // Form states
   const [name, setName] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
-  const [token, setToken] = useState('87654321');
   const [preferredPlatform, setPreferredPlatform] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
   const [testingId, setTestingId] = useState<string | null>(null);
@@ -44,8 +43,7 @@ export const DanmuServerModal: React.FC<DanmuServerModalProps> = ({ isOpen, onCl
 
   const handleOpenAdd = () => {
     setName('');
-    setBaseUrl('http://127.0.0.1:9321');
-    setToken('87654321');
+    setBaseUrl('http://127.0.0.1:9321/87654321');
     setPreferredPlatform('');
     setFormError(null);
     setEditingId(null);
@@ -55,7 +53,6 @@ export const DanmuServerModal: React.FC<DanmuServerModalProps> = ({ isOpen, onCl
   const handleOpenEdit = (server: DanmuServerEntry) => {
     setName(server.name);
     setBaseUrl(server.baseUrl);
-    setToken(server.token || '');
     setPreferredPlatform(server.preferredPlatform || '');
     setFormError(null);
     setEditingId(server.id);
@@ -80,14 +77,12 @@ export const DanmuServerModal: React.FC<DanmuServerModalProps> = ({ isOpen, onCl
       updateServer(editingId, {
         name: cleanName,
         baseUrl: cleanUrl,
-        token: token.trim(),
         preferredPlatform: preferredPlatform.trim(),
       });
     } else {
       const newId = addServer({
         name: cleanName,
         baseUrl: cleanUrl,
-        token: token.trim(),
         preferredPlatform: preferredPlatform.trim(),
       });
       // Test immediately
@@ -141,8 +136,7 @@ export const DanmuServerModal: React.FC<DanmuServerModalProps> = ({ isOpen, onCl
           <div className="bg-primary/10 border border-primary/20 rounded-xl p-3.5 flex items-start space-x-3 text-xs text-gray-300">
             <ShieldAlert className="w-4 h-4 text-primary flex-shrink-0 mt-0.5" />
             <span>
-              客户端不捆绑任何服务端程序，仅作为纯 HTTP 消费者。您可以添加本地自建、局域网 NAS
-              或公网 VPS 部署的 <code>danmu_api</code> 节点，支持随时测速与切换主用。
+              客户端不捆绑任何服务端程序，仅作为纯 HTTP 消费者。若您的 <code>danmu_api</code> 开启了 Token 保护，请直接将 Token 包含在地址中（例如 <code>http://127.0.0.1:9321/87654321</code> 或 <code>http://vps:9321/your_token</code>），支持随时测速与切换主用。
             </span>
           </div>
 
@@ -195,7 +189,6 @@ export const DanmuServerModal: React.FC<DanmuServerModalProps> = ({ isOpen, onCl
                           </div>
                           <p className="text-xs text-gray-400 font-mono truncate mt-0.5">
                             {s.baseUrl}
-                            {s.token ? ` (Token: ${s.token.substring(0, 3)}***)` : ''}
                           </p>
                         </div>
                       </div>
@@ -289,25 +282,19 @@ export const DanmuServerModal: React.FC<DanmuServerModalProps> = ({ isOpen, onCl
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-xs text-gray-300 font-medium">服务地址 (Base URL)</label>
+                <label className="text-xs text-gray-300 font-medium">
+                  服务地址 (若服务端配置了 Token 请直接写在地址末尾)
+                </label>
                 <input
                   type="text"
                   value={baseUrl}
                   onChange={(e) => setBaseUrl(e.target.value)}
-                  placeholder="如: http://127.0.0.1:9321 或 http://vps.example.com:9321"
+                  placeholder="如: http://127.0.0.1:9321/87654321 或 http://vps:9321/your_token"
                   className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-primary"
                 />
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-xs text-gray-300 font-medium">访问令牌 (Token)</label>
-                <input
-                  type="text"
-                  value={token}
-                  onChange={(e) => setToken(e.target.value)}
-                  placeholder="danmu_api 部署配置的 token，默认 87654321"
-                  className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-primary"
-                />
+                <p className="text-[11px] text-gray-500">
+                  提示：无需单独填写 Token，直接作为 URL 路径的一部分填写即可（如 <code>http://127.0.0.1:9321/87654321</code>）。无 Token 则直接填主机与端口。
+                </p>
               </div>
 
               <div className="space-y-1.5">

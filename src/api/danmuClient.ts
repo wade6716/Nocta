@@ -1,8 +1,8 @@
 import { httpClient } from './http';
 
 export interface DanmuConfig {
-  baseUrl: string; // 例如 "http://127.0.0.1:9321" 或远程地址
-  token?: string; // 默认 "87654321"
+  baseUrl: string; // 例如 "http://127.0.0.1:9321/87654321" 或远程地址（Token 直接写在地址中）
+  token?: string; // 兼容历史字段
   preferredPlatform?: string; // "bilibili1" | "qiyi" | "qq" | "youku" | "bahamut"
 }
 
@@ -47,14 +47,15 @@ export interface DanmuAnimeSearchResult {
   }>;
 }
 
-// 规范化拼接带 Token 的 API 路径
+// 规范化拼接 API 路径（Token 直接包含在 baseUrl 地址中）
 function buildEndpoint(config: DanmuConfig, path: string): string {
-  const base = (config.baseUrl || 'http://127.0.0.1:9321').replace(/\/+$/, '');
-  const tokenSegment = config.token ? `/${config.token.replace(/^\/+|\/+$/g, '')}` : '';
-  if (config.token && base.endsWith(`/${config.token}`)) {
-    return `${base}${path}`;
+  let base = (config.baseUrl || 'http://127.0.0.1:9321/87654321').replace(/\/+$/, '');
+  // 若有历史遗留单独 token 且 base 未包含，则平滑兼容追加
+  if (config.token && !base.endsWith(`/${config.token}`)) {
+    base = `${base}/${config.token.replace(/^\/+|\/+$/g, '')}`;
   }
-  return `${base}${tokenSegment}${path}`;
+  const cleanPath = path.startsWith('/') ? path : `/${path}`;
+  return `${base}${cleanPath}`;
 }
 
 /**

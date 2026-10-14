@@ -54,14 +54,12 @@ function loadInitialDanmu(): DanmuConfig {
     return raw
       ? JSON.parse(raw)
       : {
-          baseUrl: 'http://127.0.0.1:9321',
-          token: '87654321',
+          baseUrl: 'http://127.0.0.1:9321/87654321',
           preferredPlatform: '',
         };
   } catch {
     return {
-      baseUrl: 'http://127.0.0.1:9321',
-      token: '87654321',
+      baseUrl: 'http://127.0.0.1:9321/87654321',
       preferredPlatform: '',
     };
   }

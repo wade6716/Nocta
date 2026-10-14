@@ -135,15 +135,22 @@ export async function getDanmuBangumiEpisodes(
 }
 
 /**
- * 4. 根据 commentId 拉取弹幕列表并附带源站视频时长 (GET /api/v2/comment/:id?format=json&duration=true)
+ * 4. 根据 commentId 拉取弹幕列表并附带源站视频时长 (GET /api/v2/comment/:id?format=json&duration=true&withRelated=true&chConvert=1)
+ * 默认开启 withRelated=true 以聚合 B站、爱奇艺、腾讯等全网关联平台弹幕，开启 chConvert=1 进行简繁规范化
  */
 export async function fetchCommentsById(
   config: DanmuConfig,
-  commentId: string | number
+  commentId: string | number,
+  options?: {
+    withRelated?: boolean;
+    chConvert?: number;
+  }
 ): Promise<DanmuCommentResponse> {
+  const withRelated = options?.withRelated ?? true;
+  const chConvert = options?.chConvert ?? 1;
   const url = buildEndpoint(
     config,
-    `/api/v2/comment/${commentId}?format=json&duration=true`
+    `/api/v2/comment/${commentId}?format=json&duration=true&withRelated=${withRelated}&chConvert=${chConvert}`
   );
   const res = await httpClient(url, { method: 'GET' });
   if (!res.ok) throw new Error(`Fetch comments failed: ${res.status}`);

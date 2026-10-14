@@ -17,6 +17,7 @@ import {
   Unlink,
   BookmarkCheck,
   AlertTriangle,
+  ArrowDownToLine,
 } from 'lucide-react';
 import {
   DanmuAnimeSearchResult,
@@ -36,8 +37,12 @@ interface DanmakuDrawerProps {
   onClose: () => void;
   bridge: MpvDanmakuBridge;
   itemId: string;
+  seriesId?: string;
   itemTitle?: string;
   seriesName?: string;
+  layoutKey?: string;
+  videoAspectRatio?: number;
+  isWidescreen?: boolean;
   currentMatchedTitle?: string;
   sourceCommentCount?: number;
   sourceDuration?: number;
@@ -55,8 +60,12 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
   onClose,
   bridge,
   itemId,
+  seriesId,
   itemTitle = '',
   seriesName = '',
+  layoutKey,
+  videoAspectRatio,
+  isWidescreen = false,
   currentMatchedTitle,
   sourceCommentCount = 0,
   sourceDuration,
@@ -90,6 +99,12 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
   const danmakuBindings = usePlayerStore((s) => s.danmakuBindings);
   const bindDanmaku = usePlayerStore((s) => s.bindDanmaku);
   const unbindDanmaku = usePlayerStore((s) => s.unbindDanmaku);
+  const videoLayouts = usePlayerStore((s) => s.videoLayouts);
+  const setVideoLayout = usePlayerStore((s) => s.setVideoLayout);
+  const resetVideoLayout = usePlayerStore((s) => s.resetVideoLayout);
+
+  const effectiveLayoutKey = layoutKey || (seriesId ? `series_${seriesId}` : `item_${itemId}`);
+  const currentLayout = videoLayouts[effectiveLayoutKey] || { bottomAlign: false, verticalOffset: 100 };
 
   const currentBinding = danmakuBindings[itemId];
   const currentOffset = itemOffsets[itemId] ?? 0;
@@ -310,7 +325,7 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
           >
             <div className="flex items-center justify-center space-x-1.5">
               <Palette className="w-4 h-4" />
-              <span>参数 & 颜色</span>
+              <span>参数 & 画面</span>
             </div>
           </button>
           <button
@@ -535,6 +550,134 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
 
           {activeTab === 'style' && (
             <div className="space-y-6">
+              {/* 宽银幕画面沉浸贴底卡片 */}
+              <div className="bg-black/35 rounded-2xl p-4 border border-white/10 space-y-3.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2">
+                    <ArrowDownToLine className="w-4 h-4 text-primary" />
+                    <span className="text-sm font-semibold text-white">宽银幕贴底 (顶部留黑)</span>
+                  </div>
+                  {/* Toggle Switch */}
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={currentLayout.bottomAlign}
+                      onChange={(e) =>
+                        setVideoLayout(effectiveLayoutKey, { bottomAlign: e.target.checked })
+                      }
+                      className="sr-only peer"
+                    />
+                    <div className="w-9 h-5 bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"></div>
+                  </label>
+                </div>
+
+                <div className="text-xs text-gray-400 leading-relaxed">
+                  消除底部黑边并将视频贴紧屏幕底部，让出顶部纯黑空间专供弹幕滑行，避免遮挡剧情画面。
+                </div>
+
+                {/* 片源比例状态与提示 */}
+                <div className="flex items-center justify-between text-[11px] pt-1 border-t border-white/5">
+                  <span className="text-gray-400">片源画幅检测:</span>
+                  {videoAspectRatio ? (
+                    <span
+                      className={`px-2 py-0.5 rounded font-mono font-medium ${
+                        isWidescreen
+                          ? 'bg-green-500/20 text-green-300 border border-green-500/30'
+                          : 'bg-white/10 text-gray-300'
+                      }`}
+                    >
+                      {videoAspectRatio.toFixed(2)}:1 {isWidescreen ? '· 宽银幕推荐' : '· 标准画幅'}
+                    </span>
+                  ) : (
+                    <span className="text-gray-500 font-mono">检测中...</span>
+                  )}
+                </div>
+
+                {/* 垂直位置调节与微调控件（开启贴底时可用） */}
+                {currentLayout.bottomAlign && (
+                  <div className="space-y-3 pt-2.5 border-t border-white/10 animate-in fade-in duration-150">
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="text-gray-300 font-medium">垂直对齐锚点</span>
+                      <span className="font-mono text-primary font-bold">
+                        {currentLayout.verticalOffset}%{' '}
+                        <span className="text-gray-400 font-normal text-[11px]">
+                          ({currentLayout.verticalOffset === 100
+                            ? '完全贴底'
+                            : currentLayout.verticalOffset === 50
+                            ? '居中'
+                            : '贴底微调'})
+                        </span>
+                      </span>
+                    </div>
+
+                    <input
+                      type="range"
+                      min="50"
+                      max="100"
+                      step="1"
+                      value={currentLayout.verticalOffset}
+                      onChange={(e) =>
+                        setVideoLayout(effectiveLayoutKey, {
+                          verticalOffset: parseInt(e.target.value, 10),
+                        })
+                      }
+                      className="w-full h-1.5 bg-white/20 rounded-lg cursor-pointer accent-primary"
+                    />
+
+                    {/* 快捷对齐预设按钮 */}
+                    <div className="grid grid-cols-3 gap-1.5">
+                      <button
+                        onClick={() =>
+                          setVideoLayout(effectiveLayoutKey, { verticalOffset: 100 })
+                        }
+                        className={`py-1.5 rounded-lg text-xs font-medium transition ${
+                          currentLayout.verticalOffset === 100
+                            ? 'bg-primary text-white'
+                            : 'bg-white/5 hover:bg-white/10 text-gray-300'
+                        }`}
+                      >
+                        完全贴底 100%
+                      </button>
+                      <button
+                        onClick={() =>
+                          setVideoLayout(effectiveLayoutKey, { verticalOffset: 95 })
+                        }
+                        className={`py-1.5 rounded-lg text-xs font-medium transition ${
+                          currentLayout.verticalOffset === 95
+                            ? 'bg-primary text-white'
+                            : 'bg-white/5 hover:bg-white/10 text-gray-300'
+                        }`}
+                        title="底部预留少量缓冲，适合带硬字幕片源"
+                      >
+                        微浮避让 95%
+                      </button>
+                      <button
+                        onClick={() =>
+                          setVideoLayout(effectiveLayoutKey, { verticalOffset: 50 })
+                        }
+                        className={`py-1.5 rounded-lg text-xs font-medium transition ${
+                          currentLayout.verticalOffset === 50
+                            ? 'bg-primary text-white'
+                            : 'bg-white/5 hover:bg-white/10 text-gray-300'
+                        }`}
+                      >
+                        居中 50%
+                      </button>
+                    </div>
+
+                    {/* 记忆隔离说明 */}
+                    <div className="flex items-center space-x-1.5 text-[11px] text-gray-400 pt-1">
+                      <span className="w-1.5 h-1.5 rounded-full bg-primary flex-shrink-0" />
+                      <span className="truncate">
+                        {seriesName
+                          ? `已自动记忆为《${seriesName}》专属设置，同剧所有集数生效`
+                          : `已保存为本视频的专属设置`}
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* Danmaku Lines Setting */}
               <div className="space-y-2.5">
                 <div className="flex justify-between items-center text-xs text-gray-300">

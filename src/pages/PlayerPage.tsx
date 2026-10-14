@@ -63,6 +63,7 @@ export const PlayerPage: React.FC = () => {
     danmakuSettings,
     itemOffsets,
     danmakuBindings,
+    videoLayouts,
     setPlaybackContext,
     updateTime,
     setPaused,
@@ -83,6 +84,13 @@ export const PlayerPage: React.FC = () => {
   const [fallbackLevel, setFallbackLevel] = useState<0 | 1 | 2>(0);
   const [isLoadingVideo, setIsLoadingVideo] = useState(true);
   const [videoError, setVideoError] = useState<string | null>(null);
+  const [videoDimensions, setVideoDimensions] = useState<{ width: number; height: number } | null>(null);
+
+  // Per-series or per-item video layout configuration
+  const layoutKey = item?.SeriesId ? `series_${item.SeriesId}` : item ? `item_${item.Id}` : '';
+  const currentLayout = (layoutKey && videoLayouts[layoutKey]) || { bottomAlign: false, verticalOffset: 100 };
+  const videoAspectRatio = videoDimensions ? videoDimensions.width / videoDimensions.height : undefined;
+  const isWidescreen = videoAspectRatio ? videoAspectRatio > (window.innerWidth / window.innerHeight) + 0.05 : false;
 
   // Danmaku state
   const [rawComments, setRawComments] = useState<RawDanmuComment[]>([]);
@@ -743,7 +751,18 @@ export const PlayerPage: React.FC = () => {
             src={currentStreamUrl}
             autoPlay
             playsInline
-            className="w-full h-full object-contain pointer-events-none"
+            style={{
+              objectPosition: currentLayout.bottomAlign
+                ? `center ${currentLayout.verticalOffset}%`
+                : 'center center',
+            }}
+            className="w-full h-full object-contain pointer-events-none transition-[object-position] duration-200"
+            onLoadedMetadata={(e) => {
+              const v = e.currentTarget;
+              if (v.videoWidth && v.videoHeight) {
+                setVideoDimensions({ width: v.videoWidth, height: v.videoHeight });
+              }
+            }}
             onLoadStart={() => {
               setIsLoadingVideo(true);
               setVideoError(null);
@@ -922,8 +941,12 @@ export const PlayerPage: React.FC = () => {
         onClose={() => setIsDanmakuDrawerOpen(false)}
         bridge={bridge}
         itemId={item.Id}
+        seriesId={item.SeriesId}
         itemTitle={item.Name}
         seriesName={item.SeriesName}
+        layoutKey={layoutKey}
+        videoAspectRatio={videoAspectRatio}
+        isWidescreen={isWidescreen}
         currentMatchedTitle={matchedTitle}
         sourceCommentCount={rawComments.length}
         sourceDuration={sourceDuration}

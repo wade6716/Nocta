@@ -98,15 +98,12 @@ jobs:
         with:
           tagName: "${{ github.ref_type == 'tag' && github.ref_name || inputs.tag_name || github.ref_name }}"
           releaseName: "Nocta · 夜幕 ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag_name || github.ref_name }}"
+          generateReleaseNotes: true
           releaseBody: |
-            ## Nocta · 夜幕 ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag_name || github.ref_name }} 发布
-
-            ### 📦 资产下载与系统支持：
+            ## 📦 资产下载与系统支持
             - **Windows**: 下载 `.exe` (一键安装版) 或 `.msi`
             - **macOS**: 下载 `.dmg` (通用二进制，同时原生支持 Apple Silicon M系列 与 Intel 处理器)
             - **Linux**: 下载 `.deb` (Debian/Ubuntu 系列) 或 `.AppImage` (免安装便携版)
-
-            > 详细更新日志见提交历史。
           releaseDraft: "${{ inputs.release_draft || false }}"
           prerelease: "${{ inputs.prerelease || contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}"
           args: ${{ matrix.args }}

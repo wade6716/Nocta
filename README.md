@@ -81,10 +81,10 @@
 ### 📦 安装包直接下载 (Pre-built Binaries)
 
 可前往 [GitHub Releases](https://github.com/wade6716/Nocta/releases) 获取全平台各架构最新预编译安装包：
-- **Windows**: 下载 `.exe` (一键安装包) 或 `.msi`
-- **macOS (Apple Silicon)**: 苹果 M 系列芯片（M1/M2/M3/M4 等）请下载 `*_aarch64.dmg`
-- **macOS (Intel)**: 苹果 Intel 处理器请下载 `*_x64.dmg`
-- **Linux**: 下载 `.deb` (Debian/Ubuntu 系列) 或 `.AppImage` (免安装便携版)
+- **Windows**: 下载 `Nocta_*_windows_x64-setup.exe` (一键安装版) 或 `Nocta_*_windows_x64.msi`
+- **macOS (Apple Silicon)**: 苹果 M 系列芯片（M1/M2/M3/M4 等）请下载 `Nocta_*_macos_aarch64.dmg`
+- **macOS (Intel)**: 苹果 Intel 处理器请下载 `Nocta_*_macos_x64.dmg`
+- **Linux**: 下载 `Nocta_*_linux_x64.AppImage` (免安装便携版) 或 `Nocta_*_linux_x64.deb`
 
 > [!TIP]
 > **🍎 macOS 首次打开提示“已损坏，无法打开”或“无法验证开发者”？**

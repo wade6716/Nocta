@@ -40,24 +40,28 @@ jobs:
             args: ''
             rust_targets: ''
             name_suffix: 'Windows x64'
+            asset_name_pattern: '[name]_[version]_windows_[arch][setup][ext]'
 
           # 2. macOS Apple Silicon (M1/M2/M3/M4 系列芯片)
           - platform: macos-latest
             args: '--target aarch64-apple-darwin'
             rust_targets: 'aarch64-apple-darwin'
             name_suffix: 'macOS Apple Silicon'
+            asset_name_pattern: '[name]_[version]_macos_aarch64[ext]'
 
           # 3. macOS Intel (x86_64 系列芯片)
           - platform: macos-latest
             args: '--target x86_64-apple-darwin'
             rust_targets: 'x86_64-apple-darwin'
             name_suffix: 'macOS Intel'
+            asset_name_pattern: '[name]_[version]_macos_x64[ext]'
 
           # 4. Linux x64 (deb & AppImage)
           - platform: ubuntu-22.04
             args: ''
             rust_targets: ''
             name_suffix: 'Linux x64'
+            asset_name_pattern: '[name]_[version]_linux_[arch][ext]'
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -105,28 +109,49 @@ jobs:
           tagName: "${{ github.ref_type == 'tag' && github.ref_name || inputs.tag_name || github.ref_name }}"
           releaseName: "Nocta · 夜幕 ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag_name || github.ref_name }}"
           generateReleaseNotes: true
-          releaseBody: |
-            ## 📦 资产下载与系统支持
-            - **Windows**: 下载 `.exe` (一键安装版) 或 `.msi`
-            - **macOS (Apple Silicon)**: 苹果 M 系列芯片（M1/M2/M3/M4 等）请下载 `*_aarch64.dmg`
-            - **macOS (Intel)**: 苹果 Intel 处理器请下载 `*_x64.dmg`
-            - **Linux**: 下载 `.deb` (Debian/Ubuntu 系列) 或 `.AppImage` (免安装便携版)
-
-            ---
-            ### 🍎 macOS 首次打开提示“已损坏”或“无法验证开发者”解决办法：
-            > 由于本项目暂未加入苹果高昂的年费开发者计划，macOS Gatekeeper 安全机制可能会拦截未签名应用并提示：*“Nocta.app 已损坏，无法打开。你应该将它移到废纸篓”* 或 *“无法打开 Nocta，因为无法验证开发者”*。
-
-            **解决方法（任选其一即可）**：
-            1. **【最推荐】终端一键修复**：
-               将 `Nocta.app` 拖入「应用程序」目录后，打开系统的「终端 (Terminal)」，粘贴并执行以下命令：
-               ```bash
-               sudo xattr -rd com.apple.quarantine /Applications/Nocta.app
-               ```
-               输入 Mac 开机密码后回车即可正常打开。
-            2. **系统设置放行**：
-               前往「系统设置」->「隐私与安全性」，滑动到底部安全性区域，找到 *“已阻止使用 Nocta...”* 提示，点击「仍要打开」并确认。
-            3. **右键快速打开**：
-               在访达的「应用程序」目录中，按住 `Control` 键并右键点击 `Nocta.app` 图标，在菜单中选择「打开」，并在弹窗提示中点击「打开」。
+          assetNamePattern: "${{ matrix.asset_name_pattern }}"
+          releaseAssetNamePattern: "${{ matrix.asset_name_pattern }}"
           releaseDraft: "${{ inputs.release_draft || false }}"
           prerelease: "${{ inputs.prerelease || contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}"
           args: ${{ matrix.args }}
+
+  # 无论 Release 是否已提前创建，构建完成后由该 Job 统一强制更新 Release 正文与清理旧名称产物
+  finalize-release:
+    name: Finalize Release Notes & Cleanup
+    needs: release-tauri
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Sync Release Notes & Cleanup Legacy Assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: "${{ github.ref_type == 'tag' && github.ref_name || inputs.tag_name || github.ref_name }}"
+        run: |
+          # 1. 基于仓库模板生成正文头部与平台指引
+          cp .github/release-template.md release_notes.md
+
+          # 2. 调用 GitHub API 自动生成带分类的更新日志
+          CHANGELOG=$(gh api "repos/${{ github.repository }}/releases/generate-notes" \
+            -f tag_name="$TAG_NAME" \
+            --jq .body 2>/dev/null || true)
+
+          if [ -n "$CHANGELOG" ]; then
+            echo "" >> release_notes.md
+            echo "$CHANGELOG" >> release_notes.md
+          fi
+
+          # 3. 强制覆盖更新已有的 Release 正文与标题 (避免因 Release 已存在而漏更)
+          gh release edit "$TAG_NAME" -F release_notes.md --title "Nocta · 夜幕 $TAG_NAME"
+
+          # 4. 自动清理旧格式遗留资产文件 (不包含 windows/macos/linux 关键词的文件)
+          OLD_ASSETS=$(gh release view "$TAG_NAME" --json assets --jq '.assets[] | select(.name | test("(windows|macos|linux)") | not) | .name' 2>/dev/null || true)
+          for asset in $OLD_ASSETS; do
+            echo "Deleting legacy unbranded asset: $asset"
+            gh release delete-asset "$TAG_NAME" "$asset" -y || true
+          done

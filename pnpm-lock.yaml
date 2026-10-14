@@ -23,6 +23,9 @@ importers:
       clsx:
         specifier: ^2.1.1
         version: 2.1.1
+      danmaku:
+        specifier: github:wade6716/Danmaku
+        version: https://codeload.github.com/wade6716/Danmaku/tar.gz/dc2a4fd59c8624d756f6e76254febb266aa137ed
       lucide-react:
         specifier: ^1.16.0
         version: 1.56.0(@types/react@19.3.0)(react@19.3.0)
@@ -846,6 +849,10 @@ packages:
 
   csstype@3.2.3:
     resolution: {integrity: sha512-z1HGKcYy2xA8AGQfwrn0PAy+PB7X/GSj3UVJW9qKyn43xWa+gl5nXmU4qqLMRzWVLFC8KusUX8T/0kCiOYpAIQ==}
+
+  danmaku@https://codeload.github.com/wade6716/Danmaku/tar.gz/dc2a4fd59c8624d756f6e76254febb266aa137ed:
+    resolution: {gitHosted: true, integrity: sha512-3opCXCje5DrcghxYLbRmNE7ANX4fBRhI9tjTs8f9VjoolVm3JMGhfOsdL4iQLTD/OJF069ff1WK4erjQRADtHA==, tarball: https://codeload.github.com/wade6716/Danmaku/tar.gz/dc2a4fd59c8624d756f6e76254febb266aa137ed}
+    version: 2.0.10
 
   debug@4.4.3:
     resolution: {integrity: sha512-RGwwWnwQvkVfavKVt22FGLw+xYSdzARwm0ru6DhTVA3umU5hZc28V3kO4stgYryrTlLpuvgI9GiijltAjNbcqA==}
@@ -1830,6 +1837,8 @@ snapshots:
   cssesc@3.0.0: {}
 
   csstype@3.2.3: {}
+
+  danmaku@https://codeload.github.com/wade6716/Danmaku/tar.gz/dc2a4fd59c8624d756f6e76254febb266aa137ed: {}
 
   debug@4.4.3:
     dependencies:

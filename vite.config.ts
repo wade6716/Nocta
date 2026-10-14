@@ -1,6 +1,10 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
+import fs from 'fs';
+
+const localDanmakuSrc = path.resolve(__dirname, '../Danmaku/src/index.js');
+const hasLocalDanmaku = fs.existsSync(localDanmakuSrc);
 
 export default defineConfig({
   plugins: [react()],
@@ -16,19 +20,18 @@ export default defineConfig({
       ignored: ['**/src-tauri/**'],
     },
     fs: {
-      // 允许 Vite 直接读取上级目录中的 ../Danmaku 源码
-      allow: ['..'],
+      // 若本地存在同级 ../Danmaku 源码，允许 Vite 读取以支持热更新开发
+      allow: hasLocalDanmaku ? ['..'] : ['.'],
     },
   },
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
-      // 直接指向独立 clone 的 Danmaku 源码入口，实现零编译等待的同步热更新调试
-      danmaku: path.resolve(__dirname, '../Danmaku/src/index.js'),
+      // 若本地存在独立 clone 的 Danmaku 源码，优先使用本地源码实现热更新；CI/打包机无本地目录时自动回退到 npm/github 依赖
+      ...(hasLocalDanmaku ? { danmaku: localDanmakuSrc } : {}),
     },
   },
   optimizeDeps: {
-    // 禁止 Vite 预构建缓存 danmaku，确保每次修改源码立即生效
-    exclude: ['danmaku'],
+    ...(hasLocalDanmaku ? { exclude: ['danmaku'] } : {}),
   },
 });

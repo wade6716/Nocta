@@ -142,10 +142,12 @@ pnpm tauri build
   - **手动触发**：GitHub Actions 界面手动 `workflow_dispatch`，可选择草稿（Draft）或预发版（Pre-release）。
 - **多平台多架构编译矩阵**：
   - **Windows x64** (`windows-latest`)：输出 `.exe` (NSIS) 与 `.msi` (WiX)；
-  - **macOS Universal** (`macos-latest`)：输出 Universal 2 `.dmg`（单文件同时原生支持 Apple Silicon M1~M4 与 Intel 处理器）；
+  - **macOS Apple Silicon** (`macos-latest`, `--target aarch64-apple-darwin`)：输出原生适配 M 系列芯片的 `*_aarch64.dmg`；
+  - **macOS Intel** (`macos-latest`, `--target x86_64-apple-darwin`)：输出适配 Intel 处理器的 `*_x64.dmg`；
   - **Linux x64** (`ubuntu-22.04`)：输出 `.deb` 与 `.AppImage`。
 - **发布产物与自动更新日志**：
   - 自动生成 GitHub Release 并挂载全部平台安装包资产；
   - 启用 `generateReleaseNotes: true`，调用 GitHub 官方 API 自动比对提取提交日志；
-  - 配合 `.github/release.yml` 规则自动按功能（Features）、修复（Bug Fixes）、性能（Performance）和工程维护（Maintenance）分类展示更新内容。
+  - 配合 `.github/release.yml` 规则自动按功能（Features）、修复（Bug Fixes）、性能（Performance）和工程维护（Maintenance）分类展示更新内容；
+  - Release 正文中附带 macOS 首次打开拦截（Gatekeeper `com.apple.quarantine`）的终端与系统设置解决方案。
 

@@ -82,8 +82,21 @@
 
 可前往 [GitHub Releases](https://github.com/wade6716/Nocta/releases) 获取全平台各架构最新预编译安装包：
 - **Windows**: 下载 `.exe` (一键安装包) 或 `.msi`
-- **macOS**: 下载 `.dmg` (Universal 2 通用二进制，原生支持 Apple Silicon M系列 与 Intel 处理器)
+- **macOS (Apple Silicon)**: 苹果 M 系列芯片（M1/M2/M3/M4 等）请下载 `*_aarch64.dmg`
+- **macOS (Intel)**: 苹果 Intel 处理器请下载 `*_x64.dmg`
 - **Linux**: 下载 `.deb` (Debian/Ubuntu 系列) 或 `.AppImage` (免安装便携版)
+
+> [!TIP]
+> **🍎 macOS 首次打开提示“已损坏，无法打开”或“无法验证开发者”？**
+> 这是 macOS Gatekeeper 安全机制对未签名开源应用的常规拦截。
+> **解决方法（任选其一）**：
+> 1. **终端一键解除隔离（最推荐）**：将 `Nocta.app` 拖入「应用程序」后，打开终端（Terminal）执行：
+>    ```bash
+>    sudo xattr -rd com.apple.quarantine /Applications/Nocta.app
+>    ```
+>    输入开机密码回车即可正常打开。
+> 2. **系统设置放行**：前往「系统设置」->「隐私与安全性」，滚动到底部找到“已阻止使用 Nocta...”，点击「仍要打开」；
+> 3. **右键快速打开**：在「应用程序」目录中，按住 `Control` 键并右键点击 `Nocta.app` 图标，点击「打开」。
 
 ### 本地开发启动
 

@@ -41,13 +41,19 @@ jobs:
             rust_targets: ''
             name_suffix: 'Windows x64'
 
-          # 2. macOS Universal (支持 Apple Silicon M1-M4 & Intel Mac)
+          # 2. macOS Apple Silicon (M1/M2/M3/M4 系列芯片)
           - platform: macos-latest
-            args: '--target universal-apple-darwin'
-            rust_targets: 'aarch64-apple-darwin,x86_64-apple-darwin'
-            name_suffix: 'macOS Universal'
+            args: '--target aarch64-apple-darwin'
+            rust_targets: 'aarch64-apple-darwin'
+            name_suffix: 'macOS Apple Silicon'
 
-          # 3. Linux x64 (deb & AppImage)
+          # 3. macOS Intel (x86_64 系列芯片)
+          - platform: macos-latest
+            args: '--target x86_64-apple-darwin'
+            rust_targets: 'x86_64-apple-darwin'
+            name_suffix: 'macOS Intel'
+
+          # 4. Linux x64 (deb & AppImage)
           - platform: ubuntu-22.04
             args: ''
             rust_targets: ''
@@ -102,8 +108,25 @@ jobs:
           releaseBody: |
             ## 📦 资产下载与系统支持
             - **Windows**: 下载 `.exe` (一键安装版) 或 `.msi`
-            - **macOS**: 下载 `.dmg` (通用二进制，同时原生支持 Apple Silicon M系列 与 Intel 处理器)
+            - **macOS (Apple Silicon)**: 苹果 M 系列芯片（M1/M2/M3/M4 等）请下载 `*_aarch64.dmg`
+            - **macOS (Intel)**: 苹果 Intel 处理器请下载 `*_x64.dmg`
             - **Linux**: 下载 `.deb` (Debian/Ubuntu 系列) 或 `.AppImage` (免安装便携版)
+
+            ---
+            ### 🍎 macOS 首次打开提示“已损坏”或“无法验证开发者”解决办法：
+            > 由于本项目暂未加入苹果高昂的年费开发者计划，macOS Gatekeeper 安全机制可能会拦截未签名应用并提示：*“Nocta.app 已损坏，无法打开。你应该将它移到废纸篓”* 或 *“无法打开 Nocta，因为无法验证开发者”*。
+
+            **解决方法（任选其一即可）**：
+            1. **【最推荐】终端一键修复**：
+               将 `Nocta.app` 拖入「应用程序」目录后，打开系统的「终端 (Terminal)」，粘贴并执行以下命令：
+               ```bash
+               sudo xattr -rd com.apple.quarantine /Applications/Nocta.app
+               ```
+               输入 Mac 开机密码后回车即可正常打开。
+            2. **系统设置放行**：
+               前往「系统设置」->「隐私与安全性」，滑动到底部安全性区域，找到 *“已阻止使用 Nocta...”* 提示，点击「仍要打开」并确认。
+            3. **右键快速打开**：
+               在访达的「应用程序」目录中，按住 `Control` 键并右键点击 `Nocta.app` 图标，在菜单中选择「打开」，并在弹窗提示中点击「打开」。
           releaseDraft: "${{ inputs.release_draft || false }}"
           prerelease: "${{ inputs.prerelease || contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}"
           args: ${{ matrix.args }}

@@ -6,10 +6,8 @@ import {
   ArrowLeft,
   RefreshCw,
   AlertTriangle,
-  Minus,
-  Maximize,
-  Minimize,
-  Home,
+  Play,
+  Pause,
 } from 'lucide-react';
 import { useAuthStore } from '../stores/useAuthStore';
 import { usePlayerStore } from '../stores/usePlayerStore';
@@ -98,6 +96,10 @@ export const PlayerPage: React.FC = () => {
   // OSD and Mouse interaction
   const [isOsdVisible, setIsOsdVisible] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isMaximized, setIsMaximized] = useState(false);
+  const [centerIcon, setCenterIcon] = useState<'play' | 'pause' | null>(null);
+  const centerIconTimerRef = useRef<number | null>(null);
+  const clickTimerRef = useRef<number | null>(null);
   const hideTimerRef = useRef<number | null>(null);
   const videoElemRef = useRef<HTMLVideoElement | null>(null);
 
@@ -355,6 +357,45 @@ export const PlayerPage: React.FC = () => {
     };
   }, [resetHideTimer]);
 
+  // Sync window fullscreen and maximized states
+  useEffect(() => {
+    if (!isTauriEnvironment()) {
+      const handleFs = () => setIsFullscreen(!!document.fullscreenElement);
+      document.addEventListener('fullscreenchange', handleFs);
+      return () => document.removeEventListener('fullscreenchange', handleFs);
+    }
+
+    try {
+      const win = getCurrentWindow();
+      win.isFullscreen().then(setIsFullscreen);
+      win.isMaximized().then(setIsMaximized);
+
+      const unlistenPromise = win.onResized(async () => {
+        try {
+          const [fs, max] = await Promise.all([win.isFullscreen(), win.isMaximized()]);
+          setIsFullscreen(fs);
+          setIsMaximized(max);
+        } catch (e) {
+          console.warn(e);
+        }
+      });
+
+      return () => {
+        unlistenPromise.then((unlisten) => unlisten());
+      };
+    } catch (e) {
+      console.warn(e);
+    }
+  }, []);
+
+  const triggerCenterIcon = (type: 'play' | 'pause') => {
+    setCenterIcon(type);
+    if (centerIconTimerRef.current) clearTimeout(centerIconTimerRef.current);
+    centerIconTimerRef.current = window.setTimeout(() => {
+      setCenterIcon(null);
+    }, 600);
+  };
+
   // 6. Playback controls implementation
   const handleTogglePlay = () => {
     if (isLoadingVideo || videoError) return;
@@ -365,6 +406,8 @@ export const PlayerPage: React.FC = () => {
     if (videoElemRef.current) {
       nextPaused ? videoElemRef.current.pause() : videoElemRef.current.play();
     }
+    triggerCenterIcon(nextPaused ? 'pause' : 'play');
+    resetHideTimer();
 
     if (currentServer && item && mediaSource && playSessionId) {
       reportPlaybackProgress(
@@ -428,6 +471,10 @@ export const PlayerPage: React.FC = () => {
         const cur = await win.isFullscreen();
         await win.setFullscreen(!cur);
         setIsFullscreen(!cur);
+        if (cur) {
+          const max = await win.isMaximized();
+          setIsMaximized(max);
+        }
       } catch (e) {
         console.warn(e);
       }
@@ -442,6 +489,63 @@ export const PlayerPage: React.FC = () => {
     }
   };
 
+  const handleToggleWindowMode = async () => {
+    if (isTauriEnvironment()) {
+      try {
+        const win = getCurrentWindow();
+        const full = await win.isFullscreen();
+        if (full) {
+          await win.setFullscreen(false);
+          setIsFullscreen(false);
+          const max = await win.isMaximized();
+          setIsMaximized(max);
+        } else {
+          await win.toggleMaximize();
+          const max = await win.isMaximized();
+          setIsMaximized(max);
+        }
+      } catch (e) {
+        console.warn(e);
+      }
+    } else {
+      if (document.fullscreenElement) {
+        document.exitFullscreen();
+        setIsFullscreen(false);
+      }
+    }
+  };
+
+  const handleVideoClick = () => {
+    if (isDanmakuDrawerOpen) {
+      setIsDanmakuDrawerOpen(false);
+      return;
+    }
+    if (clickTimerRef.current) {
+      window.clearTimeout(clickTimerRef.current);
+      clickTimerRef.current = null;
+    } else {
+      clickTimerRef.current = window.setTimeout(() => {
+        handleTogglePlay();
+        clickTimerRef.current = null;
+      }, 250);
+    }
+  };
+
+  const handleVideoDoubleClick = (e?: React.MouseEvent) => {
+    if (e) {
+      e.stopPropagation();
+    }
+    if (isDanmakuDrawerOpen) {
+      setIsDanmakuDrawerOpen(false);
+      return;
+    }
+    if (clickTimerRef.current) {
+      window.clearTimeout(clickTimerRef.current);
+      clickTimerRef.current = null;
+    }
+    handleToggleFullscreen();
+  };
+
   const handleBack = () => {
     resetPlayer();
     if (item) {
@@ -451,6 +555,11 @@ export const PlayerPage: React.FC = () => {
     } else {
       navigate('/', { replace: true });
     }
+  };
+
+  const handleHome = () => {
+    resetPlayer();
+    navigate('/', { replace: true });
   };
 
   // 7. Global Keyboard Shortcuts
@@ -609,113 +718,72 @@ export const PlayerPage: React.FC = () => {
 
   return (
     <div className="relative w-screen h-screen overflow-hidden select-none bg-[#0f1115]">
-      {/* 
-        永久常驻置顶控制栏（最高层级 Z-50，保证任何时候均可返回与关闭/最小化窗口，绝不被困在黑屏）
-      */}
-      <div className="fixed top-0 inset-x-0 z-50 h-12 flex items-center justify-between px-4 bg-gradient-to-b from-black/80 to-transparent pointer-events-auto">
-        <div className="flex items-center space-x-2">
-          <button
-            onClick={handleBack}
-            className="p-2 rounded-xl bg-black/60 hover:bg-black/90 text-white backdrop-blur border border-white/10 transition cursor-pointer flex items-center space-x-1.5 shadow-lg"
-            title="返回详情页 (Esc)"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            <span className="text-xs font-semibold">返回</span>
-          </button>
-
-          <button
-            onClick={() => {
-              resetPlayer();
-              navigate('/', { replace: true });
-            }}
-            className="p-2 rounded-xl bg-black/60 hover:bg-black/90 text-gray-300 hover:text-white backdrop-blur border border-white/10 transition cursor-pointer flex items-center space-x-1 shadow-lg"
-            title="直接返回媒体库首页"
-          >
-            <Home className="w-4 h-4" />
-            <span className="text-xs font-semibold">首页</span>
-          </button>
+      {/* 哔哩哔哩风格：屏幕中央播放/暂停动效徽标 */}
+      {centerIcon && (
+        <div className="absolute inset-0 pointer-events-none flex items-center justify-center z-30">
+          <div className="p-5 rounded-full bg-black/60 backdrop-blur-md text-white shadow-2xl border border-white/10 animate-in zoom-in-75 fade-in duration-150">
+            {centerIcon === 'play' ? (
+              <Play className="w-9 h-9 fill-white translate-x-0.5" />
+            ) : (
+              <Pause className="w-9 h-9 fill-white" />
+            )}
+          </div>
         </div>
-
-        <div className="flex-1 px-4 truncate pointer-events-none">
-          <span className="text-xs font-bold text-gray-200 truncate">
-            {item.Name}
-            {item.SeriesName ? ` · 第 ${item.IndexNumber || 1} 集` : ''}
-          </span>
-        </div>
-
-        {/* Window controls for desktop */}
-        <div data-tauri-drag-region className="flex items-center space-x-1">
-          <button
-            onClick={() => isTauriEnvironment() && getCurrentWindow().minimize()}
-            className="p-2 rounded-lg hover:bg-white/10 text-gray-300 hover:text-white transition cursor-pointer"
-            title="最小化"
-          >
-            <Minus className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={() => handleToggleFullscreen()}
-            className="p-2 rounded-lg hover:bg-white/10 text-gray-300 hover:text-white transition cursor-pointer"
-            title="全屏切换"
-          >
-            {isFullscreen ? <Minimize className="w-3.5 h-3.5" /> : <Maximize className="w-3.5 h-3.5" />}
-          </button>
-          <button
-            onClick={() => isTauriEnvironment() && getCurrentWindow().close()}
-            className="p-2 rounded-lg hover:bg-red-600 text-gray-300 hover:text-white transition cursor-pointer"
-            title="关闭窗口"
-          >
-            <X className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      </div>
-
-      {/* 底层：HTML5 Video 媒体流 */}
-      {currentStreamUrl && (
-        <video
-          ref={videoElemRef}
-          src={currentStreamUrl}
-          autoPlay
-          playsInline
-          className="absolute inset-0 w-full h-full object-contain z-0"
-          onLoadStart={() => {
-            setIsLoadingVideo(true);
-            setVideoError(null);
-          }}
-          onCanPlay={() => {
-            setIsLoadingVideo(false);
-            setVideoError(null);
-          }}
-          onWaiting={() => {
-            setIsLoadingVideo(true);
-            bridge.onMpvPauseChange(true);
-          }}
-          onPlaying={() => {
-            setIsLoadingVideo(false);
-            setPaused(false);
-            bridge.onMpvPauseChange(false);
-          }}
-          onError={handleVideoError}
-          onTimeUpdate={(e) => {
-            const cur = (e.target as HTMLVideoElement).currentTime;
-            updateTime(cur);
-            bridge.onMpvTimePos(cur);
-          }}
-          onDurationChange={(e) => {
-            const dur = (e.target as HTMLVideoElement).duration;
-            if (!isNaN(dur) && dur > 0) {
-              updateTime(currentTime, dur);
-            }
-          }}
-          onPlay={() => {
-            setPaused(false);
-            bridge.onMpvPauseChange(false);
-          }}
-          onPause={() => {
-            setPaused(true);
-            bridge.onMpvPauseChange(true);
-          }}
-        />
       )}
+
+      {/* 底层：HTML5 Video 媒体流与全屏/播放点击响应层 */}
+      <div
+        className="absolute inset-0 z-0 cursor-pointer overflow-hidden"
+        onClick={handleVideoClick}
+        onDoubleClick={handleVideoDoubleClick}
+      >
+        {currentStreamUrl && (
+          <video
+            ref={videoElemRef}
+            src={currentStreamUrl}
+            autoPlay
+            playsInline
+            className="w-full h-full object-contain pointer-events-none"
+            onLoadStart={() => {
+              setIsLoadingVideo(true);
+              setVideoError(null);
+            }}
+            onCanPlay={() => {
+              setIsLoadingVideo(false);
+              setVideoError(null);
+            }}
+            onWaiting={() => {
+              setIsLoadingVideo(true);
+              bridge.onMpvPauseChange(true);
+            }}
+            onPlaying={() => {
+              setIsLoadingVideo(false);
+              setPaused(false);
+              bridge.onMpvPauseChange(false);
+            }}
+            onError={handleVideoError}
+            onTimeUpdate={(e) => {
+              const cur = (e.target as HTMLVideoElement).currentTime;
+              updateTime(cur);
+              bridge.onMpvTimePos(cur);
+            }}
+            onDurationChange={(e) => {
+              const dur = (e.target as HTMLVideoElement).duration;
+              if (!isNaN(dur) && dur > 0) {
+                updateTime(currentTime, dur);
+              }
+            }}
+            onPlay={() => {
+              setPaused(false);
+              bridge.onMpvPauseChange(false);
+            }}
+            onPause={() => {
+              setPaused(true);
+              bridge.onMpvPauseChange(true);
+            }}
+          />
+        )}
+      </div>
 
       {/* Loading Overlay */}
       {isLoadingVideo && !videoError && (
@@ -809,7 +877,9 @@ export const PlayerPage: React.FC = () => {
         selectedAudioId={selectedAudioId}
         selectedSubtitleId={selectedSubtitleId}
         isFullscreen={isFullscreen}
+        isMaximized={isMaximized}
         onBack={handleBack}
+        onHome={handleHome}
         onTogglePlay={handleTogglePlay}
         onSeek={handleSeek}
         onVolumeChange={handleVolumeChange}
@@ -818,7 +888,10 @@ export const PlayerPage: React.FC = () => {
         onToggleDanmakuDrawer={() => setIsDanmakuDrawerOpen(!isDanmakuDrawerOpen)}
         onSelectAudioTrack={selectAudioTrack}
         onSelectSubtitleTrack={selectSubtitleTrack}
+        onToggleWindowMode={handleToggleWindowMode}
         onToggleFullscreen={handleToggleFullscreen}
+        onVideoClick={handleVideoClick}
+        onVideoDoubleClick={handleVideoDoubleClick}
       />
 
       {/* 弹幕加载或绑定提示 Toast */}

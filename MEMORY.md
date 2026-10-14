@@ -119,9 +119,14 @@
 ## 5. 项目窗口与标题规范
 
 - **桌面窗口标题**：统一为 `Nocta · 夜幕`（[`tauri.conf.json`](file:///d:/wade/code/emby-tauri-player/src-tauri/tauri.conf.json)、[`index.html`](file:///d:/wade/code/emby-tauri-player/index.html)、[`App.tsx`](file:///d:/wade/code/emby-tauri-player/src/App.tsx)）。
-- **无边框窗口控制**：
+- **无边框窗口控制与播放页交互规范**：
   - 非播放页：展示统一自定义标题栏 [`TitleBar.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/layout/TitleBar.tsx)，左上角包含 Nocta App Logo 与应用标题，右上角包含最小化、最大化/还原、关闭。
-  - 播放页：隐藏原生标题栏，由沉浸式顶部悬浮栏提供返回、最小化、全屏切换与关闭。
+  - 播放页（交互与布局参考哔哩哔哩）：
+    - **无遮挡顶部栏**：彻底取消播放界面右上角的窗口控制按钮，避免遮挡右侧弹幕控制中心；左上角集成“返回”与“首页”快捷按钮及剧集标题。
+    - **双击全屏与画面手势**：双击视频画面任意空白处切换全屏，单击切换播放/暂停（附带屏幕中央微动效指示徽标），防抖避免双击误触发暂停。
+    - **右下角双全屏控制**：控制栏右下角分别提供“窗口全屏 / 还原窗口”（`AppWindow`）与“屏幕全屏”（`Maximize`/`Minimize`）按钮。
+    - **弹幕控制移至底部**：底部控制栏居中提供弹幕开关（快捷键 D）与弹幕设置抽屉入口。
+    - **弹幕设置抽屉优化**：抽屉层级升至最高 `z-50`，支持点击外部半透明遮罩快速关闭，右上角关闭按钮完全无遮挡，按 `Esc` 优先关闭抽屉。
 
 ---
 

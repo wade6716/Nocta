@@ -1,16 +1,17 @@
 import React, { useState } from 'react';
 import {
   ArrowLeft,
+  Home,
   Play,
   Pause,
   Volume2,
   VolumeX,
   Maximize,
   Minimize,
+  AppWindow,
   Sliders,
   MessageSquare,
   MessageSquareOff,
-  Settings2,
   ListVideo,
   AudioLines,
   Subtitles,
@@ -32,8 +33,10 @@ interface PlayerOsdProps {
   selectedAudioId: string | null;
   selectedSubtitleId: string | null;
   isFullscreen: boolean;
+  isMaximized?: boolean;
 
   onBack: () => void;
+  onHome?: () => void;
   onTogglePlay: () => void;
   onSeek: (seconds: number) => void;
   onVolumeChange: (vol: number) => void;
@@ -43,7 +46,10 @@ interface PlayerOsdProps {
   onToggleEpisodeDrawer?: () => void;
   onSelectAudioTrack: (id: string | null) => void;
   onSelectSubtitleTrack: (id: string | null) => void;
+  onToggleWindowMode: () => void;
   onToggleFullscreen: () => void;
+  onVideoClick?: () => void;
+  onVideoDoubleClick?: (e?: React.MouseEvent) => void;
 }
 
 function formatTime(seconds: number): string {
@@ -73,7 +79,9 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
   selectedAudioId,
   selectedSubtitleId,
   isFullscreen,
+  isMaximized = false,
   onBack,
+  onHome,
   onTogglePlay,
   onSeek,
   onVolumeChange,
@@ -83,7 +91,10 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
   onToggleEpisodeDrawer,
   onSelectAudioTrack,
   onSelectSubtitleTrack,
+  onToggleWindowMode,
   onToggleFullscreen,
+  onVideoClick,
+  onVideoDoubleClick,
 }) => {
   const [showAudioMenu, setShowAudioMenu] = useState(false);
   const [showSubtitleMenu, setShowSubtitleMenu] = useState(false);
@@ -107,53 +118,54 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
         visible ? 'opacity-100' : 'opacity-0'
       }`}
     >
-      {/* Top Bar */}
-      <div className="pointer-events-auto bg-gradient-to-b from-black/80 via-black/40 to-transparent p-5 flex items-center justify-between">
-        <div className="flex items-center space-x-4">
+      {/* Top Bar (Bilibili Style: 返回、首页与剧集标题，无多余右上角按钮) */}
+      <div
+        data-tauri-drag-region
+        className="pointer-events-auto bg-gradient-to-b from-black/90 via-black/50 to-transparent px-5 py-4 flex items-center justify-between"
+      >
+        <div className="flex items-center space-x-3">
           <button
             onClick={onBack}
-            className="p-2 rounded-full hover:bg-white/20 text-white transition cursor-pointer"
+            className="p-2 rounded-xl bg-black/50 hover:bg-black/80 text-white backdrop-blur border border-white/10 transition cursor-pointer flex items-center space-x-1.5 shadow-md"
             title="返回详情页 (Esc)"
           >
-            <ArrowLeft className="w-6 h-6" />
+            <ArrowLeft className="w-4 h-4" />
+            <span className="text-xs font-semibold">返回</span>
           </button>
-          <div>
-            <h1 className="text-lg font-bold text-white tracking-wide truncate max-w-xl">
+
+          {onHome && (
+            <button
+              onClick={onHome}
+              className="p-2 rounded-xl bg-black/50 hover:bg-black/80 text-gray-300 hover:text-white backdrop-blur border border-white/10 transition cursor-pointer flex items-center space-x-1 shadow-md"
+              title="直接返回媒体库首页"
+            >
+              <Home className="w-4 h-4" />
+              <span className="text-xs font-semibold">首页</span>
+            </button>
+          )}
+
+          <div className="ml-2 truncate max-w-xl">
+            <h1 className="text-sm md:text-base font-bold text-white tracking-wide truncate drop-shadow">
               {title}
             </h1>
             {subtitle && (
-              <p className="text-xs text-gray-300 font-medium truncate max-w-md">{subtitle}</p>
+              <p className="text-xs text-gray-300 font-medium truncate drop-shadow">
+                {subtitle}
+              </p>
             )}
           </div>
         </div>
 
-        <div className="flex items-center space-x-3">
-          <button
-            onClick={onToggleDanmaku}
-            className={`p-2 rounded-lg text-sm font-medium transition flex items-center space-x-1.5 cursor-pointer ${
-              danmakuVisible
-                ? 'bg-primary/20 text-primary border border-primary/40'
-                : 'bg-white/10 text-gray-400 hover:text-white'
-            }`}
-            title="一键开关弹幕 (快捷键 D)"
-          >
-            {danmakuVisible ? (
-              <MessageSquare className="w-4 h-4" />
-            ) : (
-              <MessageSquareOff className="w-4 h-4" />
-            )}
-            <span className="text-xs font-mono">{danmakuVisible ? '弹幕开' : '弹幕关'}</span>
-          </button>
-
-          <button
-            onClick={onToggleDanmakuDrawer}
-            className="p-2 rounded-lg bg-white/10 hover:bg-white/20 text-white transition cursor-pointer"
-            title="打开弹幕控制中心"
-          >
-            <Settings2 className="w-5 h-5" />
-          </button>
-        </div>
+        {/* 右上角留空：彻底杜绝控制按钮遮挡右侧抽屉 */}
+        <div className="flex items-center space-x-2" />
       </div>
+
+      {/* Middle Interactive Layer (双击全屏、单击播放/暂停) */}
+      <div
+        className="flex-1 w-full pointer-events-auto cursor-pointer"
+        onClick={onVideoClick}
+        onDoubleClick={onVideoDoubleClick}
+      />
 
       {/* Bottom Controls */}
       <div className="pointer-events-auto bg-gradient-to-t from-black/85 via-black/50 to-transparent px-6 py-4 flex flex-col space-y-3">
@@ -169,63 +181,87 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
           />
         </div>
 
-        {/* Action Controls Row */}
-        <div className="flex items-center justify-between text-white">
-          <div className="flex items-center space-x-4">
-            {/* Play/Pause */}
+        {/* Action Controls Row (Bilibili Style Layout) */}
+        <div className="flex items-center justify-between text-white select-none">
+          {/* Left Zone: Play/Pause, Time */}
+          <div className="flex items-center space-x-3.5">
             <button
-              onClick={onTogglePlay}
+              onClick={(e) => {
+                e.stopPropagation();
+                onTogglePlay();
+              }}
               className="p-2 rounded-full hover:bg-white/20 transition cursor-pointer"
               title="播放/暂停 (空格)"
             >
-              {paused ? <Play className="w-6 h-6 fill-white" /> : <Pause className="w-6 h-6 fill-white" />}
+              {paused ? <Play className="w-5 h-5 fill-white" /> : <Pause className="w-5 h-5 fill-white" />}
             </button>
 
             {/* Time display */}
-            <div className="text-xs font-mono text-gray-300 font-medium">
+            <div className="text-xs font-mono text-gray-300 font-medium tracking-wider">
               <span>{formatTime(currentTime)}</span>
-              <span className="mx-1 text-gray-500">/</span>
+              <span className="mx-1.5 text-gray-500">/</span>
               <span>{formatTime(duration)}</span>
-            </div>
-
-            {/* Volume */}
-            <div className="flex items-center space-x-2 group">
-              <button
-                onClick={handleToggleMute}
-                className="p-1.5 rounded-lg hover:bg-white/20 transition cursor-pointer"
-              >
-                {volume === 0 ? <VolumeX className="w-5 h-5 text-red-400" /> : <Volume2 className="w-5 h-5" />}
-              </button>
-              <input
-                type="range"
-                min={0}
-                max={100}
-                value={volume}
-                onChange={(e) => onVolumeChange(parseInt(e.target.value, 10))}
-                className="w-20 h-1 bg-white/30 rounded cursor-pointer accent-primary opacity-80 group-hover:opacity-100 transition"
-              />
             </div>
           </div>
 
-          <div className="flex items-center space-x-3 text-sm">
+          {/* Center Zone: Danmaku Controls (Bilibili Style: 弹幕开/关与设置) */}
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleDanmaku();
+              }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center space-x-1.5 cursor-pointer ${
+                danmakuVisible
+                  ? 'bg-primary/25 text-primary border border-primary/40 hover:bg-primary/35 shadow-sm'
+                  : 'bg-white/10 text-gray-400 hover:text-white hover:bg-white/20'
+              }`}
+              title="一键开关弹幕 (快捷键 D)"
+            >
+              {danmakuVisible ? (
+                <MessageSquare className="w-3.5 h-3.5" />
+              ) : (
+                <MessageSquareOff className="w-3.5 h-3.5" />
+              )}
+              <span className="text-xs font-mono">{danmakuVisible ? '弹幕开' : '弹幕关'}</span>
+            </button>
+
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleDanmakuDrawer();
+              }}
+              className="px-2.5 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-gray-300 hover:text-white transition cursor-pointer flex items-center space-x-1.5 text-xs font-medium border border-transparent hover:border-white/10"
+              title="打开弹幕控制中心 (高级过滤、时间微调与手动搜番绑定)"
+            >
+              <Sliders className="w-3.5 h-3.5 text-primary" />
+              <span className="hidden sm:inline">弹幕设置</span>
+            </button>
+          </div>
+
+          {/* Right Zone: Speed, Tracks, Volume, Window Mode, Fullscreen */}
+          <div className="flex items-center space-x-2.5 text-sm">
             {/* Playback Speed Menu */}
             <div className="relative">
               <button
-                onClick={() => {
+                onClick={(e) => {
+                  e.stopPropagation();
                   setShowRateMenu(!showRateMenu);
                   setShowAudioMenu(false);
                   setShowSubtitleMenu(false);
                 }}
                 className="px-2.5 py-1 rounded bg-white/10 hover:bg-white/20 text-xs font-mono font-medium transition cursor-pointer"
+                title="倍速选择"
               >
                 {playbackRate}x
               </button>
               {showRateMenu && (
-                <div className="absolute bottom-full mb-2 right-0 bg-[#161922] border border-white/10 rounded-xl shadow-2xl p-1 w-24 space-y-1">
+                <div className="absolute bottom-full mb-2 right-0 bg-[#161922] border border-white/10 rounded-xl shadow-2xl p-1 w-24 space-y-1 z-30">
                   {rates.map((r) => (
                     <button
                       key={r}
-                      onClick={() => {
+                      onClick={(e) => {
+                        e.stopPropagation();
                         onRateChange(r);
                         setShowRateMenu(false);
                       }}
@@ -244,7 +280,8 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
             {audioTracks.length > 0 && (
               <div className="relative">
                 <button
-                  onClick={() => {
+                  onClick={(e) => {
+                    e.stopPropagation();
                     setShowAudioMenu(!showAudioMenu);
                     setShowRateMenu(false);
                     setShowSubtitleMenu(false);
@@ -255,14 +292,15 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
                   <AudioLines className="w-4 h-4" />
                 </button>
                 {showAudioMenu && (
-                  <div className="absolute bottom-full mb-2 right-0 bg-[#161922] border border-white/10 rounded-xl shadow-2xl p-2 w-64 space-y-1 max-h-56 overflow-y-auto">
+                  <div className="absolute bottom-full mb-2 right-0 bg-[#161922] border border-white/10 rounded-xl shadow-2xl p-2 w-64 space-y-1 max-h-56 overflow-y-auto z-30">
                     <span className="text-xs font-semibold text-gray-400 px-2 block mb-1">
                       音轨选择
                     </span>
                     {audioTracks.map((track) => (
                       <button
                         key={track.id}
-                        onClick={() => {
+                        onClick={(e) => {
+                          e.stopPropagation();
                           onSelectAudioTrack(track.id);
                           setShowAudioMenu(false);
                         }}
@@ -284,7 +322,8 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
             {subtitleTracks.length > 0 && (
               <div className="relative">
                 <button
-                  onClick={() => {
+                  onClick={(e) => {
+                    e.stopPropagation();
                     setShowSubtitleMenu(!showSubtitleMenu);
                     setShowRateMenu(false);
                     setShowAudioMenu(false);
@@ -297,12 +336,13 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
                   <Subtitles className="w-4 h-4" />
                 </button>
                 {showSubtitleMenu && (
-                  <div className="absolute bottom-full mb-2 right-0 bg-[#161922] border border-white/10 rounded-xl shadow-2xl p-2 w-64 space-y-1 max-h-56 overflow-y-auto">
+                  <div className="absolute bottom-full mb-2 right-0 bg-[#161922] border border-white/10 rounded-xl shadow-2xl p-2 w-64 space-y-1 max-h-56 overflow-y-auto z-30">
                     <span className="text-xs font-semibold text-gray-400 px-2 block mb-1">
                       字幕选择
                     </span>
                     <button
-                      onClick={() => {
+                      onClick={(e) => {
+                        e.stopPropagation();
                         onSelectSubtitleTrack(null);
                         setShowSubtitleMenu(false);
                       }}
@@ -317,7 +357,8 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
                     {subtitleTracks.map((track) => (
                       <button
                         key={track.id}
-                        onClick={() => {
+                        onClick={(e) => {
+                          e.stopPropagation();
                           onSelectSubtitleTrack(track.id);
                           setShowSubtitleMenu(false);
                         }}
@@ -338,7 +379,10 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
             {/* Episode Drawer */}
             {onToggleEpisodeDrawer && (
               <button
-                onClick={onToggleEpisodeDrawer}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleEpisodeDrawer();
+                }}
                 className="p-2 rounded bg-white/10 hover:bg-white/20 text-white transition cursor-pointer"
                 title="分集列表"
               >
@@ -346,13 +390,56 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
               </button>
             )}
 
-            {/* Fullscreen */}
+            {/* Volume */}
+            <div className="flex items-center space-x-2 group">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleToggleMute();
+                }}
+                className="p-1.5 rounded-lg hover:bg-white/20 transition cursor-pointer"
+                title={volume === 0 ? '取消静音' : '静音'}
+              >
+                {volume === 0 ? <VolumeX className="w-4 h-4 text-red-400" /> : <Volume2 className="w-4 h-4" />}
+              </button>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={volume}
+                onChange={(e) => onVolumeChange(parseInt(e.target.value, 10))}
+                className="w-18 h-1 bg-white/30 rounded cursor-pointer accent-primary opacity-80 group-hover:opacity-100 transition"
+              />
+            </div>
+
+            {/* 窗口模式 / 窗口全屏按钮 (Bilibili Style: 窗口全屏与还原) */}
             <button
-              onClick={onToggleFullscreen}
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleWindowMode();
+              }}
               className="p-2 rounded hover:bg-white/20 text-white transition cursor-pointer"
-              title="全屏切换 (F)"
+              title={
+                isFullscreen
+                  ? '恢复窗口 (退出全屏)'
+                  : isMaximized
+                  ? '还原窗口'
+                  : '窗口全屏 / 最大化'
+              }
             >
-              {isFullscreen ? <Minimize className="w-5 h-5" /> : <Maximize className="w-5 h-5" />}
+              <AppWindow className="w-4 h-4" />
+            </button>
+
+            {/* 全屏按钮 (Bilibili Style: 全屏切换) */}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleFullscreen();
+              }}
+              className="p-2 rounded hover:bg-white/20 text-white transition cursor-pointer"
+              title={isFullscreen ? '退出全屏 (F / Esc)' : '全屏 (F)'}
+            >
+              {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}
             </button>
           </div>
         </div>

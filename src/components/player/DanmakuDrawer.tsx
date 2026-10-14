@@ -243,7 +243,12 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
 
   return (
     <>
-      <div className="fixed inset-y-0 right-0 z-40 w-[420px] bg-[#161922]/95 backdrop-blur-md border-l border-white/10 shadow-2xl flex flex-col text-gray-200 select-none">
+      {/* 遮罩背景：点击抽屉外部空白区域可直接关闭抽屉 */}
+      <div
+        className="fixed inset-0 z-40 bg-black/40 backdrop-blur-[2px] transition-opacity"
+        onClick={onClose}
+      />
+      <div className="fixed inset-y-0 right-0 z-50 w-[420px] bg-[#161922]/95 backdrop-blur-md border-l border-white/10 shadow-2xl flex flex-col text-gray-200 select-none animate-in slide-in-from-right duration-200">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-white/10">
           <div className="flex items-center space-x-2">
@@ -255,7 +260,7 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
             {/* Danmu Server Indicator & Switcher */}
             <button
               onClick={() => setIsServerModalOpen(true)}
-              className="flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-xs text-gray-300 hover:text-white transition border border-white/5"
+              className="flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-xs text-gray-300 hover:text-white transition border border-white/5 cursor-pointer"
               title="配置弹幕 API 节点"
             >
               <Server className="w-3.5 h-3.5 text-primary" />
@@ -264,7 +269,8 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
 
             <button
               onClick={onClose}
-              className="p-1 rounded-lg hover:bg-white/10 text-gray-400 hover:text-white transition"
+              className="p-1.5 rounded-lg hover:bg-white/10 text-gray-400 hover:text-white transition cursor-pointer"
+              title="关闭弹幕设置 (Esc)"
             >
               <X className="w-5 h-5" />
             </button>

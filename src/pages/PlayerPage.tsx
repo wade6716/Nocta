@@ -153,6 +153,7 @@ export const PlayerPage: React.FC = () => {
         return;
       }
       hasInitialSeekedRef.current = true;
+      setIsLoadingVideo(false);
       updateTime(cur, dur);
       bridge.onMpvTimePos(cur);
     });
@@ -170,6 +171,7 @@ export const PlayerPage: React.FC = () => {
           bridge.onMpvPauseChange(false);
           break;
         case 'paused':
+          setIsLoadingVideo(false);
           setPaused(true);
           bridge.onMpvPauseChange(true);
           break;

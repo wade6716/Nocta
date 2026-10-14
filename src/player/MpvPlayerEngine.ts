@@ -2,6 +2,7 @@ import {
   init,
   destroy,
   observeProperties,
+  listenEvents,
   command,
   setProperty,
   MpvConfig,
@@ -15,7 +16,7 @@ const OBSERVED_PROPERTIES = [
   ['pause', 'flag'],
   ['time-pos', 'double', 'none'],
   ['duration', 'double', 'none'],
-  ['core-idle', 'flag'],
+  ['paused-for-cache', 'flag'],
   ['speed', 'double'],
   ['volume', 'double'],
   ['dwidth', 'int64', 'none'],
@@ -25,6 +26,7 @@ const OBSERVED_PROPERTIES = [
 
 export class MpvPlayerEngine implements IPlayerEngine {
   private unlisten: UnlistenFn | null = null;
+  private unlistenEvents: UnlistenFn | null = null;
   private isInitialized = false;
 
   private _state: PlayerState = 'idle';
@@ -34,6 +36,8 @@ export class MpvPlayerEngine implements IPlayerEngine {
   private _playbackRate = 1.0;
   private _paused = true;
   private _isBuffering = false;
+  private _videoWidth = 0;
+  private _videoHeight = 0;
 
   private timeUpdateListeners: Set<(currentTime: number, duration: number) => void> = new Set();
   private stateChangeListeners: Set<(state: PlayerState) => void> = new Set();
@@ -65,7 +69,7 @@ export class MpvPlayerEngine implements IPlayerEngine {
 
     const mpvConfig: MpvConfig = {
       initialOptions: {
-        vo: 'gpu-next',
+        vo: 'gpu-next,gpu',
         hwdec: 'auto-safe',
         'keep-open': 'yes',
         'force-window': 'yes',
@@ -99,15 +103,21 @@ export class MpvPlayerEngine implements IPlayerEngine {
             this.updateCurrentState();
             break;
           }
-          case 'core-idle': {
-            const isIdle = Boolean(data);
-            this._isBuffering = isIdle && !this._paused;
+          case 'paused-for-cache': {
+            const isBuffering = Boolean(data);
+            this._isBuffering = isBuffering;
             this.updateCurrentState();
             break;
           }
           case 'time-pos': {
             if (typeof data === 'number' && !Number.isNaN(data)) {
               this._currentTime = data;
+              if (this._isBuffering) {
+                this._isBuffering = false;
+                this.updateCurrentState();
+              } else if (this._state === 'loading') {
+                this.updateCurrentState();
+              }
               this.timeUpdateListeners.forEach((cb) => cb(this._currentTime, this._duration));
             }
             break;
@@ -131,11 +141,21 @@ export class MpvPlayerEngine implements IPlayerEngine {
             }
             break;
           }
-          case 'dwidth':
+          case 'dwidth': {
+            if (typeof data === 'number' && data > 0) {
+              this._videoWidth = data;
+              if (this._videoHeight > 0) {
+                this.videoDimensionsListeners.forEach((cb) => cb(this._videoWidth, this._videoHeight));
+              }
+            }
+            break;
+          }
           case 'dheight': {
-            // 当尺寸变化时统一查询或通知
-            if (typeof data === 'number') {
-              // 触发尺寸回调
+            if (typeof data === 'number' && data > 0) {
+              this._videoHeight = data;
+              if (this._videoWidth > 0) {
+                this.videoDimensionsListeners.forEach((cb) => cb(this._videoWidth, this._videoHeight));
+              }
             }
             break;
           }
@@ -145,6 +165,13 @@ export class MpvPlayerEngine implements IPlayerEngine {
             }
             break;
           }
+        }
+      });
+
+      this.unlistenEvents = await listenEvents((ev) => {
+        if (ev.event === 'end-file' && (ev as any).reason === 'error') {
+          this.setState('idle');
+          this.errorListeners.forEach((cb) => cb('libmpv 播放出错或媒体流异常中断'));
         }
       });
     } catch (err) {
@@ -318,6 +345,12 @@ export class MpvPlayerEngine implements IPlayerEngine {
         this.unlisten();
       } catch {}
       this.unlisten = null;
+    }
+    if (this.unlistenEvents) {
+      try {
+        this.unlistenEvents();
+      } catch {}
+      this.unlistenEvents = null;
     }
     if (this.isInitialized) {
       try {

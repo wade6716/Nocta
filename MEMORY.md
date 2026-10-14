@@ -12,7 +12,7 @@
 - **Git 仓库**：`git@github.com:wade6716/Nocta.git`（分支 `main`）
 - **Git 提交身份约束**（**至关重要**）：
   - 邮箱：`59910348+wade6716@users.noreply.github.com`
-  - 用户名：`wade6716`
+  - 用户名：`Wade`
   - *注：必须使用 noreply 隐私邮箱提交，否则 GitHub 会拒绝远程推送（push declined due to email privacy restrictions）。*
 - **技术栈架构**：
   - 跨平台壳层：**Tauri 2.0** (`@tauri-apps/api`, `@tauri-apps/plugin-http`)

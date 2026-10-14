@@ -10,7 +10,7 @@
 ## 核心开发准则与不可违背的硬性约束 (Hard Rules)
 
 1. **Git 提交身份约束**：
-   - 必须使用配置的 GitHub 隐私邮箱提交：`59910348+wade6716@users.noreply.github.com`，用户名 `wade6716`。
+   - 必须使用配置的 GitHub 隐私邮箱提交：`59910348+wade6716@users.noreply.github.com`，用户名 `Wade`。
    - 严禁使用未授权或真实个人外部邮箱，否则会被 GitHub remote rejected 拒绝推送。
 
 2. **弹幕客户端纯粹性**：

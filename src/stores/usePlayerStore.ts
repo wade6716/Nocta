@@ -31,6 +31,11 @@ export interface DanmakuBinding {
   boundAt: number;
 }
 
+export interface VideoLayoutConfig {
+  bottomAlign: boolean; // 是否开启贴底模式
+  verticalOffset: number; // 垂直位置百分比: 50(居中) ~ 100(完全贴底)，默认 100
+}
+
 interface PlayerState {
   // 播放项信息
   item: EmbyItem | null;
@@ -40,6 +45,7 @@ interface PlayerState {
 
   // 播放状态
   currentTime: number;
+  initialTime: number;
   duration: number;
   paused: boolean;
   buffering: boolean;
@@ -56,6 +62,7 @@ interface PlayerState {
   danmakuSettings: DanmakuSettings;
   itemOffsets: Record<string, number>; // itemId -> offsetSeconds
   danmakuBindings: Record<string, DanmakuBinding>; // itemId -> DanmakuBinding
+  videoLayouts: Record<string, VideoLayoutConfig>; // seriesId/itemId -> VideoLayoutConfig
 
   // Actions
   setPlaybackContext: (payload: {
@@ -78,12 +85,24 @@ interface PlayerState {
   setItemOffset: (itemId: string, offset: number) => void;
   bindDanmaku: (itemId: string, binding: Omit<DanmakuBinding, 'boundAt'>) => void;
   unbindDanmaku: (itemId: string) => void;
+  setVideoLayout: (key: string, config: Partial<VideoLayoutConfig>) => void;
+  resetVideoLayout: (key: string) => void;
   resetPlayer: () => void;
 }
 
 const SETTINGS_KEY = 'emby_danmaku_settings';
 const OFFSETS_KEY = 'emby_danmaku_offsets';
 const BINDINGS_KEY = 'emby_danmaku_bindings';
+const VIDEO_LAYOUTS_KEY = 'emby_video_layout_configs';
+
+function loadVideoLayouts(): Record<string, VideoLayoutConfig> {
+  try {
+    const raw = localStorage.getItem(VIDEO_LAYOUTS_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
 
 function loadDanmakuSettings(): DanmakuSettings {
   try {
@@ -148,6 +167,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   streamUrl: null,
 
   currentTime: 0,
+  initialTime: 0,
   duration: 0,
   paused: true,
   buffering: false,
@@ -162,6 +182,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   danmakuSettings: loadDanmakuSettings(),
   itemOffsets: loadOffsets(),
   danmakuBindings: loadBindings(),
+  videoLayouts: loadVideoLayouts(),
 
   setPlaybackContext: (payload) => {
     const defaultAudio =
@@ -178,6 +199,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       selectedAudioId: defaultAudio,
       selectedSubtitleId: defaultSub,
       currentTime: payload.initialTime || 0,
+      initialTime: payload.initialTime || 0,
       paused: false,
       buffering: false,
     });
@@ -251,6 +273,35 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     });
   },
 
+  setVideoLayout: (key, config) => {
+    set((state) => {
+      const prev = state.videoLayouts[key] || { bottomAlign: false, verticalOffset: 100 };
+      const updated = {
+        ...state.videoLayouts,
+        [key]: { ...prev, ...config },
+      };
+      try {
+        localStorage.setItem(VIDEO_LAYOUTS_KEY, JSON.stringify(updated));
+      } catch (e) {
+        console.error(e);
+      }
+      return { videoLayouts: updated };
+    });
+  },
+
+  resetVideoLayout: (key) => {
+    set((state) => {
+      const updated = { ...state.videoLayouts };
+      delete updated[key];
+      try {
+        localStorage.setItem(VIDEO_LAYOUTS_KEY, JSON.stringify(updated));
+      } catch (e) {
+        console.error(e);
+      }
+      return { videoLayouts: updated };
+    });
+  },
+
   resetPlayer: () => {
     set({
       item: null,
@@ -258,6 +309,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       playSessionId: null,
       streamUrl: null,
       currentTime: 0,
+      initialTime: 0,
       duration: 0,
       paused: true,
       buffering: false,

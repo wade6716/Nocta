@@ -66,6 +66,15 @@
 3. **封面海报完整性保障**：
    - 单集视频可能未单独上传海报，解析图片时需优先读取自身海报，若缺失则级联回退到电视剧集封面：`SeriesPrimary` -> `ParentBackdropImageTags` -> `Primary`，确保所有“继续观看”卡片均具有完整封面海报。
 
+### 2.3 播放进度恢复与记忆保障机制（关键排坑）
+1. **HTML5 `<video>` 起播首跳**：
+   - 浏览器原生 `<video>` 挂载时默认从 0:00 秒开始播放，必须在 `onLoadedMetadata` / `onCanPlay` 触发时显式将 `video.currentTime` 赋值为 `initialTime`；
+   - 增加 `hasInitialSeekedRef` 标记，首跳执行前拦截前几十毫秒原生 `0` 秒触发的 `onTimeUpdate` 事件，防止瞬杀冲刷全局 Store 中的真实历史进度。
+2. **完播防回滚保护**：
+   - 若 `initialTime` 距片尾不足 15 秒或已达总时长 98%，视为已完播，自动忽略历史进度从 0:00 重新播放。
+3. **闭包过时（Stale Closure）防护**：
+   - `useEffect` 销毁时的 `reportPlaybackStopped` 与心跳定时器绝不能直接捕获组件作用域的旧 `currentTime`，必须通过 `videoElemRef.current?.currentTime ?? usePlayerStore.getState().currentTime` 实时读取真实现场秒数，杜绝将 0 秒反向回写覆盖 Emby 服务端。
+
 ---
 
 ## 3. 弹幕系统规范（Danmaku）与 `danmu_api` 对接
@@ -107,6 +116,11 @@
   - `monochrome`：纯白模式（所有彩色弹幕转为纯白色）。
   - `blocked`：屏蔽彩弹（仅保留普通白色弹幕，丢弃带颜色的弹幕）。
 
+### 3.6 宽银幕画面沉浸贴底与顶部留黑（弹幕空间优化）
+- **实现原理**：针对 2.35:1 / 2.39:1 / 21:9 等宽银幕视频，通过 CSS `object-position: center ${verticalOffset}%` 将画面平滑靠底，彻底消除底部黑边，将全部多余黑边合并至屏幕顶部作为专属弹幕滑行区，防止遮挡人物与台词。
+- **微调与预设**：支持 50%（居中）至 100%（贴紧底边）平滑滑动微调，并附带“完全贴底 100%”、“微浮避让 95%”和“居中 50%”一键预设。
+- **按剧隔离记忆**：以 `series_${SeriesId}` 作为存储键持久化在 `emby_video_layout_configs`，同剧各分集自动共享，不同影视剧之间完全隔离。
+
 ---
 
 ## 4. 应用图标（App Icons）规范与存放指南
@@ -127,9 +141,14 @@
 ## 5. 项目窗口与标题规范
 
 - **桌面窗口标题**：统一为 `Nocta · 夜幕`（[`tauri.conf.json`](file:///d:/wade/code/emby-tauri-player/src-tauri/tauri.conf.json)、[`index.html`](file:///d:/wade/code/emby-tauri-player/index.html)、[`App.tsx`](file:///d:/wade/code/emby-tauri-player/src/App.tsx)）。
-- **无边框窗口控制**：
+- **无边框窗口控制与播放页交互规范**：
   - 非播放页：展示统一自定义标题栏 [`TitleBar.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/layout/TitleBar.tsx)，左上角包含 Nocta App Logo 与应用标题，右上角包含最小化、最大化/还原、关闭。
-  - 播放页：隐藏原生标题栏，由沉浸式顶部悬浮栏提供返回、最小化、全屏切换与关闭。
+  - 播放页（交互与布局参考哔哩哔哩）：
+    - **无遮挡顶部栏**：彻底取消播放界面右上角的窗口控制按钮，避免遮挡右侧弹幕控制中心；左上角集成“返回”与“首页”快捷按钮及剧集标题。
+    - **双击全屏与画面手势**：双击视频画面任意空白处切换全屏，单击切换播放/暂停（附带屏幕中央微动效指示徽标），防抖避免双击误触发暂停。
+    - **右下角双全屏控制**：控制栏右下角分别提供“窗口全屏 / 还原窗口”（`AppWindow`）与“屏幕全屏”（`Maximize`/`Minimize`）按钮。
+    - **弹幕控制移至底部**：底部控制栏居中提供弹幕开关（快捷键 D）与弹幕设置抽屉入口。
+    - **弹幕设置抽屉优化**：抽屉层级升至最高 `z-50`，支持点击外部半透明遮罩快速关闭，右上角关闭按钮完全无遮挡，按 `Esc` 优先关闭抽屉。
 
 ---
 

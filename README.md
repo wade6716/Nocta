@@ -5,6 +5,8 @@
   <p>专为 Emby / Jellyfin 打造的现代化轻量级桌面客户端，集成全网弹幕自动匹配与彩色渲染引擎</p>
 
   <p>
+    <a href="https://github.com/wade6716/Nocta/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/wade6716/Nocta/ci.yml?branch=main&label=CI&style=flat-square&logo=githubactions&logoColor=white" alt="CI Status" /></a>
+    <a href="https://github.com/wade6716/Nocta/releases"><img src="https://img.shields.io/github/v/release/wade6716/Nocta?style=flat-square&logo=github&color=38BDF8" alt="GitHub Release" /></a>
     <a href="https://tauri.app/"><img src="https://img.shields.io/badge/Tauri-2.0-24C8DB?style=flat-square&logo=tauri&logoColor=white" alt="Tauri 2" /></a>
     <a href="https://react.dev/"><img src="https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react&logoColor=black" alt="React 18" /></a>
     <a href="https://www.typescriptlang.org/"><img src="https://img.shields.io/badge/TypeScript-5-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript" /></a>
@@ -75,6 +77,13 @@
 - [Node.js](https://nodejs.org/) (>= 18.0.0)
 - [pnpm](https://pnpm.io/) (推荐) 或 `npm`
 - [Rust](https://www.rust-lang.org/tools/install) (>= 1.77.0) 及 C++ 构建工具（Windows 需 Visual Studio Build Tools）
+
+### 📦 安装包直接下载 (Pre-built Binaries)
+
+可前往 [GitHub Releases](https://github.com/wade6716/Nocta/releases) 获取全平台各架构最新预编译安装包：
+- **Windows**: 下载 `.exe` (一键安装包) 或 `.msi`
+- **macOS**: 下载 `.dmg` (Universal 2 通用二进制，原生支持 Apple Silicon M系列 与 Intel 处理器)
+- **Linux**: 下载 `.deb` (Debian/Ubuntu 系列) 或 `.AppImage` (免安装便携版)
 
 ### 本地开发启动
 

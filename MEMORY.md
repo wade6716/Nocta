@@ -125,3 +125,24 @@ pnpm tauri icon app-icon.svg
 # 5. 桌面安装包构建
 pnpm tauri build
 ```
+
+---
+
+## 7. GitHub Actions 自动化 CI/CD 与发版流程
+
+### 7.1 CI 流水线 (`.github/workflows/ci.yml`)
+- **触发条件**：向 `main` 分支提交代码或发起 Pull Request 时自动触发；
+- **任务内容**：
+  - `frontend-check`：验证前端 TypeScript 类型检查与 Vite 打包（`pnpm build`）；
+  - `rust-check`：在 Ubuntu 与 Windows 矩阵运行 `cargo check`，确保 Rust 后端语法与依赖无冲突。
+
+### 7.2 自动编译发版流水线 (`.github/workflows/release.yml`)
+- **触发条件**：
+  - **标签触发**：推送 `v*` 格式版本标签（例如 `git tag v0.1.0 && git push origin v0.1.0`）；
+  - **手动触发**：GitHub Actions 界面手动 `workflow_dispatch`，可选择草稿（Draft）或预发版（Pre-release）。
+- **多平台多架构编译矩阵**：
+  - **Windows x64** (`windows-latest`)：输出 `.exe` (NSIS) 与 `.msi` (WiX)；
+  - **macOS Universal** (`macos-latest`)：输出 Universal 2 `.dmg`（单文件同时原生支持 Apple Silicon M1~M4 与 Intel 处理器）；
+  - **Linux x64** (`ubuntu-22.04`)：输出 `.deb` 与 `.AppImage`。
+- **发布产物**：自动生成 GitHub Release 并挂载全部平台安装包资产。
+

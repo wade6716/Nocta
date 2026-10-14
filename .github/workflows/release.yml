@@ -1,0 +1,104 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_draft:
+        description: '发布为草稿 (Draft Release)'
+        required: false
+        type: boolean
+        default: false
+      prerelease:
+        description: '标记为预发布 (Pre-release)'
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-tauri:
+    name: Build (${{ matrix.name_suffix }})
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 1. Windows x64
+          - platform: windows-latest
+            args: ''
+            name_suffix: 'Windows x64'
+
+          # 2. macOS Universal (支持 Apple Silicon M1-M4 & Intel Mac)
+          - platform: macos-latest
+            args: '--target universal-apple-darwin'
+            name_suffix: 'macOS Universal'
+
+          # 3. Linux x64 (deb & AppImage)
+          - platform: ubuntu-22.04
+            args: ''
+            name_suffix: 'Linux x64'
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'pnpm'
+
+      - name: Setup Rust Stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Install Linux Dependencies (Ubuntu)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            xdg-utils
+
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install Frontend Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build and Release via Tauri Action
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          releaseName: 'Nocta · 夜幕 ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}'
+          releaseBody: |
+            ## Nocta · 夜幕 ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }} 发布
+
+            ### 📦 资产下载与系统支持：
+            - **Windows**: 下载 `.exe` (一键安装版) 或 `.msi`
+            - **macOS**: 下载 `.dmg` (通用二进制，同时原生支持 Apple Silicon M系列 与 Intel 处理器)
+            - **Linux**: 下载 `.deb` (Debian/Ubuntu 系列) 或 `.AppImage` (免安装便携版)
+
+            > 详细更新日志见提交历史。
+          releaseDraft: ${{ github.event.inputs.release_draft == 'true' }}
+          prerelease: ${{ github.event.inputs.prerelease == 'true' }}
+          args: ${{ matrix.args }}

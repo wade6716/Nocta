@@ -67,7 +67,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({ title = 'Nocta · 夜幕' })
       {/* Title */}
       <div className="flex items-center space-x-2 pointer-events-none">
         <div className="w-2.5 h-2.5 rounded-full bg-primary animate-pulse" />
-        <span className="text-xs font-semibold tracking-wider text-gray-300 uppercase">
+        <span className="text-xs font-semibold tracking-wider text-gray-300">
           {title}
         </span>
       </div>

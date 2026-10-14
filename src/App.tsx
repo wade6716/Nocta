@@ -15,7 +15,7 @@ export const App: React.FC = () => {
     <ErrorBoundary fallbackTitle="应用发生意外错误">
       <div className="h-screen w-screen bg-background select-none overflow-hidden flex flex-col">
         {/* Native-style TitleBar for non-player routes */}
-        {!isPlayerPage && <TitleBar title="Emby Player" />}
+        {!isPlayerPage && <TitleBar title="Nocta · 夜幕" />}
 
         {/* Main view container with vertical scroll */}
         <main

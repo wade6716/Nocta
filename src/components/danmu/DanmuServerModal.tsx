@@ -79,6 +79,7 @@ export const DanmuServerModal: React.FC<DanmuServerModalProps> = ({ isOpen, onCl
         baseUrl: cleanUrl,
         preferredPlatform: preferredPlatform.trim(),
       });
+      testServerConnection(editingId);
     } else {
       const newId = addServer({
         name: cleanName,
@@ -195,16 +196,35 @@ export const DanmuServerModal: React.FC<DanmuServerModalProps> = ({ isOpen, onCl
 
                       {/* Right controls */}
                       <div className="flex items-center space-x-2 flex-shrink-0">
+                        {/* Testing badge */}
+                        {isTesting && (
+                          <span className="text-[11px] font-mono text-primary bg-primary/10 px-2 py-0.5 rounded-md flex items-center space-x-1">
+                            <Activity className="w-3 h-3 animate-spin flex-shrink-0" />
+                            <span>测速中</span>
+                          </span>
+                        )}
+
                         {/* Latency badge */}
-                        {s.latency !== undefined && s.status === 'ok' && (
+                        {!isTesting && s.latency !== undefined && s.status === 'ok' && (
                           <span className="text-[11px] font-mono text-green-400 bg-green-500/10 px-2 py-0.5 rounded-md">
                             {s.latency} ms
                           </span>
                         )}
-                        {s.status === 'error' && (
-                          <span className="text-[11px] font-mono text-red-400 bg-red-500/10 px-2 py-0.5 rounded-md flex items-center space-x-1">
-                            <AlertCircle className="w-3 h-3" />
-                            <span>离线</span>
+
+                        {/* Error badge */}
+                        {!isTesting && s.status === 'error' && (
+                          <span
+                            title={s.errorMessage || '无法连接或节点离线'}
+                            className="text-[11px] font-mono text-red-400 bg-red-500/10 px-2 py-0.5 rounded-md flex items-center space-x-1 cursor-help"
+                          >
+                            <AlertCircle className="w-3 h-3 flex-shrink-0" />
+                            <span>
+                              {s.errorMessage?.includes('401')
+                                ? 'Token 错误'
+                                : s.errorMessage?.includes('404')
+                                ? '路径 404'
+                                : '离线'}
+                            </span>
                           </span>
                         )}
 

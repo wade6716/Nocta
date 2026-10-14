@@ -9,6 +9,7 @@ export interface DanmuServerEntry {
   preferredPlatform?: string; // "bilibili1" | "qiyi" | "qq" | "youku" | "bahamut"
   latency?: number; // ms
   status?: 'ok' | 'error' | 'idle' | 'testing';
+  errorMessage?: string;
 }
 
 interface DanmuState {
@@ -166,14 +167,17 @@ export const useDanmuStore = create<DanmuState>((set, get) => {
       const server = get().servers.find((s) => s.id === id);
       if (!server) return { ok: false, latency: 0, error: '未找到指定节点' };
 
-      get().updateServer(id, { status: 'testing' });
+      get().updateServer(id, { status: 'testing', errorMessage: undefined });
 
       const startTime = performance.now();
-      let base = server.baseUrl.replace(/\/+$/, '');
+      let base = server.baseUrl.trim().replace(/\/+$/, '');
       if (server.token && !base.endsWith(`/${server.token}`)) {
         base = `${base}/${server.token.replace(/^\/+|\/+$/g, '')}`;
       }
-      const testUrl = `${base}/api/v2/version`;
+
+      // 提取去除末尾 /api 或 /api/v2 的基础路径，用于探测 /api/config
+      const baseWithoutApi = base.replace(/\/api(\/v2)?\/?$/i, '');
+      const testUrl = `${baseWithoutApi}/api/config`;
 
       try {
         const res = await httpClient(testUrl, {
@@ -184,24 +188,55 @@ export const useDanmuStore = create<DanmuState>((set, get) => {
         const latency = Math.round(performance.now() - startTime);
 
         if (res.ok) {
-          get().updateServer(id, { status: 'ok', latency });
+          get().updateServer(id, { status: 'ok', latency, errorMessage: undefined });
           return { ok: true, latency };
+        } else if (res.status === 401 || res.status === 403) {
+          const errText = `Token 错误或未授权 (HTTP ${res.status})`;
+          get().updateServer(id, { status: 'error', latency, errorMessage: errText });
+          return { ok: false, latency, error: errText };
         } else {
-          // If version endpoint returned non-200 (maybe legacy token path), try root or match ping
-          const fallbackUrl = `${base}/api/v2/version`;
-          const fbRes = await httpClient(fallbackUrl, { method: 'GET' }).catch(() => null);
-          if (fbRes?.ok) {
-            get().updateServer(id, { status: 'ok', latency });
-            return { ok: true, latency };
+          // 如果 /api/config 返回 404 等（可能是官方或自建标准弹弹play节点），尝试 POST /api/v2/match
+          const fallbackMatchUrl = `${baseWithoutApi}/api/v2/match`;
+          try {
+            const fbRes = await httpClient(fallbackMatchUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ fileName: 'ping' }),
+            });
+            const fbLatency = Math.round(performance.now() - startTime);
+            if (fbRes.ok) {
+              get().updateServer(id, { status: 'ok', latency: fbLatency, errorMessage: undefined });
+              return { ok: true, latency: fbLatency };
+            } else if (fbRes.status === 401 || fbRes.status === 403) {
+              const errText = `Token 错误或未授权 (HTTP ${fbRes.status})`;
+              get().updateServer(id, { status: 'error', latency: fbLatency, errorMessage: errText });
+              return { ok: false, latency: fbLatency, error: errText };
+            }
+          } catch {
+            // 继续尝试根路径
           }
-          const errText = `HTTP ${res.status}`;
-          get().updateServer(id, { status: 'error', latency });
+
+          // 尝试 GET / 兜底
+          try {
+            const rootRes = await httpClient(`${baseWithoutApi}/`, { method: 'GET' });
+            const rootLatency = Math.round(performance.now() - startTime);
+            if (rootRes.ok) {
+              get().updateServer(id, { status: 'ok', latency: rootLatency, errorMessage: undefined });
+              return { ok: true, latency: rootLatency };
+            }
+          } catch {
+            // ignore
+          }
+
+          const errText = `接口返回 HTTP ${res.status}`;
+          get().updateServer(id, { status: 'error', latency, errorMessage: errText });
           return { ok: false, latency, error: errText };
         }
       } catch (err: any) {
         const latency = Math.round(performance.now() - startTime);
-        get().updateServer(id, { status: 'error', latency });
-        return { ok: false, latency, error: err.message || '网络连接超时或拒绝连接' };
+        const errText = err?.message || '无法连接到服务器 (请确认服务已启动或地址可达)';
+        get().updateServer(id, { status: 'error', latency, errorMessage: errText });
+        return { ok: false, latency, error: errText };
       }
     },
   };

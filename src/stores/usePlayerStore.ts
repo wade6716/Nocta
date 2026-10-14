@@ -63,6 +63,7 @@ interface PlayerState {
   itemOffsets: Record<string, number>; // itemId -> offsetSeconds
   danmakuBindings: Record<string, DanmakuBinding>; // itemId -> DanmakuBinding
   videoLayouts: Record<string, VideoLayoutConfig>; // seriesId/itemId -> VideoLayoutConfig
+  engineType: 'mpv' | 'html5';
 
   // Actions
   setPlaybackContext: (payload: {
@@ -87,6 +88,7 @@ interface PlayerState {
   unbindDanmaku: (itemId: string) => void;
   setVideoLayout: (key: string, config: Partial<VideoLayoutConfig>) => void;
   resetVideoLayout: (key: string) => void;
+  setEngineType: (type: 'mpv' | 'html5') => void;
   resetPlayer: () => void;
 }
 
@@ -94,6 +96,16 @@ const SETTINGS_KEY = 'emby_danmaku_settings';
 const OFFSETS_KEY = 'emby_danmaku_offsets';
 const BINDINGS_KEY = 'emby_danmaku_bindings';
 const VIDEO_LAYOUTS_KEY = 'emby_video_layout_configs';
+const ENGINE_TYPE_KEY = 'emby_player_engine_type';
+
+function loadEngineType(): 'mpv' | 'html5' {
+  try {
+    const raw = localStorage.getItem(ENGINE_TYPE_KEY);
+    return raw === 'html5' ? 'html5' : 'mpv';
+  } catch {
+    return 'mpv';
+  }
+}
 
 function loadVideoLayouts(): Record<string, VideoLayoutConfig> {
   try {
@@ -183,6 +195,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   itemOffsets: loadOffsets(),
   danmakuBindings: loadBindings(),
   videoLayouts: loadVideoLayouts(),
+  engineType: loadEngineType(),
 
   setPlaybackContext: (payload) => {
     const defaultAudio =
@@ -300,6 +313,15 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       }
       return { videoLayouts: updated };
     });
+  },
+
+  setEngineType: (type) => {
+    try {
+      localStorage.setItem(ENGINE_TYPE_KEY, type);
+    } catch (e) {
+      console.error(e);
+    }
+    set({ engineType: type });
   },
 
   resetPlayer: () => {

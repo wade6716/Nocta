@@ -10,10 +10,12 @@ import {
   getSeriesEpisodes,
   getPlaybackInfo,
   buildDirectStreamUrl,
+  buildNativeDirectStreamUrl,
   mapStreamTracks,
   buildItemImageUrl,
   ticksToSeconds,
 } from '../api/embyClient';
+import { isTauriEnvironment } from '../api/http';
 import { EpisodeGrid } from '../components/media/EpisodeGrid';
 
 export const DetailPage: React.FC = () => {
@@ -126,13 +128,23 @@ export const DetailPage: React.FC = () => {
         throw new Error('未检测到可用的媒体源 (MediaSource)');
       }
 
-      const streamUrl = buildDirectStreamUrl(
-        currentServer.url,
-        targetItem.Id,
-        mediaSource,
-        pbInfo.PlaySessionId,
-        currentServer.accessToken
-      );
+      const engineType = usePlayerStore.getState().engineType;
+      const streamUrl =
+        engineType === 'mpv' && isTauriEnvironment()
+          ? buildNativeDirectStreamUrl(
+              currentServer.url,
+              targetItem.Id,
+              mediaSource,
+              pbInfo.PlaySessionId,
+              currentServer.accessToken
+            )
+          : buildDirectStreamUrl(
+              currentServer.url,
+              targetItem.Id,
+              mediaSource,
+              pbInfo.PlaySessionId,
+              currentServer.accessToken
+            );
 
       const { audioTracks, subtitleTracks } = mapStreamTracks(
         currentServer.url,

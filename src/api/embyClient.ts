@@ -1,4 +1,4 @@
-import { httpClient } from './http';
+import { httpClient, ProxyConfig } from './http';
 
 export interface EmbyServerInfo {
   ServerName?: string;
@@ -176,11 +176,15 @@ export function normalizeServerUrl(url: string): string {
 /**
  * 测试 Emby 服务器连通性 (GET /emby/System/Info/Public)
  */
-export async function testServerConnection(serverUrl: string): Promise<EmbyServerInfo> {
+export async function testServerConnection(
+  serverUrl: string,
+  options?: { proxy?: ProxyConfig }
+): Promise<EmbyServerInfo> {
   const base = normalizeServerUrl(serverUrl);
   const res = await httpClient(`${base}/emby/System/Info/Public`, {
     method: 'GET',
     headers: buildEmbyHeaders(),
+    proxy: options?.proxy,
   });
   if (!res.ok) {
     throw new Error(`连接失败，状态码: ${res.status}`);
@@ -194,7 +198,8 @@ export async function testServerConnection(serverUrl: string): Promise<EmbyServe
 export async function authenticateByName(
   serverUrl: string,
   username: string,
-  password?: string
+  password?: string,
+  options?: { proxy?: ProxyConfig }
 ): Promise<EmbyAuthResponse> {
   const base = normalizeServerUrl(serverUrl);
   const res = await httpClient(`${base}/emby/Users/AuthenticateByName`, {
@@ -204,6 +209,7 @@ export async function authenticateByName(
       Username: username.trim(),
       Pw: password || '',
     }),
+    proxy: options?.proxy,
   });
   if (!res.ok) {
     const errorText = await res.text();
@@ -515,6 +521,25 @@ export function buildDirectStreamUrl(
     return `${base}/emby/Videos/${itemId}/stream.mp4?MediaSourceId=${mediaSource.Id}&PlaySessionId=${playSessionId}&api_key=${accessToken}&X-Emby-Token=${accessToken}&VideoCodec=copy&AudioCodec=aac&TranscodingMaxAudioChannels=2`;
   }
 
+  return `${base}/emby/Videos/${itemId}/stream.${rawContainer}?static=true&MediaSourceId=${mediaSource.Id}&PlaySessionId=${playSessionId}&api_key=${accessToken}&X-Emby-Token=${accessToken}`;
+}
+
+/**
+ * 生成原生硬解播放器 (libmpv) 直连流地址
+ * 100% 原始容器直出 (static=true)，无任何服务端重封装与音频转码，保留 DTS/TrueHD/Atmos 多声道与全画质
+ */
+export function buildNativeDirectStreamUrl(
+  serverUrl: string,
+  itemId: string,
+  mediaSource: EmbyMediaSource,
+  playSessionId: string,
+  accessToken: string
+): string {
+  const base = normalizeServerUrl(serverUrl);
+  if (mediaSource.IsRemote && mediaSource.Path && mediaSource.Path.startsWith('http')) {
+    return mediaSource.Path;
+  }
+  const rawContainer = (mediaSource.Container || 'mkv').toLowerCase();
   return `${base}/emby/Videos/${itemId}/stream.${rawContainer}?static=true&MediaSourceId=${mediaSource.Id}&PlaySessionId=${playSessionId}&api_key=${accessToken}&X-Emby-Token=${accessToken}`;
 }
 

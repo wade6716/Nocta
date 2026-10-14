@@ -13,7 +13,11 @@ export const App: React.FC = () => {
 
   return (
     <ErrorBoundary fallbackTitle="应用发生意外错误">
-      <div className="h-screen w-screen bg-background select-none overflow-hidden flex flex-col">
+      <div
+        className={`h-screen w-screen ${
+          isPlayerPage ? 'bg-transparent' : 'bg-background'
+        } select-none overflow-hidden flex flex-col`}
+      >
         {/* Native-style TitleBar for non-player routes */}
         {!isPlayerPage && <TitleBar title="Nocta · 夜幕" />}
 
@@ -21,7 +25,7 @@ export const App: React.FC = () => {
         <main
           id="main-scroll-container"
           className={`flex-1 min-h-0 w-full ${
-            isPlayerPage ? 'overflow-hidden' : 'overflow-y-auto overflow-x-hidden'
+            isPlayerPage ? 'overflow-hidden bg-transparent' : 'overflow-y-auto overflow-x-hidden bg-background'
           }`}
         >
           <Routes>

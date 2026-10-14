@@ -18,12 +18,15 @@ import {
   reportPlaybackStopped,
   ticksToSeconds,
   buildDirectStreamUrl,
+  buildNativeDirectStreamUrl,
   buildTranscodeStreamUrl,
   getItemDetail,
   getPlaybackInfo,
   mapStreamTracks,
   buildItemImageUrl,
 } from '../api/embyClient';
+import { IPlayerEngine } from '../player/types';
+import { PlayerEngineFactory } from '../player/PlayerEngineFactory';
 import {
   autoMatchEpisode,
   fetchCommentsById,
@@ -65,6 +68,8 @@ export const PlayerPage: React.FC = () => {
     itemOffsets,
     danmakuBindings,
     videoLayouts,
+    engineType,
+    setEngineType,
     setPlaybackContext,
     updateTime,
     setPaused,
@@ -90,6 +95,10 @@ export const PlayerPage: React.FC = () => {
   // Initial resume seek flag
   const hasInitialSeekedRef = useRef(false);
 
+  // Player Engine and Container refs
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const engineRef = useRef<IPlayerEngine | null>(null);
+
   // Per-series or per-item video layout configuration
   const layoutKey = item?.SeriesId ? `series_${item.SeriesId}` : item ? `item_${item.Id}` : '';
   const currentLayout = (layoutKey && videoLayouts[layoutKey]) || { bottomAlign: false, verticalOffset: 100 };
@@ -113,7 +122,6 @@ export const PlayerPage: React.FC = () => {
   const centerIconTimerRef = useRef<number | null>(null);
   const clickTimerRef = useRef<number | null>(null);
   const hideTimerRef = useRef<number | null>(null);
-  const videoElemRef = useRef<HTMLVideoElement | null>(null);
 
   // Current item offset
   const savedOffset = (itemId && itemOffsets[itemId]) || 0;
@@ -129,29 +137,92 @@ export const PlayerPage: React.FC = () => {
     }
   }, [streamUrl]);
 
-  // Try restore historical progress to video element
-  const tryRestoreInitialProgress = useCallback(
-    (v: HTMLVideoElement) => {
-      if (hasInitialSeekedRef.current || !initialTime || initialTime <= 0) return;
+  // 0. Player Engine Lifecycle (MpvPlayerEngine / Html5PlayerEngine)
+  useEffect(() => {
+    let active = true;
+    const engine = PlayerEngineFactory.create(engineType);
+    engineRef.current = engine;
 
-      const dur = v.duration || ticksToSeconds(item?.RunTimeTicks || 0);
-      // 若历史时间已处于片尾（如剩余不足 15 秒或超过 98%），视为完播，从头重新播放
-      if (dur > 0 && (initialTime >= dur - 15 || initialTime / dur >= 0.98)) {
-        hasInitialSeekedRef.current = true;
+    engine.init(containerRef.current).catch((err) => {
+      console.warn('[Engine Init Warning]', err);
+    });
+
+    const unlistenTime = engine.onTimeUpdate((cur, dur) => {
+      if (!active) return;
+      if (!hasInitialSeekedRef.current && initialTime > 0 && cur < 1) {
         return;
       }
+      hasInitialSeekedRef.current = true;
+      updateTime(cur, dur);
+      bridge.onMpvTimePos(cur);
+    });
 
-      try {
-        hasInitialSeekedRef.current = true;
-        v.currentTime = initialTime;
-        updateTime(initialTime);
-        bridge.onMpvTimePos(initialTime);
-      } catch (err) {
-        console.warn('[Playback Resume Failed]', err);
+    const unlistenState = engine.onStateChange((st) => {
+      if (!active) return;
+      switch (st) {
+        case 'loading':
+          setIsLoadingVideo(true);
+          setVideoError(null);
+          break;
+        case 'playing':
+          setIsLoadingVideo(false);
+          setPaused(false);
+          bridge.onMpvPauseChange(false);
+          break;
+        case 'paused':
+          setPaused(true);
+          bridge.onMpvPauseChange(true);
+          break;
+        case 'buffering':
+          setIsLoadingVideo(true);
+          bridge.onMpvPauseChange(true);
+          break;
+        case 'ended':
+          setPaused(true);
+          bridge.onMpvPauseChange(true);
+          break;
       }
-    },
-    [initialTime, item?.RunTimeTicks, updateTime, bridge]
-  );
+    });
+
+    const unlistenError = engine.onError((errMsg) => {
+      if (!active) return;
+      console.warn('[Engine Playback Error]', errMsg);
+      handleVideoError();
+    });
+
+    const unlistenDim = engine.onVideoDimensions((width, height) => {
+      if (!active) return;
+      setVideoDimensions({ width, height });
+    });
+
+    return () => {
+      active = false;
+      unlistenTime();
+      unlistenState();
+      unlistenError();
+      unlistenDim();
+      engine.destroy();
+      engineRef.current = null;
+    };
+  }, [engineType]);
+
+  // Sync streamUrl into active engine
+  useEffect(() => {
+    if (currentStreamUrl && engineRef.current) {
+      engineRef.current.load({
+        url: currentStreamUrl,
+        initialTime,
+        title: item?.Name,
+      });
+    }
+  }, [currentStreamUrl]);
+
+  // Sync widescreen bottom-alignment into active engine
+  useEffect(() => {
+    if (engineRef.current) {
+      engineRef.current.setVideoAlignment(currentLayout.verticalOffset, currentLayout.bottomAlign);
+    }
+  }, [currentLayout.bottomAlign, currentLayout.verticalOffset]);
 
   // Restore playback context if item was not loaded (e.g. page refresh)
   useEffect(() => {
@@ -174,13 +245,22 @@ export const PlayerPage: React.FC = () => {
           const ms = pbInfo.MediaSources?.[0];
           if (!ms) throw new Error('未找到可用媒体源');
 
-          const sUrl = buildDirectStreamUrl(
-            currentServer.url,
-            detail.Id,
-            ms,
-            pbInfo.PlaySessionId,
-            currentServer.accessToken
-          );
+          const sUrl =
+            engineType === 'mpv' && isTauriEnvironment()
+              ? buildNativeDirectStreamUrl(
+                  currentServer.url,
+                  detail.Id,
+                  ms,
+                  pbInfo.PlaySessionId,
+                  currentServer.accessToken
+                )
+              : buildDirectStreamUrl(
+                  currentServer.url,
+                  detail.Id,
+                  ms,
+                  pbInfo.PlaySessionId,
+                  currentServer.accessToken
+                );
           const { audioTracks: aTracks, subtitleTracks: sTracks } = mapStreamTracks(
             currentServer.url,
             detail.Id,
@@ -204,7 +284,7 @@ export const PlayerPage: React.FC = () => {
         }
       })();
     }
-  }, [item, currentServer, itemId]);
+  }, [item, currentServer, itemId, engineType]);
 
   // 1. Window punch-through styling lifecycle (关键避坑点 5 & 10)
   useEffect(() => {
@@ -338,7 +418,7 @@ export const PlayerPage: React.FC = () => {
 
     const interval = window.setInterval(() => {
       const liveSeconds =
-        videoElemRef.current?.currentTime ?? usePlayerStore.getState().currentTime;
+        engineRef.current?.currentTime ?? usePlayerStore.getState().currentTime;
       reportPlaybackProgress(
         currentServer.url,
         {
@@ -356,7 +436,7 @@ export const PlayerPage: React.FC = () => {
     return () => {
       clearInterval(interval);
       const stopSeconds =
-        videoElemRef.current?.currentTime ?? usePlayerStore.getState().currentTime;
+        engineRef.current?.currentTime ?? usePlayerStore.getState().currentTime;
       reportPlaybackStopped(
         currentServer.url,
         {
@@ -445,8 +525,8 @@ export const PlayerPage: React.FC = () => {
     setPaused(nextPaused);
     bridge.onMpvPauseChange(nextPaused);
 
-    if (videoElemRef.current) {
-      nextPaused ? videoElemRef.current.pause() : videoElemRef.current.play();
+    if (engineRef.current) {
+      nextPaused ? engineRef.current.pause() : engineRef.current.play();
     }
     triggerCenterIcon(nextPaused ? 'pause' : 'play');
     resetHideTimer();
@@ -471,8 +551,8 @@ export const PlayerPage: React.FC = () => {
     updateTime(targetSeconds);
     bridge.onMpvTimePos(targetSeconds);
 
-    if (videoElemRef.current) {
-      videoElemRef.current.currentTime = targetSeconds;
+    if (engineRef.current) {
+      engineRef.current.seek(targetSeconds);
     }
 
     if (currentServer && item && mediaSource && playSessionId) {
@@ -493,16 +573,30 @@ export const PlayerPage: React.FC = () => {
 
   const handleVolumeChange = (vol: number) => {
     setVolume(vol);
-    if (videoElemRef.current) {
-      videoElemRef.current.volume = vol / 100;
+    if (engineRef.current) {
+      engineRef.current.setVolume(vol);
     }
   };
 
   const handleRateChange = (rate: number) => {
     setPlaybackRate(rate);
     bridge.onMpvSpeedChange(rate);
-    if (videoElemRef.current) {
-      videoElemRef.current.playbackRate = rate;
+    if (engineRef.current) {
+      engineRef.current.setPlaybackRate(rate);
+    }
+  };
+
+  const handleSelectAudioTrack = (trackId: string | null) => {
+    selectAudioTrack(trackId);
+    if (trackId && engineRef.current) {
+      engineRef.current.selectAudioTrack(trackId);
+    }
+  };
+
+  const handleSelectSubtitleTrack = (trackId: string | null) => {
+    selectSubtitleTrack(trackId);
+    if (engineRef.current) {
+      engineRef.current.selectSubtitleTrack(trackId);
     }
   };
 
@@ -670,8 +764,7 @@ export const PlayerPage: React.FC = () => {
 
   // Two-tier Video error auto-recovery
   const handleVideoError = () => {
-    const vErr = videoElemRef.current?.error;
-    console.warn('[Video Error Event]', vErr, 'current level:', fallbackLevel);
+    console.warn('[Video Error Event] current level:', fallbackLevel);
 
     if (!currentServer || !item || !mediaSource || !playSessionId) {
       setIsLoadingVideo(false);
@@ -759,7 +852,7 @@ export const PlayerPage: React.FC = () => {
     : '';
 
   return (
-    <div className="relative w-screen h-screen overflow-hidden select-none bg-[#0f1115]">
+    <div className="relative w-screen h-screen overflow-hidden select-none bg-transparent">
       {/* 哔哩哔哩风格：屏幕中央播放/暂停动效徽标 */}
       {centerIcon && (
         <div className="absolute inset-0 pointer-events-none flex items-center justify-center z-30">
@@ -773,76 +866,13 @@ export const PlayerPage: React.FC = () => {
         </div>
       )}
 
-      {/* 底层：HTML5 Video 媒体流与全屏/播放点击响应层 */}
+      {/* 底层：原生视频表面穿透层与交互层 (libmpv 底层透明穿透 / HTML5 挂载容器) */}
       <div
-        className="absolute inset-0 z-0 cursor-pointer overflow-hidden"
+        ref={containerRef}
+        className="absolute inset-0 z-0 cursor-pointer overflow-hidden bg-transparent"
         onClick={handleVideoClick}
         onDoubleClick={handleVideoDoubleClick}
-      >
-        {currentStreamUrl && (
-          <video
-            ref={videoElemRef}
-            src={currentStreamUrl}
-            autoPlay
-            playsInline
-            style={{
-              objectPosition: currentLayout.bottomAlign
-                ? `center ${currentLayout.verticalOffset}%`
-                : 'center center',
-            }}
-            className="w-full h-full object-contain pointer-events-none transition-[object-position] duration-200"
-            onLoadedMetadata={(e) => {
-              const v = e.currentTarget;
-              if (v.videoWidth && v.videoHeight) {
-                setVideoDimensions({ width: v.videoWidth, height: v.videoHeight });
-              }
-              tryRestoreInitialProgress(v);
-            }}
-            onLoadStart={() => {
-              setIsLoadingVideo(true);
-              setVideoError(null);
-            }}
-            onCanPlay={(e) => {
-              setIsLoadingVideo(false);
-              setVideoError(null);
-              tryRestoreInitialProgress(e.currentTarget);
-            }}
-            onWaiting={() => {
-              setIsLoadingVideo(true);
-              bridge.onMpvPauseChange(true);
-            }}
-            onPlaying={() => {
-              setIsLoadingVideo(false);
-              setPaused(false);
-              bridge.onMpvPauseChange(false);
-            }}
-            onError={handleVideoError}
-            onTimeUpdate={(e) => {
-              const cur = (e.target as HTMLVideoElement).currentTime;
-              // 若存在待恢复的历史进度且首跳尚未完成，忽略开播瞬间由于原生 0 秒触发的更新
-              if (!hasInitialSeekedRef.current && initialTime > 0 && cur < 1) {
-                return;
-              }
-              updateTime(cur);
-              bridge.onMpvTimePos(cur);
-            }}
-            onDurationChange={(e) => {
-              const dur = (e.target as HTMLVideoElement).duration;
-              if (!isNaN(dur) && dur > 0) {
-                updateTime(currentTime, dur);
-              }
-            }}
-            onPlay={() => {
-              setPaused(false);
-              bridge.onMpvPauseChange(false);
-            }}
-            onPause={() => {
-              setPaused(true);
-              bridge.onMpvPauseChange(true);
-            }}
-          />
-        )}
-      </div>
+      />
 
       {/* Loading Overlay */}
       {isLoadingVideo && !videoError && (
@@ -945,8 +975,8 @@ export const PlayerPage: React.FC = () => {
         onRateChange={handleRateChange}
         onToggleDanmaku={() => updateDanmakuSettings({ visible: !danmakuSettings.visible })}
         onToggleDanmakuDrawer={() => setIsDanmakuDrawerOpen(!isDanmakuDrawerOpen)}
-        onSelectAudioTrack={selectAudioTrack}
-        onSelectSubtitleTrack={selectSubtitleTrack}
+        onSelectAudioTrack={handleSelectAudioTrack}
+        onSelectSubtitleTrack={handleSelectSubtitleTrack}
         onToggleWindowMode={handleToggleWindowMode}
         onToggleFullscreen={handleToggleFullscreen}
         onVideoClick={handleVideoClick}

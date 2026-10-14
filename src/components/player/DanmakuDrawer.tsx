@@ -102,6 +102,8 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
   const videoLayouts = usePlayerStore((s) => s.videoLayouts);
   const setVideoLayout = usePlayerStore((s) => s.setVideoLayout);
   const resetVideoLayout = usePlayerStore((s) => s.resetVideoLayout);
+  const engineType = usePlayerStore((s) => s.engineType);
+  const setEngineType = usePlayerStore((s) => s.setEngineType);
 
   const effectiveLayoutKey = layoutKey || (seriesId ? `series_${seriesId}` : `item_${itemId}`);
   const currentLayout = videoLayouts[effectiveLayoutKey] || { bottomAlign: false, verticalOffset: 100 };
@@ -947,6 +949,41 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
                     ))}
                   </div>
                 )}
+              </div>
+
+              {/* Playback Engine Selection */}
+              <div className="space-y-2 pt-2 border-t border-white/10">
+                <div className="flex justify-between items-center text-xs text-gray-300">
+                  <span>播放器内核 (切换即生效)</span>
+                  <span className="font-mono text-primary font-bold text-[11px]">
+                    {engineType === 'mpv' ? 'libmpv 原生硬解' : 'WebView 兼容'}
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => setEngineType('mpv')}
+                    className={`py-1.5 rounded-lg text-xs font-medium transition flex items-center justify-center space-x-1.5 ${
+                      engineType === 'mpv'
+                        ? 'bg-primary text-white shadow-md'
+                        : 'bg-white/5 hover:bg-white/10 text-gray-300'
+                    }`}
+                  >
+                    <span>libmpv 原生硬解</span>
+                  </button>
+                  <button
+                    onClick={() => setEngineType('html5')}
+                    className={`py-1.5 rounded-lg text-xs font-medium transition flex items-center justify-center space-x-1.5 ${
+                      engineType === 'html5'
+                        ? 'bg-primary text-white shadow-md'
+                        : 'bg-white/5 hover:bg-white/10 text-gray-300'
+                    }`}
+                  >
+                    <span>WebView 兼容</span>
+                  </button>
+                </div>
+                <p className="text-[10px] text-gray-400 leading-relaxed">
+                  原生硬解支持 MKV 原盘直接播放与 DTS/TrueHD 音轨本地直解，Emby 服务端 0% 转码与重封装。
+                </p>
               </div>
             </div>
           )}

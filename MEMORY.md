@@ -195,3 +195,28 @@ pnpm tauri build
   - 自动检测并清理历史遗留的不含平台标识的前代产物（如 `Nocta_0.1.0_x64-setup.exe`）；
   - Release 正文中置顶展示系统与芯片对应下载表格，并附带 macOS 首次打开拦截（Gatekeeper `com.apple.quarantine`）的终端与系统设置解决方案。
 
+---
+
+## 8. 原生播放器内核 (libmpv Native Player Engine) 与统一接口
+
+### 8.1 架构设计背景
+- **痛点**：Chromium / WebView2 缺失 MKV 容器支持及 DTS/TrueHD 等多声道商用音频授权，导致 Emby 服务端不得不强制进行 `DirectStream` 重封装或降级转码，NAS/服务器 CPU 占用高且无法享受高品质音画。
+- **方案**：采用 **Tauri 2.0 + `libmpv` (tauri-plugin-libmpv) + 双层穿透视窗 (Window Layering)**。
+
+### 8.2 统一播放器引擎接口 (`IPlayerEngine`)
+- 位于 [`src/player/types.ts`](file:///d:/wade/code/emby-tauri-player/src/player/types.ts)，抽象出播放、暂停、跳转、音量、倍速、音轨切换、字幕切换、宽银幕底对齐等统一接口。
+- **实现类**：
+  1. [`MpvPlayerEngine`](file:///d:/wade/code/emby-tauri-player/src/player/MpvPlayerEngine.ts)：基于 `tauri-plugin-libmpv-api` 驱动底层的 `libmpv-2.dll` 进行 Direct3D11/Vulkan 硬件硬解。
+  2. [`Html5PlayerEngine`](file:///d:/wade/code/emby-tauri-player/src/player/Html5PlayerEngine.ts)：封装标准 HTML5 `<video>` 元素，作为 Web 开发调试和兼容回退引擎。
+  3. [`PlayerEngineFactory`](file:///d:/wade/code/emby-tauri-player/src/player/PlayerEngineFactory.ts)：根据运行环境与用户偏好自动实例化引擎。
+
+### 8.3 Emby 服务端 0 转码直出 (`buildNativeDirectStreamUrl`)
+- 在 [`src/api/embyClient.ts`](file:///d:/wade/code/emby-tauri-player/src/api/embyClient.ts) 中增加 `buildNativeDirectStreamUrl`，强制以 `static=true` 直取原始文件流。
+- 完全废除针对 MKV 的 `VideoCodec=copy&AudioCodec=aac` 强制重封装，本地直接硬解 HEVC/AV1/VC-1 并直解/直通 DTS-HD MA、Dolby TrueHD、Atmos 与 EAC3。
+
+### 8.4 双层穿透渲染 (Window Layering) 与 Canvas 弹幕融合
+- `src-tauri/tauri.conf.json` 开启 `"transparent": true`。
+- 根容器 `App.tsx` 在非播放路由使用坚实的 `bg-background`（`#0f1115`），仅在 `/player` 路由变为 `bg-transparent`。
+- 底层 GPU 视频表面直接显露，顶层透明 WebView 承载 120Hz/144Hz Canvas 弹幕（[`DanmakuLayer.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/DanmakuLayer.tsx)）与现代 OSD 控制栏（[`PlayerOsd.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/PlayerOsd.tsx)），并接管所有点击与快捷键事件。
+- 宽银幕底对齐通过 mpv 的 `video-align-y` 属性（0.0 居中 ~ 1.0 完全贴底）原生调节，丝滑无卡顿。
+

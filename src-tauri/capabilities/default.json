@@ -21,6 +21,7 @@
         { "url": "https://**" }
       ]
     },
-    "store:default"
+    "store:default",
+    "libmpv:default"
   ]
 }

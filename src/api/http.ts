@@ -1,5 +1,19 @@
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 
+export type ProxyType = 'direct' | 'system' | 'http' | 'socks5';
+
+export interface ProxyConfig {
+  type: ProxyType;
+  server?: string;
+  port?: number;
+  username?: string;
+  password?: string;
+}
+
+export interface HttpRequestOptions extends RequestInit {
+  proxy?: ProxyConfig;
+}
+
 /**
  * 判断当前是否运行在 Tauri 运行时环境下
  */
@@ -14,7 +28,7 @@ export function isTauriEnvironment(): boolean {
  */
 export async function httpClient(
   input: string | URL | Request,
-  init?: RequestInit
+  init?: HttpRequestOptions
 ): Promise<Response> {
   if (isTauriEnvironment()) {
     try {

@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { DanmuConfig } from '../api/danmuClient';
+import { ProxyConfig, httpClient } from '../api/http';
 
 export interface SavedServer {
   id: string;
@@ -10,6 +11,14 @@ export interface SavedServer {
   accessToken: string;
   /** 明文记住的登录密码（仅保存在本机 localStorage，用于查看与自动重新登录） */
   password?: string;
+  /** 服务器代理配置（若未设置则跟随全局代理） */
+  proxyConfig?: ProxyConfig;
+  /** 最近一次连接测试是否通过；undefined 表示尚未验证过 */
+  lastTestOk?: boolean;
+  /** 最近一次连接测试的失败原因 */
+  lastTestError?: string;
+  /** 最近一次连接测试的时间戳（ms） */
+  lastTestAt?: number;
   lastActive: number;
 }
 
@@ -17,19 +26,29 @@ interface AuthState {
   servers: SavedServer[];
   currentServerId: string | null;
   danmuConfig: DanmuConfig;
+  globalProxyConfig: ProxyConfig;
 
   // Actions
-  addOrUpdateServer: (server: Omit<SavedServer, 'lastActive'>) => void;
+  addOrUpdateServer: (
+    server: Omit<SavedServer, 'lastActive'>,
+    options?: { makeCurrent?: boolean }
+  ) => void;
   updateServer: (id: string, updates: Partial<Omit<SavedServer, 'id' | 'lastActive'>>) => void;
   removeServer: (id: string) => void;
   setCurrentServer: (id: string) => void;
   updateDanmuConfig: (config: Partial<DanmuConfig>) => void;
+  updateGlobalProxyConfig: (config: ProxyConfig) => void;
   getCurrentServer: () => SavedServer | null;
+  testProxyConnection: (
+    proxy: ProxyConfig,
+    targetUrl: string
+  ) => Promise<{ ok: boolean; latency?: number; error?: string }>;
 }
 
 const STORAGE_KEY = 'emby_auth_store';
 const CURRENT_SERVER_KEY = 'emby_current_server_id';
 const DANMU_STORAGE_KEY = 'emby_danmu_config';
+const GLOBAL_PROXY_KEY = 'nocta_global_proxy';
 
 function loadInitialServers(): SavedServer[] {
   try {
@@ -68,17 +87,28 @@ function loadInitialDanmu(): DanmuConfig {
   }
 }
 
+function loadInitialGlobalProxy(): ProxyConfig {
+  try {
+    const raw = localStorage.getItem(GLOBAL_PROXY_KEY);
+    return raw ? JSON.parse(raw) : { type: 'system' };
+  } catch {
+    return { type: 'system' };
+  }
+}
+
 export const useAuthStore = create<AuthState>((set, get) => {
   const initialServers = loadInitialServers();
   const initialDanmu = loadInitialDanmu();
+  const initialGlobalProxy = loadInitialGlobalProxy();
   const defaultCurrentId = loadInitialCurrentServerId(initialServers);
 
   return {
     servers: initialServers,
     currentServerId: defaultCurrentId,
     danmuConfig: initialDanmu,
+    globalProxyConfig: initialGlobalProxy,
 
-    addOrUpdateServer: (serverData) => {
+    addOrUpdateServer: (serverData, options) => {
       set((state) => {
         const existingIdx = state.servers.findIndex((s) => s.id === serverData.id);
         const updatedServer: SavedServer = {
@@ -97,22 +127,30 @@ export const useAuthStore = create<AuthState>((set, get) => {
         // Sort by lastActive descending
         newServers.sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0));
 
+        // 未验证的服务器（例如离线时保存）不抢占当前选中项，避免首页加载出空媒体库
+        const nextCurrentId =
+          options?.makeCurrent === false
+            ? state.currentServerId || updatedServer.id
+            : updatedServer.id;
+
         try {
           localStorage.setItem(STORAGE_KEY, JSON.stringify(newServers));
-          localStorage.setItem(CURRENT_SERVER_KEY, updatedServer.id);
+          if (nextCurrentId) {
+            localStorage.setItem(CURRENT_SERVER_KEY, nextCurrentId);
+          }
         } catch (e) {
           console.error(e);
         }
 
         return {
           servers: newServers,
-          currentServerId: updatedServer.id,
+          currentServerId: nextCurrentId,
         };
       });
     },
 
     /**
-     * 就地更新已保存服务器的信息（名称 / 地址 / 账号 / 令牌等）。
+     * 就地更新已保存服务器的信息（名称 / 地址 / 账号 / 令牌 / 代理等）。
      * 不改变当前选中的服务器，也不刷新 lastActive 排序，仅用于"编辑服务器信息"场景。
      */
     updateServer: (id, updates) => {
@@ -192,10 +230,40 @@ export const useAuthStore = create<AuthState>((set, get) => {
       });
     },
 
+    updateGlobalProxyConfig: (config) => {
+      set({ globalProxyConfig: config });
+      try {
+        localStorage.setItem(GLOBAL_PROXY_KEY, JSON.stringify(config));
+      } catch (e) {
+        console.error(e);
+      }
+    },
+
     getCurrentServer: () => {
       const { servers, currentServerId } = get();
       if (!currentServerId) return servers[0] || null;
       return servers.find((s) => s.id === currentServerId) || null;
+    },
+
+    testProxyConnection: async (proxy, targetUrl) => {
+      const startTime = performance.now();
+      try {
+        const cleanUrl = targetUrl.replace(/\/+$/, '');
+        const testEndpoint = `${cleanUrl}/emby/System/Info/Public`;
+        const res = await httpClient(testEndpoint, {
+          method: 'GET',
+          headers: { Accept: 'application/json' },
+          proxy,
+        });
+        const latency = Math.round(performance.now() - startTime);
+        if (res.ok) {
+          return { ok: true, latency };
+        } else {
+          return { ok: false, latency, error: `HTTP ${res.status} ${res.statusText}` };
+        }
+      } catch (err: any) {
+        return { ok: false, error: err.message || '连接失败' };
+      }
     },
   };
 });

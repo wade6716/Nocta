@@ -10,6 +10,7 @@ import {
   Server,
   MessagesSquare,
   Pencil,
+  TriangleAlert,
 } from 'lucide-react';
 import { useAuthStore } from '../stores/useAuthStore';
 import { useMediaStore } from '../stores/useMediaStore';
@@ -292,6 +293,26 @@ export const HomePage: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* 当前服务器上次连接失败：明确提示，避免媒体库空白被误认为无内容 */}
+      {currentServer && currentServer.lastTestOk === false && (
+        <div className="mb-6 p-3.5 bg-amber-500/10 border border-amber-500/25 rounded-xl flex items-start justify-between space-x-3">
+          <div className="flex items-start space-x-2.5 text-xs text-amber-200/90 leading-relaxed">
+            <TriangleAlert className="w-4 h-4 flex-shrink-0 mt-0.5" />
+            <span>
+              当前服务器「{currentServer.name}」上次连接未成功
+              {currentServer.lastTestError ? `：${currentServer.lastTestError}` : ''}
+              ，媒体库可能无法正常加载，可检查地址、密码或网络后重试。
+            </span>
+          </div>
+          <button
+            onClick={() => setIsServerModalOpen(true)}
+            className="flex-shrink-0 px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-100 rounded-lg text-xs font-medium transition cursor-pointer"
+          >
+            检查服务器
+          </button>
+        </div>
+      )}
 
       {loading ? (
         <div className="flex flex-col items-center justify-center py-32 space-y-3">

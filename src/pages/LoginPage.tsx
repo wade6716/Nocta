@@ -11,6 +11,7 @@ import {
   Settings2,
   Eye,
   EyeOff,
+  TriangleAlert,
 } from 'lucide-react';
 import {
   testServerConnection,
@@ -55,6 +56,9 @@ export const LoginPage: React.FC = () => {
         username: auth.User.Name,
         accessToken: auth.AccessToken,
         password,
+        lastTestOk: true,
+        lastTestError: undefined,
+        lastTestAt: Date.now(),
       });
 
       navigate('/');
@@ -121,7 +125,17 @@ export const LoginPage: React.FC = () => {
                     onClick={() => handleQuickLogin(srv.id)}
                     className="flex-1 cursor-pointer flex flex-col min-w-0 pr-2"
                   >
-                    <span className="text-sm font-semibold text-white truncate">{srv.name}</span>
+                    <span className="flex items-center space-x-1.5 min-w-0">
+                      <span className="text-sm font-semibold text-white truncate">{srv.name}</span>
+                      {srv.lastTestOk === false && (
+                        <span
+                          className="flex-shrink-0 text-amber-400"
+                          title={srv.lastTestError ? `上次连接未成功：${srv.lastTestError}` : '上次连接未成功'}
+                        >
+                          <TriangleAlert className="w-3.5 h-3.5" />
+                        </span>
+                      )}
+                    </span>
                     <span className="text-xs text-gray-400 truncate">
                       {srv.username} @ {srv.url}
                     </span>

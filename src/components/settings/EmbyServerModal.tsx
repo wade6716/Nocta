@@ -13,13 +13,17 @@ import {
   ArrowRight,
   Eye,
   EyeOff,
+  Activity,
+  TriangleAlert,
 } from 'lucide-react';
 import { useAuthStore, SavedServer } from '../../stores/useAuthStore';
 import { useMediaStore } from '../../stores/useMediaStore';
+import { ProxyConfig, ProxyType } from '../../api/http';
 import {
   testServerConnection,
   authenticateByName,
   normalizeServerUrl,
+  EmbyAuthResponse,
 } from '../../api/embyClient';
 
 interface EmbyServerModalProps {
@@ -27,6 +31,100 @@ interface EmbyServerModalProps {
   onClose: () => void;
   /** 打开弹窗时直接进入编辑态的服务器 ID（例如从登录页点击某台服务器的编辑按钮） */
   initialEditId?: string | null;
+}
+
+type Tone = 'ok' | 'warn' | 'error' | 'idle';
+
+const TONE_STYLES: Record<Tone, string> = {
+  ok: 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400',
+  warn: 'bg-amber-500/10 border-amber-500/25 text-amber-300',
+  error: 'bg-red-500/10 border-red-500/20 text-red-400',
+  idle: 'bg-white/5 border-white/10 text-gray-400',
+};
+
+interface ConnectionTestResult {
+  reachable: boolean;
+  latency?: number;
+  serverName?: string;
+  error?: string;
+  authChecked: boolean;
+  authOk: boolean;
+  authError?: string;
+  auth?: EmbyAuthResponse;
+}
+
+/**
+ * 探测服务器：先做连通性检测，凭据可用时顺带验证登录。
+ * 任何一步失败都只作为结果返回，绝不抛出，以保证"连接失败也能保存"。
+ */
+async function probeServer(params: {
+  url: string;
+  username: string;
+  password: string;
+  attemptAuth: boolean;
+  proxy?: ProxyConfig;
+}): Promise<ConnectionTestResult> {
+  const cleanUrl = normalizeServerUrl(params.url);
+  const user = params.username.trim();
+  const startTime = performance.now();
+
+  let info;
+  try {
+    info = await testServerConnection(cleanUrl, { proxy: params.proxy });
+  } catch (err: any) {
+    return {
+      reachable: false,
+      authChecked: false,
+      authOk: false,
+      error: err?.message || '无法连接到服务器（请确认服务已启动或地址可达）',
+    };
+  }
+
+  const latency = Math.round(performance.now() - startTime);
+  if (!params.attemptAuth || !user) {
+    return { reachable: true, latency, serverName: info.ServerName, authChecked: false, authOk: false };
+  }
+
+  try {
+    const auth = await authenticateByName(cleanUrl, user, params.password, { proxy: params.proxy });
+    return {
+      reachable: true,
+      latency,
+      serverName: info.ServerName,
+      authChecked: true,
+      authOk: true,
+      auth,
+    };
+  } catch (err: any) {
+    return {
+      reachable: true,
+      latency,
+      serverName: info.ServerName,
+      authChecked: true,
+      authOk: false,
+      authError: err?.message || '登录验证失败',
+    };
+  }
+}
+
+function describeResult(result: ConnectionTestResult): { tone: Tone; text: string } {
+  if (!result.reachable) {
+    return { tone: 'error', text: `无法连接：${result.error || '网络不可达'}` };
+  }
+
+  const base = `服务器可达${result.serverName ? ` · ${result.serverName}` : ''}${
+    result.latency !== undefined ? ` · ${result.latency} ms` : ''
+  }`;
+
+  if (result.authChecked && !result.authOk) {
+    return { tone: 'warn', text: `${base}，但登录校验未通过：${result.authError}` };
+  }
+  return { tone: 'ok', text: `${base}${result.authChecked ? '，登录校验通过' : '（未校验登录）'}` };
+}
+
+/** 连通且登录校验未失败，即视为连接正常 */
+function isResultOk(result: ConnectionTestResult): boolean {
+  return result.reachable && (!result.authChecked || result.authOk);
 }
 
 export const EmbyServerModal: React.FC<EmbyServerModalProps> = ({
@@ -48,9 +146,21 @@ export const EmbyServerModal: React.FC<EmbyServerModalProps> = ({
   const [password, setPassword] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ tone: Tone; text: string } | null>(null);
   const [showPassword, setShowPassword] = useState(false);
   // 列表中明文展开查看密码的服务器 ID（同时只展开一个）
   const [revealedId, setRevealedId] = useState<string | null>(null);
+  // 列表中正在测速的服务器 ID
+  const [testingId, setTestingId] = useState<string | null>(null);
+  // 保存后的提示（例如离线保存成功）
+  const [notice, setNotice] = useState<{ tone: Tone; text: string } | null>(null);
+
+  const resetFormFeedback = () => {
+    setFormError(null);
+    setTestResult(null);
+    setNotice(null);
+  };
 
   const handleOpenAdd = () => {
     setName('');
@@ -58,7 +168,7 @@ export const EmbyServerModal: React.FC<EmbyServerModalProps> = ({
     setUsername('');
     setPassword('');
     setShowPassword(false);
-    setFormError(null);
+    resetFormFeedback();
     setEditingId(null);
     setIsEditing(true);
   };
@@ -69,7 +179,7 @@ export const EmbyServerModal: React.FC<EmbyServerModalProps> = ({
     setUsername(server.username);
     setPassword(server.password ?? '');
     setShowPassword(false);
-    setFormError(null);
+    resetFormFeedback();
     setEditingId(server.id);
     setIsEditing(true);
   };
@@ -85,6 +195,8 @@ export const EmbyServerModal: React.FC<EmbyServerModalProps> = ({
       setIsEditing(false);
       setEditingId(null);
       setFormError(null);
+      setTestResult(null);
+      setNotice(null);
       setShowPassword(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -95,6 +207,29 @@ export const EmbyServerModal: React.FC<EmbyServerModalProps> = ({
     !!editingId && servers.find((s) => s.id === editingId)?.password === undefined;
 
   if (!isOpen) return null;
+
+  /** 表单内的"测试连接"：只探测不落库，结果实时反馈 */
+  const handleTestConnection = async () => {
+    const rawUrl = url.trim();
+    if (!rawUrl) {
+      setTestResult({ tone: 'error', text: '请先填写服务器地址' });
+      return;
+    }
+
+    try {
+      setTesting(true);
+      setTestResult(null);
+      const result = await probeServer({
+        url: rawUrl,
+        username,
+        password,
+        attemptAuth: !!username.trim(),
+      });
+      setTestResult(describeResult(result));
+    } finally {
+      setTesting(false);
+    }
+  };
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -115,6 +250,7 @@ export const EmbyServerModal: React.FC<EmbyServerModalProps> = ({
 
     const cleanUrl = normalizeServerUrl(rawUrl);
     const original = editingId ? servers.find((s) => s.id === editingId) || null : null;
+    const urlChanged = !original || normalizeServerUrl(original.url) !== cleanUrl;
 
     // 只有地址、账号或密码发生变化时才需要重新登录换取新的 AccessToken。
     // 密码框已预填本地记忆值，因此"只改名称"不会误触发重连；
@@ -122,16 +258,13 @@ export const EmbyServerModal: React.FC<EmbyServerModalProps> = ({
     const passwordChanged =
       original?.password === undefined ? password.length > 0 : password !== original.password;
 
-    const needReauth =
-      !original ||
-      passwordChanged ||
-      cleanUser !== original.username ||
-      normalizeServerUrl(original.url) !== cleanUrl;
+    const needReauth = !original || passwordChanged || cleanUser !== original.username || urlChanged;
 
     try {
       setSaving(true);
+      setNotice(null);
 
-      // 仅修改显示名称：无需重新认证，直接落库
+      // 仅修改显示名称：无需任何网络请求，直接落库
       if (original && !needReauth) {
         updateServer(original.id, { name: cleanName || original.name });
         setIsEditing(false);
@@ -139,40 +272,122 @@ export const EmbyServerModal: React.FC<EmbyServerModalProps> = ({
         return;
       }
 
-      const serverInfo = await testServerConnection(cleanUrl);
-      const auth = await authenticateByName(cleanUrl, cleanUser, password);
+      const result = await probeServer({
+        url: cleanUrl,
+        username: cleanUser,
+        password,
+        attemptAuth: true,
+      });
+      const ok = isResultOk(result);
+      const testMeta = {
+        lastTestOk: ok,
+        lastTestError: ok
+          ? undefined
+          : result.error || result.authError || '连接失败',
+        lastTestAt: Date.now(),
+      };
+      const displayName = cleanName || result.serverName || original?.name || 'Emby Server';
 
+      // 情况一：完全验证通过 —— 更新访问令牌
+      if (ok && result.auth) {
+        const auth = result.auth;
+        if (original) {
+          updateServer(original.id, {
+            name: displayName,
+            url: cleanUrl,
+            password,
+            userId: auth.User.Id,
+            username: auth.User.Name,
+            accessToken: auth.AccessToken,
+            ...testMeta,
+          });
+          // 正在使用的服务器换址/换号后，旧媒体库缓存必须作废
+          if (currentServerId === original.id) {
+            clearMediaCache();
+          }
+        } else {
+          addOrUpdateServer({
+            id: auth.ServerId || result.serverName || cleanUrl,
+            name: displayName,
+            url: cleanUrl,
+            password,
+            userId: auth.User.Id,
+            username: auth.User.Name,
+            accessToken: auth.AccessToken,
+            ...testMeta,
+          });
+        }
+
+        setIsEditing(false);
+        setEditingId(null);
+        setNotice({ tone: 'ok', text: `已保存「${displayName}」并验证连接成功。` });
+        return;
+      }
+
+      // 情况二：连接或登录失败 —— 依然保存用户填写的信息，仅标记为未验证
+      const reason = result.error || result.authError || '连接失败';
       if (original) {
         updateServer(original.id, {
-          name: cleanName || serverInfo.ServerName || original.name,
+          name: displayName,
           url: cleanUrl,
+          username: cleanUser,
           password,
-          userId: auth.User.Id,
-          username: auth.User.Name,
-          accessToken: auth.AccessToken,
+          ...testMeta,
+          // 地址变更后旧令牌已不可信，清空以便重新登录
+          ...(urlChanged ? { userId: '', accessToken: '' } : {}),
         });
-        // 正在使用的服务器换址/换号后，旧媒体库缓存必须作废
-        if (currentServerId === original.id) {
+        if (urlChanged && currentServerId === original.id) {
           clearMediaCache();
         }
       } else {
-        addOrUpdateServer({
-          id: auth.ServerId || serverInfo.Id || cleanUrl,
-          name: cleanName || serverInfo.ServerName || 'Emby Server',
-          url: cleanUrl,
-          password,
-          userId: auth.User.Id,
-          username: auth.User.Name,
-          accessToken: auth.AccessToken,
-        });
+        // 离线新增的服务器不抢占当前选中项，避免首页加载出空媒体库
+        addOrUpdateServer(
+          {
+            id: cleanUrl,
+            name: displayName,
+            url: cleanUrl,
+            username: cleanUser,
+            password,
+            userId: '',
+            accessToken: '',
+            ...testMeta,
+          },
+          { makeCurrent: false }
+        );
       }
 
       setIsEditing(false);
       setEditingId(null);
+      setNotice({
+        tone: 'warn',
+        text: `已保存「${displayName}」，但当前未能连接：${reason}。配置已记录，服务器恢复后可在列表中点击测试按钮重试。`,
+      });
     } catch (err: any) {
-      setFormError(err?.message || '连接失败，请检查服务器地址、账号或网络');
+      setFormError(err?.message || '保存失败，请重试');
     } finally {
       setSaving(false);
+    }
+  };
+
+  /** 列表内的"测试连接"：结果写回该服务器记录 */
+  const handleRowTest = async (server: SavedServer) => {
+    try {
+      setTestingId(server.id);
+      const result = await probeServer({
+        url: server.url,
+        username: server.username,
+        password: server.password ?? '',
+        // 未记住密码时只做连通性探测，避免用空密码误判为登录失败
+        attemptAuth: server.password !== undefined,
+      });
+      const ok = isResultOk(result);
+      updateServer(server.id, {
+        lastTestOk: ok,
+        lastTestError: ok ? undefined : result.error || result.authError || '连接失败',
+        lastTestAt: Date.now(),
+      });
+    } finally {
+      setTestingId(null);
     }
   };
 
@@ -188,6 +403,12 @@ export const EmbyServerModal: React.FC<EmbyServerModalProps> = ({
       setIsEditing(false);
       setEditingId(null);
     }
+  };
+
+  const statusOf = (server: SavedServer): { tone: Tone; label: string } => {
+    if (server.lastTestOk === true) return { tone: 'ok', label: '连接正常' };
+    if (server.lastTestOk === false) return { tone: 'warn', label: '连接失败' };
+    return { tone: 'idle', label: '未验证' };
   };
 
   return (
@@ -212,11 +433,25 @@ export const EmbyServerModal: React.FC<EmbyServerModalProps> = ({
           <div className="bg-primary/10 border border-primary/20 rounded-xl p-3.5 flex items-start space-x-3 text-xs text-gray-300">
             <ShieldAlert className="w-4 h-4 text-primary flex-shrink-0 mt-0.5" />
             <span>
-              可随时修改已保存服务器的名称、地址与登录账号。修改地址、账号或密码后会自动重新验证登录并更新访问令牌，
-              仅调整名称则不会触发重连。为便于随时查看，登录密码会以明文形式与访问令牌一起保存在本机
-              localStorage，请勿在共享设备上使用。
+              可随时修改已保存服务器的名称、地址与登录账号，连接不上也能先保存配置。为便于随时查看，
+              登录密码会以明文形式与访问令牌一起保存在本机 localStorage，请勿在共享设备上使用。
             </span>
           </div>
+
+          {notice && !isEditing && (
+            <div
+              className={`border rounded-xl p-3.5 flex items-start justify-between space-x-3 text-xs leading-relaxed ${TONE_STYLES[notice.tone]}`}
+            >
+              <span>{notice.text}</span>
+              <button
+                onClick={() => setNotice(null)}
+                className="flex-shrink-0 opacity-70 hover:opacity-100 transition"
+                title="关闭提示"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
 
           {!isEditing ? (
             <div className="space-y-3">
@@ -241,6 +476,9 @@ export const EmbyServerModal: React.FC<EmbyServerModalProps> = ({
                 <div className="space-y-2">
                   {servers.map((s) => {
                     const isActive = s.id === currentServerId;
+                    const status = statusOf(s);
+                    const isTesting = testingId === s.id;
+
                     return (
                       <div
                         key={s.id}
@@ -262,18 +500,38 @@ export const EmbyServerModal: React.FC<EmbyServerModalProps> = ({
                                   <span>当前使用</span>
                                 </span>
                               )}
+                              <span
+                                className={`px-2 py-0.5 rounded-full border text-[10px] font-medium flex-shrink-0 ${
+                                  TONE_STYLES[isTesting ? 'idle' : status.tone]
+                                }`}
+                                title={s.lastTestError || undefined}
+                              >
+                                {isTesting ? '正在测试' : status.label}
+                              </span>
                             </div>
                             <div className="text-xs text-gray-400 truncate mt-0.5">
-                              {s.username} @ {s.url}
+                              {s.username || '（未填写用户名）'} @ {s.url}
                             </div>
                             {revealedId === s.id && (
                               <div className="text-xs text-amber-300/90 font-mono truncate mt-1">
-                                密码：{s.password ? s.password : '（该账号为空密码）'}
+                                密码：{s.password ? s.password : '（该账号为空密码或未记住）'}
                               </div>
                             )}
                           </div>
 
                           <div className="flex items-center space-x-1 flex-shrink-0">
+                            <button
+                              onClick={() => handleRowTest(s)}
+                              disabled={isTesting}
+                              title="测试连接"
+                              className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-gray-300 hover:text-white transition disabled:opacity-50"
+                            >
+                              {isTesting ? (
+                                <LoaderCircle className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <Activity className="w-3.5 h-3.5" />
+                              )}
+                            </button>
                             {!isActive && (
                               <button
                                 onClick={() => handleSwitch(s.id)}
@@ -285,12 +543,8 @@ export const EmbyServerModal: React.FC<EmbyServerModalProps> = ({
                             )}
                             {s.password !== undefined && (
                               <button
-                                onClick={() =>
-                                  setRevealedId((cur) => (cur === s.id ? null : s.id))
-                                }
-                                title={
-                                  revealedId === s.id ? '隐藏记住的密码' : '查看记住的密码'
-                                }
+                                onClick={() => setRevealedId((cur) => (cur === s.id ? null : s.id))}
+                                title={revealedId === s.id ? '隐藏记住的密码' : '查看记住的密码'}
                                 className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-gray-300 hover:text-white transition"
                               >
                                 {revealedId === s.id ? (
@@ -417,26 +671,59 @@ export const EmbyServerModal: React.FC<EmbyServerModalProps> = ({
                 )}
               </div>
 
-              <div className="flex justify-end space-x-2 pt-3">
+              {testResult && (
+                <div
+                  className={`p-3 border rounded-lg text-xs leading-relaxed flex items-start space-x-2 ${TONE_STYLES[testResult.tone]}`}
+                >
+                  {testResult.tone === 'ok' ? (
+                    <Check className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                  ) : (
+                    <TriangleAlert className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                  )}
+                  <span>{testResult.text}</span>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between pt-3">
                 <button
                   type="button"
-                  onClick={() => {
-                    setIsEditing(false);
-                    setEditingId(null);
-                  }}
-                  className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg text-xs font-medium transition"
+                  onClick={handleTestConnection}
+                  disabled={testing || saving}
+                  className="px-4 py-2 bg-white/5 hover:bg-white/10 text-gray-200 rounded-lg text-xs font-medium transition disabled:opacity-50 flex items-center space-x-1.5"
                 >
-                  取消
+                  {testing ? (
+                    <LoaderCircle className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Activity className="w-3.5 h-3.5" />
+                  )}
+                  <span>{testing ? '正在测试...' : '测试连接'}</span>
                 </button>
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="px-5 py-2 bg-primary hover:bg-primary-hover text-white rounded-lg text-xs font-medium transition disabled:opacity-50 flex items-center space-x-1.5"
-                >
-                  {saving && <LoaderCircle className="w-3.5 h-3.5 animate-spin" />}
-                  <span>{saving ? '正在验证连接...' : '保存并验证'}</span>
-                </button>
+
+                <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsEditing(false);
+                      setEditingId(null);
+                    }}
+                    className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg text-xs font-medium transition"
+                  >
+                    取消
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={saving || testing}
+                    className="px-5 py-2 bg-primary hover:bg-primary-hover text-white rounded-lg text-xs font-medium transition disabled:opacity-50 flex items-center space-x-1.5"
+                  >
+                    {saving && <LoaderCircle className="w-3.5 h-3.5 animate-spin" />}
+                    <span>{saving ? '正在保存...' : '保存服务器'}</span>
+                  </button>
+                </div>
               </div>
+
+              <p className="text-[11px] text-gray-500 text-right">
+                连接失败也会保存配置，仅标记为「连接失败」，可稍后重试。
+              </p>
             </form>
           )}
         </div>

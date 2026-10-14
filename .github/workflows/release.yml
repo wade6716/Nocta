@@ -6,6 +6,11 @@ on:
       - 'v*'
   workflow_dispatch:
     inputs:
+      tag_name:
+        description: '发布版本号 (如 v0.1.0 或 v0.1.0-alpha.1)'
+        required: false
+        type: string
+        default: 'v0.1.0'
       release_draft:
         description: '发布为草稿 (Draft Release)'
         required: false
@@ -33,16 +38,19 @@ jobs:
           # 1. Windows x64
           - platform: windows-latest
             args: ''
+            rust_targets: ''
             name_suffix: 'Windows x64'
 
           # 2. macOS Universal (支持 Apple Silicon M1-M4 & Intel Mac)
           - platform: macos-latest
             args: '--target universal-apple-darwin'
+            rust_targets: 'aarch64-apple-darwin,x86_64-apple-darwin'
             name_suffix: 'macOS Universal'
 
           # 3. Linux x64 (deb & AppImage)
           - platform: ubuntu-22.04
             args: ''
+            rust_targets: ''
             name_suffix: 'Linux x64'
 
     runs-on: ${{ matrix.platform }}
@@ -62,7 +70,7 @@ jobs:
       - name: Setup Rust Stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.rust_targets }}
 
       - name: Install Linux Dependencies (Ubuntu)
         if: matrix.platform == 'ubuntu-22.04'
@@ -88,10 +96,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
-          releaseName: 'Nocta · 夜幕 ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}'
+          tagName: "${{ github.ref_type == 'tag' && github.ref_name || inputs.tag_name || github.ref_name }}"
+          releaseName: "Nocta · 夜幕 ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag_name || github.ref_name }}"
           releaseBody: |
-            ## Nocta · 夜幕 ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }} 发布
+            ## Nocta · 夜幕 ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag_name || github.ref_name }} 发布
 
             ### 📦 资产下载与系统支持：
             - **Windows**: 下载 `.exe` (一键安装版) 或 `.msi`
@@ -99,6 +107,6 @@ jobs:
             - **Linux**: 下载 `.deb` (Debian/Ubuntu 系列) 或 `.AppImage` (免安装便携版)
 
             > 详细更新日志见提交历史。
-          releaseDraft: ${{ github.event.inputs.release_draft == 'true' }}
-          prerelease: ${{ github.event.inputs.prerelease == 'true' || contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') || contains(github.ref_name, 'test') }}
+          releaseDraft: "${{ inputs.release_draft || false }}"
+          prerelease: "${{ inputs.prerelease || contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}"
           args: ${{ matrix.args }}

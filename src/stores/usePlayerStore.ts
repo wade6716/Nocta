@@ -45,6 +45,7 @@ interface PlayerState {
 
   // 播放状态
   currentTime: number;
+  initialTime: number;
   duration: number;
   paused: boolean;
   buffering: boolean;
@@ -166,6 +167,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   streamUrl: null,
 
   currentTime: 0,
+  initialTime: 0,
   duration: 0,
   paused: true,
   buffering: false,
@@ -197,6 +199,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       selectedAudioId: defaultAudio,
       selectedSubtitleId: defaultSub,
       currentTime: payload.initialTime || 0,
+      initialTime: payload.initialTime || 0,
       paused: false,
       buffering: false,
     });
@@ -306,6 +309,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       playSessionId: null,
       streamUrl: null,
       currentTime: 0,
+      initialTime: 0,
       duration: 0,
       paused: true,
       buffering: false,

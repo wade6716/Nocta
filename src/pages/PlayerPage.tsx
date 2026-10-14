@@ -52,6 +52,7 @@ export const PlayerPage: React.FC = () => {
     playSessionId,
     streamUrl,
     currentTime,
+    initialTime,
     duration,
     paused,
     volume,
@@ -85,6 +86,9 @@ export const PlayerPage: React.FC = () => {
   const [isLoadingVideo, setIsLoadingVideo] = useState(true);
   const [videoError, setVideoError] = useState<string | null>(null);
   const [videoDimensions, setVideoDimensions] = useState<{ width: number; height: number } | null>(null);
+
+  // Initial resume seek flag
+  const hasInitialSeekedRef = useRef(false);
 
   // Per-series or per-item video layout configuration
   const layoutKey = item?.SeriesId ? `series_${item.SeriesId}` : item ? `item_${item.Id}` : '';
@@ -121,8 +125,33 @@ export const PlayerPage: React.FC = () => {
       setIsLoadingVideo(true);
       setVideoError(null);
       setFallbackLevel(0);
+      hasInitialSeekedRef.current = false;
     }
   }, [streamUrl]);
+
+  // Try restore historical progress to video element
+  const tryRestoreInitialProgress = useCallback(
+    (v: HTMLVideoElement) => {
+      if (hasInitialSeekedRef.current || !initialTime || initialTime <= 0) return;
+
+      const dur = v.duration || ticksToSeconds(item?.RunTimeTicks || 0);
+      // 若历史时间已处于片尾（如剩余不足 15 秒或超过 98%），视为完播，从头重新播放
+      if (dur > 0 && (initialTime >= dur - 15 || initialTime / dur >= 0.98)) {
+        hasInitialSeekedRef.current = true;
+        return;
+      }
+
+      try {
+        hasInitialSeekedRef.current = true;
+        v.currentTime = initialTime;
+        updateTime(initialTime);
+        bridge.onMpvTimePos(initialTime);
+      } catch (err) {
+        console.warn('[Playback Resume Failed]', err);
+      }
+    },
+    [initialTime, item?.RunTimeTicks, updateTime, bridge]
+  );
 
   // Restore playback context if item was not loaded (e.g. page refresh)
   useEffect(() => {
@@ -295,26 +324,29 @@ export const PlayerPage: React.FC = () => {
   useEffect(() => {
     if (!currentServer || !item || !mediaSource || !playSessionId) return;
 
+    const startSec = initialTime > 0 ? initialTime : usePlayerStore.getState().currentTime;
     reportPlaybackStart(
       currentServer.url,
       {
         itemId: item.Id,
         mediaSourceId: mediaSource.Id,
         playSessionId,
-        seconds: currentTime,
+        seconds: startSec,
       },
       currentServer.accessToken
     ).catch(console.error);
 
     const interval = window.setInterval(() => {
+      const liveSeconds =
+        videoElemRef.current?.currentTime ?? usePlayerStore.getState().currentTime;
       reportPlaybackProgress(
         currentServer.url,
         {
           itemId: item.Id,
           mediaSourceId: mediaSource.Id,
           playSessionId,
-          seconds: currentTime,
-          isPaused: paused,
+          seconds: liveSeconds,
+          isPaused: usePlayerStore.getState().paused,
           eventName: 'TimeUpdate',
         },
         currentServer.accessToken
@@ -323,18 +355,20 @@ export const PlayerPage: React.FC = () => {
 
     return () => {
       clearInterval(interval);
+      const stopSeconds =
+        videoElemRef.current?.currentTime ?? usePlayerStore.getState().currentTime;
       reportPlaybackStopped(
         currentServer.url,
         {
           itemId: item.Id,
           mediaSourceId: mediaSource.Id,
           playSessionId,
-          seconds: currentTime,
+          seconds: stopSeconds,
         },
         currentServer.accessToken
       ).catch(console.error);
     };
-  }, [currentServer?.id, item?.Id, playSessionId]);
+  }, [currentServer?.id, item?.Id, playSessionId, initialTime]);
 
   // 5. Mouse inactivity auto-hide OSD (在加载或报错时不隐藏)
   const resetHideTimer = useCallback(() => {
@@ -762,14 +796,16 @@ export const PlayerPage: React.FC = () => {
               if (v.videoWidth && v.videoHeight) {
                 setVideoDimensions({ width: v.videoWidth, height: v.videoHeight });
               }
+              tryRestoreInitialProgress(v);
             }}
             onLoadStart={() => {
               setIsLoadingVideo(true);
               setVideoError(null);
             }}
-            onCanPlay={() => {
+            onCanPlay={(e) => {
               setIsLoadingVideo(false);
               setVideoError(null);
+              tryRestoreInitialProgress(e.currentTarget);
             }}
             onWaiting={() => {
               setIsLoadingVideo(true);
@@ -783,6 +819,10 @@ export const PlayerPage: React.FC = () => {
             onError={handleVideoError}
             onTimeUpdate={(e) => {
               const cur = (e.target as HTMLVideoElement).currentTime;
+              // 若存在待恢复的历史进度且首跳尚未完成，忽略开播瞬间由于原生 0 秒触发的更新
+              if (!hasInitialSeekedRef.current && initialTime > 0 && cur < 1) {
+                return;
+              }
               updateTime(cur);
               bridge.onMpvTimePos(cur);
             }}

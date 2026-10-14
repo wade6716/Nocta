@@ -58,6 +58,15 @@
 3. **封面海报完整性保障**：
    - 单集视频可能未单独上传海报，解析图片时需优先读取自身海报，若缺失则级联回退到电视剧集封面：`SeriesPrimary` -> `ParentBackdropImageTags` -> `Primary`，确保所有“继续观看”卡片均具有完整封面海报。
 
+### 2.3 播放进度恢复与记忆保障机制（关键排坑）
+1. **HTML5 `<video>` 起播首跳**：
+   - 浏览器原生 `<video>` 挂载时默认从 0:00 秒开始播放，必须在 `onLoadedMetadata` / `onCanPlay` 触发时显式将 `video.currentTime` 赋值为 `initialTime`；
+   - 增加 `hasInitialSeekedRef` 标记，首跳执行前拦截前几十毫秒原生 `0` 秒触发的 `onTimeUpdate` 事件，防止瞬杀冲刷全局 Store 中的真实历史进度。
+2. **完播防回滚保护**：
+   - 若 `initialTime` 距片尾不足 15 秒或已达总时长 98%，视为已完播，自动忽略历史进度从 0:00 重新播放。
+3. **闭包过时（Stale Closure）防护**：
+   - `useEffect` 销毁时的 `reportPlaybackStopped` 与心跳定时器绝不能直接捕获组件作用域的旧 `currentTime`，必须通过 `videoElemRef.current?.currentTime ?? usePlayerStore.getState().currentTime` 实时读取真实现场秒数，杜绝将 0 秒反向回写覆盖 Emby 服务端。
+
 ---
 
 ## 3. 弹幕系统规范（Danmaku）与 `danmu_api` 对接

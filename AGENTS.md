@@ -1,6 +1,6 @@
 # Nocta (夜幕) · Agent Rules & Project Guide
 
-欢迎协助开发 **Nocta · 夜幕**（原 Emby 客户端升级而来的暗色沉浸式私人影院播放器，支持全网弹幕匹配与彩色渲染）。
+欢迎协助开发 **Nocta · 夜幕**（基于 Tauri 2.0 构建的暗色沉浸式私人影院客户端，深度集成 Emby/Jellyfin 媒体库，支持全网弹幕自动匹配、手动搜索绑定与彩色 Canvas 高性能渲染）。
 
 在开始任何新任务前，请务必先查阅项目完整上下文记忆文档：
 👉 [MEMORY.md](file:///d:/wade/code/emby-tauri-player/MEMORY.md)

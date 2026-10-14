@@ -220,3 +220,11 @@ pnpm tauri build
 - 底层 GPU 视频表面直接显露，顶层透明 WebView 承载 120Hz/144Hz Canvas 弹幕（[`DanmakuLayer.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/DanmakuLayer.tsx)）与现代 OSD 控制栏（[`PlayerOsd.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/PlayerOsd.tsx)），并接管所有点击与快捷键事件。
 - 宽银幕底对齐通过 mpv 的 `video-align-y` 属性（0.0 居中 ~ 1.0 完全贴底）原生调节，丝滑无卡顿。
 
+### 8.5 视窗穿透与原生视频画面遮挡避坑指南 (Critical Pitfalls)
+1. **全局 CSS `#root` 背景色遮挡**：
+   - Tauri 窗口即使开启了 `"transparent": true`，若 `src/index.css` 的 `html, body, #root` 存在不透明背景色（如 `background-color: #0f1115;`），WebView2 将会把该深色完整渲染出来，从而 100% 遮盖底层 Win32 硬件表面，表现为「只有弹幕在黑色背景上飞过，画面完全不可见」；
+   - **规范**：`src/index.css` 的 `html, body, #root` 必须保持 `background-color: transparent;`，深色背景由 [`App.tsx`](file:///d:/wade/code/emby-tauri-player/src/App.tsx) 根据路由按需动态赋予。
+2. **缓冲状态监听不可使用 `core-idle`**：
+   - `core-idle` 在解复用、起播初始缓冲及跳进度时均为 `true`，极易导致播放器卡在 `buffering` 状态；
+   - **规范**：必须监听 `paused-for-cache` 判断网络缓存下溢，且在 `time-pos` 推进时主动重置 `_isBuffering = false` 并解除上层 Loading 遮罩。
+

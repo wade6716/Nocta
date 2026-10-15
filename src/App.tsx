@@ -6,6 +6,7 @@ import { LoginPage } from './pages/LoginPage';
 import { DetailPage } from './pages/DetailPage';
 import { PlayerPage } from './pages/PlayerPage';
 import { SearchPage } from './pages/SearchPage';
+import { SettingsPage } from './pages/SettingsPage';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 
 export const App: React.FC = () => {
@@ -33,6 +34,7 @@ export const App: React.FC = () => {
             <Route path="/" element={<HomePage />} />
             <Route path="/login" element={<LoginPage />} />
             <Route path="/search" element={<SearchPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
             <Route path="/detail/:itemId" element={<DetailPage />} />
             <Route path="/player/:itemId" element={<PlayerPage />} />
           </Routes>

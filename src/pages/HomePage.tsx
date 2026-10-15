@@ -11,6 +11,7 @@ import {
   MessagesSquare,
   Globe,
   Search,
+  Settings,
   Pencil,
   TriangleAlert,
 } from 'lucide-react';
@@ -327,7 +328,7 @@ export const HomePage: React.FC = () => {
           <h1 className="text-2xl font-bold tracking-tight text-white flex items-center space-x-2.5">
             <span>媒体库</span>
             <ServerSwitcherDropdown
-              onOpenManageModal={() => setIsServerModalOpen(true)}
+              onOpenManageModal={() => navigate('/settings')}
               onOpenAddModal={() => setIsServerModalOpen(true)}
             />
           </h1>
@@ -374,6 +375,13 @@ export const HomePage: React.FC = () => {
             title="手动刷新媒体库"
           >
             <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin text-primary' : ''}`} />
+          </button>
+          <button
+            onClick={() => navigate('/settings')}
+            className="p-2 rounded-xl bg-surface hover:bg-white/10 text-gray-300 hover:text-white transition cursor-pointer"
+            title="系统设置"
+          >
+            <Settings className="w-4 h-4" />
           </button>
           <button
             onClick={handleLogout}

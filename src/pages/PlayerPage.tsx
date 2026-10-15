@@ -963,6 +963,9 @@ export const PlayerPage: React.FC = () => {
         volume={volume}
         playbackRate={playbackRate}
         danmakuVisible={danmakuSettings.visible}
+        danmakuCount={rawComments.length}
+        danmakuOffset={savedOffset}
+        matchedTitle={matchedTitle}
         audioTracks={audioTracks}
         subtitleTracks={subtitleTracks}
         selectedAudioId={selectedAudioId}

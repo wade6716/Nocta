@@ -263,17 +263,17 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
 
   return (
     <>
-      {/* 遮罩背景：点击抽屉外部空白区域可直接关闭抽屉 */}
+      {/* 遮罩背景：全透明点击层，避免黑罩遮挡底层视频实时调参 */}
       <div
-        className="fixed inset-0 z-40 bg-black/40 backdrop-blur-[2px] transition-opacity"
+        className="fixed inset-0 z-20 bg-transparent"
         onClick={onClose}
       />
-      <div className="fixed inset-y-0 right-0 z-50 w-[420px] bg-[#161922]/95 backdrop-blur-md border-l border-white/10 shadow-2xl flex flex-col text-gray-200 select-none animate-in slide-in-from-right duration-200">
+      <div className="fixed top-16 bottom-24 right-6 z-30 w-80 md:w-96 rounded-2xl bg-[#0B0E17]/85 backdrop-blur-2xl border border-white/[0.12] shadow-[0_20px_50px_rgba(0,0,0,0.7)] flex flex-col text-gray-200 select-none animate-in slide-in-from-right duration-200 overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-white/10">
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-white/10 bg-white/[0.02]">
           <div className="flex items-center space-x-2">
-            <Sliders className="w-5 h-5 text-primary" />
-            <h2 className="text-base font-semibold">弹幕控制中心</h2>
+            <Sliders className="w-4 h-4 text-primary" />
+            <h2 className="text-sm font-semibold tracking-wide text-white">弹幕控制中心</h2>
           </div>
 
           <div className="flex items-center space-x-2">
@@ -284,15 +284,15 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
               title="配置弹幕 API 节点"
             >
               <Server className="w-3.5 h-3.5 text-primary" />
-              <span className="truncate max-w-[90px]">{activeServer.name}</span>
+              <span className="truncate max-w-[80px]">{activeServer.name}</span>
             </button>
 
             <button
               onClick={onClose}
-              className="p-1.5 rounded-lg hover:bg-white/10 text-gray-400 hover:text-white transition cursor-pointer"
+              className="p-1 rounded-lg hover:bg-white/10 text-gray-400 hover:text-white transition cursor-pointer"
               title="关闭弹幕设置 (Esc)"
             >
-              <X className="w-5 h-5" />
+              <X className="w-4 h-4" />
             </button>
           </div>
         </div>
@@ -305,51 +305,47 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
           </div>
         )}
 
-        {/* Tabs */}
-        <div className="flex border-b border-white/10 text-sm">
-          <button
-            onClick={() => setActiveTab('match')}
-            className={`flex-1 py-3 text-center font-medium border-b-2 transition ${
-              activeTab === 'match'
-                ? 'border-primary text-primary bg-white/5'
-                : 'border-transparent text-gray-400 hover:text-gray-200'
-            }`}
-          >
-            <div className="flex items-center justify-center space-x-1.5">
-              <Tv className="w-4 h-4" />
-              <span>源匹配 & 绑定</span>
-            </div>
-          </button>
-          <button
-            onClick={() => setActiveTab('style')}
-            className={`flex-1 py-3 text-center font-medium border-b-2 transition ${
-              activeTab === 'style'
-                ? 'border-primary text-primary bg-white/5'
-                : 'border-transparent text-gray-400 hover:text-gray-200'
-            }`}
-          >
-            <div className="flex items-center justify-center space-x-1.5">
-              <Palette className="w-4 h-4" />
-              <span>参数 & 画面</span>
-            </div>
-          </button>
-          <button
-            onClick={() => setActiveTab('time')}
-            className={`flex-1 py-3 text-center font-medium border-b-2 transition ${
-              activeTab === 'time'
-                ? 'border-primary text-primary bg-white/5'
-                : 'border-transparent text-gray-400 hover:text-gray-200'
-            }`}
-          >
-            <div className="flex items-center justify-center space-x-1.5">
-              <Clock className="w-4 h-4" />
+        {/* Segmented Control Tabs (匹配换源 / 时间校准 / 样式屏蔽) */}
+        <div className="p-3 border-b border-white/10 bg-white/[0.01]">
+          <div className="flex bg-white/5 p-1 rounded-xl border border-white/5 text-xs font-medium">
+            <button
+              onClick={() => setActiveTab('match')}
+              className={`flex-1 py-1.5 rounded-lg transition flex items-center justify-center space-x-1 cursor-pointer ${
+                activeTab === 'match'
+                  ? 'bg-primary text-white font-semibold shadow-md'
+                  : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              <Tv className="w-3.5 h-3.5" />
+              <span>匹配换源</span>
+            </button>
+            <button
+              onClick={() => setActiveTab('time')}
+              className={`flex-1 py-1.5 rounded-lg transition flex items-center justify-center space-x-1 cursor-pointer ${
+                activeTab === 'time'
+                  ? 'bg-primary text-white font-semibold shadow-md'
+                  : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              <Clock className="w-3.5 h-3.5" />
               <span>时间校准</span>
-            </div>
-          </button>
+            </button>
+            <button
+              onClick={() => setActiveTab('style')}
+              className={`flex-1 py-1.5 rounded-lg transition flex items-center justify-center space-x-1 cursor-pointer ${
+                activeTab === 'style'
+                  ? 'bg-primary text-white font-semibold shadow-md'
+                  : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              <Palette className="w-3.5 h-3.5" />
+              <span>样式屏蔽</span>
+            </button>
+          </div>
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-5 space-y-6">
+        <div className="flex-1 overflow-y-auto p-4 space-y-5">
           {activeTab === 'match' && (
             <div className="space-y-6">
               {/* Current Bound / Matched Source Card */}
@@ -1002,49 +998,59 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
           )}
 
           {activeTab === 'time' && (
-            <div className="space-y-6">
-              <div className="bg-black/40 rounded-xl p-4 border border-white/5 text-center">
-                <span className="text-xs text-gray-400 block mb-1">当前弹幕时间偏移</span>
-                <div className="text-3xl font-mono font-bold text-primary">
-                  {currentOffset > 0 ? `+${currentOffset}` : currentOffset} 秒
+            <div className="space-y-5">
+              <div className="bg-black/35 rounded-2xl p-5 border border-white/10 text-center">
+                <span className="text-xs text-gray-400 block mb-1.5 font-medium">当前弹幕时间偏移</span>
+                <div className="text-4xl font-mono font-bold text-primary tabular-nums tracking-tight">
+                  {currentOffset > 0 ? `+${currentOffset.toFixed(1)}` : currentOffset.toFixed(1)}s
                 </div>
-                <p className="text-xs text-gray-400 mt-2">
-                  正值代表弹幕提前出现，负值代表延后出现。设置会自动记住。
+                <p className="text-[11px] text-gray-400 mt-2.5 leading-relaxed">
+                  正值代表弹幕提前出现，负值代表延后出现。微调即时生效并自动持久化。
                 </p>
               </div>
 
-              <div className="space-y-3">
+              {/* 偏差警告 */}
+              {durationDiff && durationDiff > 15 && (
+                <div className="p-3 bg-amber-500/15 border border-amber-500/30 rounded-xl text-amber-300 text-xs flex items-start space-x-2 animate-fadeIn">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0 text-amber-400 mt-0.5" />
+                  <div className="leading-relaxed">
+                    弹幕源时长 ({formatSec(sourceDuration)}) 与 Emby 视频时长 ({formatSec(videoDuration)}) 相差 {durationDiff} 秒，建议使用下方按钮对齐片头。
+                  </div>
+                </div>
+              )}
+
+              <div className="space-y-2.5">
                 <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider block">
-                  快捷微调
+                  快捷微调 (5 档触感调节)
                 </span>
-                <div className="grid grid-cols-5 gap-2">
+                <div className="grid grid-cols-5 gap-1.5">
                   <button
                     onClick={() => adjustOffset(-5)}
-                    className="py-2.5 bg-white/5 hover:bg-white/15 rounded-lg text-xs font-mono font-bold transition"
+                    className="py-2.5 bg-white/5 hover:bg-white/15 rounded-xl text-xs font-mono font-bold transition text-gray-200 tabular-nums border border-white/5 cursor-pointer"
                   >
                     -5s
                   </button>
                   <button
                     onClick={() => adjustOffset(-0.5)}
-                    className="py-2.5 bg-white/5 hover:bg-white/15 rounded-lg text-xs font-mono font-bold transition"
+                    className="py-2.5 bg-white/5 hover:bg-white/15 rounded-xl text-xs font-mono font-bold transition text-gray-200 tabular-nums border border-white/5 cursor-pointer"
                   >
                     -0.5s
                   </button>
                   <button
                     onClick={resetOffset}
-                    className="py-2.5 bg-primary/20 hover:bg-primary text-primary hover:text-white rounded-lg text-xs font-bold transition"
+                    className="py-2.5 bg-primary/20 hover:bg-primary text-primary hover:text-white rounded-xl text-xs font-bold transition border border-primary/30 cursor-pointer shadow-sm"
                   >
                     重置
                   </button>
                   <button
                     onClick={() => adjustOffset(0.5)}
-                    className="py-2.5 bg-white/5 hover:bg-white/15 rounded-lg text-xs font-mono font-bold transition"
+                    className="py-2.5 bg-white/5 hover:bg-white/15 rounded-xl text-xs font-mono font-bold transition text-gray-200 tabular-nums border border-white/5 cursor-pointer"
                   >
                     +0.5s
                   </button>
                   <button
                     onClick={() => adjustOffset(5)}
-                    className="py-2.5 bg-white/5 hover:bg-white/15 rounded-lg text-xs font-mono font-bold transition"
+                    className="py-2.5 bg-white/5 hover:bg-white/15 rounded-xl text-xs font-mono font-bold transition text-gray-200 tabular-nums border border-white/5 cursor-pointer"
                   >
                     +5s
                   </button>

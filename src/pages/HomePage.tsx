@@ -14,6 +14,9 @@ import {
   Settings,
   Pencil,
   TriangleAlert,
+  Info,
+  Sparkles,
+  Star,
 } from 'lucide-react';
 import { useAuthStore } from '../stores/useAuthStore';
 import { useMediaStore } from '../stores/useMediaStore';
@@ -32,6 +35,7 @@ import {
   ViewCounts,
   mergeMediaBySeries,
   isVideoMedia,
+  buildItemImageUrl,
 } from '../api/embyClient';
 import { MediaCard } from '../components/media/MediaCard';
 
@@ -320,75 +324,48 @@ export const HomePage: React.FC = () => {
     return mergeMediaBySeries(nonDuplicate);
   }, [recentlyPlayedItems, continueWatchingItems]);
 
+  // Hero Spotlight Banner: 优先选取当前继续观看首位，或第一个分类的首部大片
+  const spotlightItem = useMemo(() => {
+    if (continueWatchingItems.length > 0) return continueWatchingItems[0];
+    for (const v of views) {
+      if (latestMap[v.Id] && latestMap[v.Id].length > 0) {
+        return latestMap[v.Id][0];
+      }
+    }
+    return null;
+  }, [continueWatchingItems, views, latestMap]);
+
+  const spotlightBackdropUrl = useMemo(() => {
+    if (!spotlightItem || !currentServer) return '';
+    return buildItemImageUrl(
+      currentServer.url,
+      spotlightItem.SeriesId || spotlightItem.Id,
+      spotlightItem.ImageTags?.Backdrop || spotlightItem.BackdropImageTags?.[0],
+      { type: 'Backdrop', maxWidth: 1920, quality: 90 }
+    );
+  }, [spotlightItem, currentServer]);
+
   return (
     <div className="w-full py-6 px-8 select-none">
-      {/* Top Navbar */}
-      <div className="flex items-center justify-between mb-8">
+      {/* 顶部状态与快速操作栏 */}
+      <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-white flex items-center space-x-2.5">
+          <h1 className="text-xl font-bold tracking-tight text-white flex items-center space-x-2">
             <span>媒体库</span>
-            <ServerSwitcherDropdown
-              onOpenManageModal={() => navigate('/settings')}
-              onOpenAddModal={() => setIsServerModalOpen(true)}
-            />
+            <span className="text-xs font-normal text-slate-400 font-mono">
+              · 欢迎回来，{currentServer?.username || '用户'}
+            </span>
           </h1>
-          <p className="text-xs text-gray-400 mt-1">欢迎回来，{currentServer?.username || '用户'}</p>
         </div>
 
         <div className="flex items-center space-x-2">
           <button
-            onClick={() => navigate('/search')}
-            className="flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-surface hover:bg-white/10 text-gray-300 hover:text-white transition cursor-pointer border border-white/5"
-            title="跨媒体库搜索 (Ctrl+K)"
-          >
-            <Search className="w-4 h-4 text-primary" />
-            <span className="text-xs font-medium">搜索</span>
-            <kbd className="hidden sm:inline-block ml-1 text-[10px] font-mono px-1.5 py-0.5 rounded bg-white/10 text-gray-400">
-              Ctrl K
-            </kbd>
-          </button>
-          <button
-            onClick={() => setIsServerModalOpen(true)}
-            className="p-2 rounded-xl bg-surface hover:bg-white/10 text-gray-300 hover:text-white transition cursor-pointer"
-            title="Emby 服务器管理 / 编辑服务器信息"
-          >
-            <Server className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => setIsDanmuModalOpen(true)}
-            className="p-2 rounded-xl bg-surface hover:bg-white/10 text-gray-300 hover:text-white transition cursor-pointer"
-            title="弹幕 API 节点设置"
-          >
-            <MessagesSquare className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => setIsProxyModalOpen(true)}
-            className="p-2 rounded-xl bg-surface hover:bg-white/10 text-gray-300 hover:text-white transition cursor-pointer"
-            title="网络与代理设置 (系统代理 / 手动代理)"
-          >
-            <Globe className="w-4 h-4" />
-          </button>
-          <button
             onClick={() => loadData(true)}
             disabled={isRefreshing || loading}
-            className="p-2 rounded-xl bg-surface hover:bg-white/10 text-gray-300 hover:text-white transition cursor-pointer"
+            className="p-2 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] text-slate-300 hover:text-white border border-white/[0.06] transition cursor-pointer"
             title="手动刷新媒体库"
           >
             <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin text-primary' : ''}`} />
-          </button>
-          <button
-            onClick={() => navigate('/settings')}
-            className="p-2 rounded-xl bg-surface hover:bg-white/10 text-gray-300 hover:text-white transition cursor-pointer"
-            title="系统设置"
-          >
-            <Settings className="w-4 h-4" />
-          </button>
-          <button
-            onClick={handleLogout}
-            className="p-2 rounded-xl bg-surface hover:bg-white/10 text-gray-300 hover:text-white transition cursor-pointer"
-            title="切换服务器 / 登出"
-          >
-            <LogOut className="w-4 h-4" />
           </button>
         </div>
       </div>
@@ -416,46 +393,115 @@ export const HomePage: React.FC = () => {
       {loading ? (
         <div className="flex flex-col items-center justify-center py-32 space-y-3">
           <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-          <p className="text-xs text-gray-400">正在同步媒体库信息...</p>
+          <p className="text-xs text-slate-400 font-medium">正在同步媒体库信息...</p>
         </div>
       ) : (
         <div className="space-y-10">
-          {/* Continue Watching Section (按相同媒体合并后的继续观看) */}
-          {continueWatchingItems.length > 0 && (
-            <div className="space-y-4">
-              <div className="flex items-center space-x-2">
-                <Play className="w-4 h-4 text-primary fill-primary" />
-                <h2 className="text-lg font-bold text-white tracking-wide">继续观看</h2>
-                <span className="text-xs text-gray-400">相同剧集已聚合为最新一集</span>
+          {/* 1. Hero Spotlight Banner (精选全宽大屏 + 双层渐变遮罩) */}
+          {spotlightItem && spotlightBackdropUrl && (
+            <div className="h-[360px] md:h-[420px] rounded-2xl overflow-hidden relative border border-white/[0.08] shadow-2xl group">
+              {/* 背景剧照 */}
+              <img
+                src={spotlightBackdropUrl}
+                alt={spotlightItem.Name}
+                className="absolute inset-0 w-full h-full object-cover object-top filter brightness-90 group-hover:scale-105 transition-transform duration-700 ease-out"
+              />
+
+              {/* 左侧文字保护渐变遮罩 */}
+              <div className="absolute inset-0 bg-gradient-to-r from-[#0B0E17] via-[#0B0E17]/75 to-transparent" />
+              {/* 底部融合渐变遮罩 */}
+              <div className="absolute inset-0 bg-gradient-to-t from-[#0B0E17] via-transparent to-transparent" />
+
+              {/* 焦点信息排布 */}
+              <div className="absolute bottom-8 left-8 right-8 z-10 flex flex-col justify-end">
+                {/* 规格徽章行 */}
+                <div className="flex items-center space-x-2 mb-3">
+                  <span className="px-2.5 py-0.5 rounded-md bg-[#38BDF8]/20 border border-[#38BDF8]/30 text-[#38BDF8] text-[11px] font-bold tracking-wide">
+                    精选推荐
+                  </span>
+                  {(spotlightItem.ProductionYear || spotlightItem.PremiereDate) && (
+                    <span className="px-2 py-0.5 rounded-md bg-white/[0.08] text-slate-300 text-[11px] font-medium font-mono">
+                      {spotlightItem.ProductionYear || spotlightItem.PremiereDate?.slice(0, 4)}
+                    </span>
+                  )}
+                  <span className="px-2 py-0.5 rounded-md bg-white/[0.08] text-slate-300 text-[11px] font-medium font-mono uppercase">
+                    4K HEVC
+                  </span>
+                  <span className="px-2 py-0.5 rounded-md bg-[#F472B6]/15 border border-[#F472B6]/30 text-[#F472B6] text-[11px] font-semibold flex items-center space-x-1">
+                    <Sparkles className="w-3 h-3" />
+                    <span>全网弹幕</span>
+                  </span>
+                </div>
+
+                {/* 剧集主标题 */}
+                <h2 className="text-2xl sm:text-4xl font-extrabold text-slate-50 tracking-tight drop-shadow-lg max-w-2xl line-clamp-1">
+                  {spotlightItem.SeriesName || spotlightItem.Name}
+                </h2>
+
+                {/* 剧集简介 */}
+                {spotlightItem.Overview && (
+                  <p className="line-clamp-2 max-w-xl text-xs sm:text-sm text-slate-300 leading-relaxed mt-2 drop-shadow">
+                    {spotlightItem.Overview}
+                  </p>
+                )}
+
+                {/* 主行动按钮组 */}
+                <div className="flex items-center space-x-3 mt-5">
+                  <button
+                    onClick={() => handleCardClick(spotlightItem)}
+                    className="px-6 py-2.5 rounded-full bg-[#38BDF8] hover:bg-[#0ea5e9] text-slate-950 font-bold text-xs sm:text-sm shadow-lg shadow-sky-500/25 transition flex items-center space-x-2 cursor-pointer"
+                  >
+                    <Play className="w-4 h-4 fill-current" />
+                    <span>立即播放</span>
+                  </button>
+                  <button
+                    onClick={() => handleCardClick(spotlightItem)}
+                    className="px-5 py-2.5 rounded-full bg-white/10 hover:bg-white/20 text-slate-100 font-medium text-xs sm:text-sm backdrop-blur-md border border-white/10 transition flex items-center space-x-1.5 cursor-pointer"
+                  >
+                    <Info className="w-4 h-4" />
+                    <span>剧集详情</span>
+                  </button>
+                </div>
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+            </div>
+          )}
+
+          {/* 2. 继续观看泳道 (Continue Watching - 16:9 横版滚动泳道) */}
+          {continueWatchingItems.length > 0 && (
+            <div id="continue-watching" className="space-y-4">
+              <div className="flex items-center space-x-2">
+                <Play className="w-4 h-4 text-[#38BDF8] fill-[#38BDF8]" />
+                <h2 className="text-lg font-semibold tracking-tight text-slate-100">继续观看</h2>
+                <span className="text-xs text-slate-500 font-medium">16:9 剧照与断点进度</span>
+              </div>
+              <div className="flex space-x-4 overflow-x-auto pb-4 pt-1 custom-scrollbar">
                 {continueWatchingItems.map((item) => {
                   const hasProgress =
                     item.UserData?.PlaybackPositionTicks && item.UserData.PlaybackPositionTicks > 0;
                   return (
-                    <MediaCard
-                      key={item.Id}
-                      item={item}
-                      serverUrl={currentServer!.url}
-                      onClick={handleCardClick}
-                      aspectRatio="backdrop"
-                      badge={hasProgress ? undefined : '下一集'}
-                    />
+                    <div key={item.Id} className="w-64 md:w-72 flex-shrink-0">
+                      <MediaCard
+                        item={item}
+                        serverUrl={currentServer!.url}
+                        onClick={handleCardClick}
+                        aspectRatio="backdrop"
+                        badge={hasProgress ? undefined : '下一集'}
+                      />
+                    </div>
                   );
                 })}
               </div>
             </div>
           )}
 
-          {/* Recently Played Section (最近观看历史，按相同媒体聚合) */}
+          {/* 3. 最近观看历史 (按相同媒体聚合) */}
           {filteredRecentItems.length > 0 && (
             <div className="space-y-4">
               <div className="flex items-center space-x-2">
                 <History className="w-4 h-4 text-indigo-400" />
-                <h2 className="text-lg font-bold text-white tracking-wide">最近观看</h2>
-                <span className="text-xs text-gray-400">历史播放记录</span>
+                <h2 className="text-lg font-semibold tracking-tight text-slate-100">最近播放记录</h2>
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-5">
                 {filteredRecentItems.map((item) => (
                   <MediaCard
                     key={item.Id}
@@ -470,13 +516,13 @@ export const HomePage: React.FC = () => {
             </div>
           )}
 
-          {/* Library Categories Shelves */}
+          {/* 4. 媒体库各分类海报网格 (2:3 纵向海报) */}
           {views.map((v) => {
             const items = latestMap[v.Id] || [];
             if (items.length === 0) return null;
 
             return (
-              <div key={v.Id} className="space-y-4">
+              <div key={v.Id} id={`view-${v.Id}`} className="space-y-4">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center space-x-2.5">
                     {v.CollectionType === 'tvshows' ? (
@@ -484,13 +530,13 @@ export const HomePage: React.FC = () => {
                     ) : (
                       <Film className="w-4 h-4 text-primary" />
                     )}
-                    <h2 className="text-lg font-bold text-white tracking-wide">{v.Name}</h2>
+                    <h2 className="text-lg font-semibold tracking-tight text-slate-100">{v.Name}</h2>
                     {renderViewCountBadge(viewCounts[v.Id])}
                   </div>
-                  <span className="text-xs text-gray-400 font-mono">最新入库</span>
+                  <span className="text-xs text-slate-500 font-mono">最新入库</span>
                 </div>
 
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-5">
                   {items.map((item) => (
                     <MediaCard
                       key={item.Id}

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Play, Check } from 'lucide-react';
 import { EmbyItem, buildItemImageUrl } from '../../api/embyClient';
 
@@ -20,6 +20,7 @@ export const MediaCard: React.FC<MediaCardProps> = ({
   badge,
 }) => {
   const isBackdrop = aspectRatio === 'backdrop';
+  const [isImageLoaded, setIsImageLoaded] = useState(false);
 
   // 智能图片寻址：
   // 1. 如果是剧集分集（Episode）在竖版海报（poster）模式下，使用父级剧集的 SeriesPrimaryImageTag
@@ -71,20 +72,29 @@ export const MediaCard: React.FC<MediaCardProps> = ({
   return (
     <div
       onClick={() => onClick(item)}
-      className="group relative flex flex-col cursor-pointer transition-transform duration-200 hover:-translate-y-1"
+      className="group relative flex flex-col cursor-pointer transition-transform duration-200 hover:-translate-y-1 select-none"
     >
       {/* Poster Image Container */}
       <div
-        className={`relative w-full overflow-hidden rounded-xl bg-surface border border-white/5 shadow-lg ${
+        className={`relative w-full overflow-hidden rounded-xl bg-[#131826] border border-white/[0.08] group-hover:border-[#38BDF8]/45 shadow-lg shadow-black/40 transition-colors duration-300 ${
           isBackdrop ? 'aspect-video' : 'aspect-[2/3]'
         }`}
       >
+        {/* Loading skeleton */}
+        {!isImageLoaded && (
+          <div className="absolute inset-0 bg-[#131826] animate-pulse" />
+        )}
+
         <img
           src={imageUrl}
           alt={item.Name}
           loading="lazy"
-          className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+          onLoad={() => setIsImageLoaded(true)}
+          className={`w-full h-full object-cover transition-all duration-300 group-hover:scale-105 ${
+            isImageLoaded ? 'opacity-100' : 'opacity-0'
+          }`}
           onError={(e) => {
+            setIsImageLoaded(true);
             const target = e.target as HTMLImageElement;
             // 针对分集海报未命中时的两级平滑降级：尝试取剧集封面
             if (item.SeriesId && imageItemId !== item.SeriesId) {
@@ -97,34 +107,34 @@ export const MediaCard: React.FC<MediaCardProps> = ({
             }
             // 最终兜底图
             target.src =
-              'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="300" height="450" viewBox="0 0 300 450"><rect width="100%" height="100%" fill="%23161922"/><text x="50%" y="50%" fill="%23666" font-family="sans-serif" font-size="20" text-anchor="middle" dominant-baseline="middle">暂无海报</text></svg>';
+              'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="300" height="450" viewBox="0 0 300 450"><rect width="100%" height="100%" fill="%23131826"/><text x="50%" y="50%" fill="%2364748B" font-family="sans-serif" font-size="16" text-anchor="middle" dominant-baseline="middle">暂无海报</text></svg>';
           }}
         />
 
         {/* Hover play icon overlay */}
-        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-          <div className="w-12 h-12 rounded-full bg-primary/90 text-white flex items-center justify-center shadow-lg transform scale-75 group-hover:scale-100 transition-transform">
-            <Play className="w-6 h-6 fill-white ml-0.5" />
+        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
+          <div className="w-12 h-12 rounded-full bg-[#38BDF8]/90 text-white flex items-center justify-center shadow-lg shadow-sky-500/25 transform scale-75 group-hover:scale-100 transition-transform duration-200">
+            <Play className="w-5 h-5 fill-white ml-0.5" />
           </div>
         </div>
 
         {/* Badge on top right */}
         {badge ? (
-          <div className="absolute top-2 right-2 px-1.5 py-0.5 rounded-md bg-black/70 backdrop-blur-md text-[10px] font-semibold text-gray-200 border border-white/10">
+          <div className="absolute top-2 right-2 px-2 py-0.5 rounded-md bg-[#0B0E17]/80 backdrop-blur-md text-[11px] font-semibold text-[#38BDF8] border border-white/10">
             {badge}
           </div>
         ) : isPlayed ? (
-          <div className="absolute top-2 right-2 px-1.5 py-0.5 rounded-md bg-emerald-600/80 backdrop-blur-md text-[10px] font-semibold text-white flex items-center space-x-0.5">
+          <div className="absolute top-2 right-2 px-2 py-0.5 rounded-md bg-emerald-600/80 backdrop-blur-md text-[11px] font-semibold text-white flex items-center space-x-1">
             <Check className="w-3 h-3 stroke-[3]" />
             <span>已看</span>
           </div>
         ) : null}
 
-        {/* Resume progress bar */}
+        {/* Resume progress bar (规范：h-1 w-full bg-white/20, 已看进度条为 bg-[#38BDF8]) */}
         {progressPercent > 0 && (
-          <div className="absolute bottom-0 inset-x-0 h-1.5 bg-black/60">
+          <div className="absolute bottom-0 inset-x-0 h-1 bg-white/20">
             <div
-              className="h-full bg-primary"
+              className="h-full bg-[#38BDF8]"
               style={{ width: `${progressPercent}%` }}
             />
           </div>
@@ -133,10 +143,10 @@ export const MediaCard: React.FC<MediaCardProps> = ({
 
       {/* Info labels */}
       <div className="mt-2.5 px-0.5">
-        <h3 className="text-sm font-semibold text-gray-100 truncate group-hover:text-primary transition-colors">
+        <h3 className="text-sm font-medium text-slate-100 truncate group-hover:text-[#38BDF8] transition-colors">
           {item.Name}
         </h3>
-        <p className="text-xs text-gray-400 mt-0.5 truncate">
+        <p className="text-xs font-medium text-slate-400 mt-0.5 truncate">
           {subtitle
             ? subtitle
             : item.SeriesName
@@ -149,3 +159,4 @@ export const MediaCard: React.FC<MediaCardProps> = ({
 };
 
 export default MediaCard;
+

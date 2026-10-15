@@ -92,18 +92,27 @@ export const NetworkProxyModal: React.FC<NetworkProxyModalProps> = ({ isOpen, on
     }
   };
 
-  const getTargetUrl = (): string => {
+  const getTargetUrl = (): string | null => {
     switch (testTargetType) {
       case 'google':
         return 'https://www.google.com/generate_204';
       case 'emby':
-        return currentServer?.url || 'https://www.google.com/generate_204';
+        return currentServer?.url ? `${currentServer.url}/emby/System/Info/Public` : null;
       case 'custom':
-        return customTestUrl.trim() || 'https://www.google.com/generate_204';
+        return customTestUrl.trim() || null;
     }
   };
 
   const handleTestConnection = async () => {
+    if (testTargetType === 'custom' && !customTestUrl.trim()) {
+      setTestResult({ ok: false, error: '请输入有效的自定义测试网址' });
+      return;
+    }
+    if (testTargetType === 'emby' && !currentServer) {
+      setTestResult({ ok: false, error: '未找到当前连接的 Emby 服务器' });
+      return;
+    }
+
     const candidateConfig: ProxyConfig = {
       type: proxyType,
       serverUrl: serverUrl.trim() || undefined,
@@ -350,51 +359,26 @@ export const NetworkProxyModal: React.FC<NetworkProxyModalProps> = ({ isOpen, on
 
             {/* Target Options */}
             <div className="space-y-2">
-              <div className="flex items-center space-x-3 text-xs">
-                {/* Option: Google */}
-                <label className="flex items-center space-x-1.5 cursor-pointer text-gray-300 hover:text-white">
-                  <input
-                    type="radio"
-                    name="testTarget"
-                    value="google"
-                    checked={testTargetType === 'google'}
-                    onChange={() => setTestTargetType('google')}
-                    className="text-primary focus:ring-0"
-                  />
-                  <span>Google (验证外网梯子)</span>
-                </label>
-
-                {/* Option: Current Emby Server */}
-                <label
-                  className={`flex items-center space-x-1.5 ${
-                    currentServer ? 'cursor-pointer text-gray-300 hover:text-white' : 'opacity-40 cursor-not-allowed'
-                  }`}
+              <label className="text-[11px] text-gray-400 block">测试目标网址</label>
+              <select
+                value={testTargetType}
+                onChange={(e) => setTestTargetType(e.target.value as 'google' | 'emby' | 'custom')}
+                className="w-full px-3 py-2 bg-[#12141a] border border-white/10 rounded-xl text-xs text-white focus:outline-none focus:border-primary cursor-pointer"
+              >
+                <option value="google" className="bg-[#161922] text-white">
+                  1. Google (全球外网连通性)
+                </option>
+                <option
+                  value="emby"
+                  disabled={!currentServer}
+                  className="bg-[#161922] text-white"
                 >
-                  <input
-                    type="radio"
-                    name="testTarget"
-                    value="emby"
-                    disabled={!currentServer}
-                    checked={testTargetType === 'emby'}
-                    onChange={() => setTestTargetType('emby')}
-                    className="text-primary focus:ring-0"
-                  />
-                  <span>当前 Emby 服务器</span>
-                </label>
-
-                {/* Option: Custom URL */}
-                <label className="flex items-center space-x-1.5 cursor-pointer text-gray-300 hover:text-white">
-                  <input
-                    type="radio"
-                    name="testTarget"
-                    value="custom"
-                    checked={testTargetType === 'custom'}
-                    onChange={() => setTestTargetType('custom')}
-                    className="text-primary focus:ring-0"
-                  />
-                  <span>自定义网址</span>
-                </label>
-              </div>
+                  2. 当前 Emby 服务器 {currentServer ? `(${currentServer.name || currentServer.url})` : '(尚未添加)'}
+                </option>
+                <option value="custom" className="bg-[#161922] text-white">
+                  3. 自定义网址
+                </option>
+              </select>
 
               {/* Custom URL input field */}
               {testTargetType === 'custom' && (

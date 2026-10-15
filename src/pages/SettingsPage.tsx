@@ -102,6 +102,10 @@ export const SettingsPage: React.FC = () => {
   const [proxyUrl, setProxyUrl] = useState(globalProxyConfig.serverUrl || 'http://127.0.0.1:7890');
   const [proxyTesting, setProxyTesting] = useState(false);
   const [proxyTestResult, setProxyTestResult] = useState<{ ok: boolean; latency?: number; error?: string } | null>(null);
+  type ProxyTestTarget = 'google' | 'emby' | 'custom';
+  const [proxyTestTarget, setProxyTestTarget] = useState<ProxyTestTarget>('google');
+  const [customProxyTestUrl, setCustomProxyTestUrl] = useState('');
+  const currentEmbyServer = embyServers.find((s) => s.id === currentServerId) || embyServers[0] || null;
 
   // 切换 Emby 服务器
   const handleSwitchEmbyServer = (id: string) => {
@@ -240,6 +244,22 @@ export const SettingsPage: React.FC = () => {
 
   // 测试代理
   const handleTestProxy = async () => {
+    let target = 'https://www.google.com/generate_204';
+    if (proxyTestTarget === 'emby') {
+      if (!currentEmbyServer) {
+        setProxyTestResult({ ok: false, error: '未找到当前连接的 Emby 服务器' });
+        return;
+      }
+      target = `${currentEmbyServer.url}/emby/System/Info/Public`;
+    } else if (proxyTestTarget === 'custom') {
+      const url = customProxyTestUrl.trim();
+      if (!url) {
+        setProxyTestResult({ ok: false, error: '请输入有效的自定义测试网址' });
+        return;
+      }
+      target = url;
+    }
+
     setProxyTesting(true);
     setProxyTestResult(null);
     try {
@@ -251,7 +271,7 @@ export const SettingsPage: React.FC = () => {
               ? proxyUrl
               : undefined,
         },
-        'https://www.google.com'
+        target
       );
       setProxyTestResult(res);
     } catch (err: any) {
@@ -1025,12 +1045,49 @@ export const SettingsPage: React.FC = () => {
                   <button
                     onClick={handleTestProxy}
                     disabled={proxyTesting}
-                    className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-xs text-white transition cursor-pointer flex items-center space-x-1"
+                    className="px-3.5 py-1.5 rounded-lg bg-primary hover:bg-primary/90 text-xs text-white font-medium transition cursor-pointer flex items-center space-x-1.5 disabled:opacity-50"
                   >
                     {proxyTesting && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
                     <span>探测代理</span>
                   </button>
                 </div>
+
+                {/* 测速目标选择下拉框与自定义输入 */}
+                <div className="space-y-2 pt-1">
+                  <label className="text-xs text-gray-400 block">测试目标网址</label>
+                  <select
+                    value={proxyTestTarget}
+                    onChange={(e) => setProxyTestTarget(e.target.value as ProxyTestTarget)}
+                    className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-xl text-xs text-white focus:outline-none focus:border-primary cursor-pointer"
+                  >
+                    <option value="google" className="bg-[#161922] text-white">
+                      1. Google (全球外网连通性)
+                    </option>
+                    <option
+                      value="emby"
+                      disabled={!currentEmbyServer}
+                      className="bg-[#161922] text-white"
+                    >
+                      2. 当前 Emby 服务器 {currentEmbyServer ? `(${currentEmbyServer.name || currentEmbyServer.url})` : '(尚未添加)'}
+                    </option>
+                    <option value="custom" className="bg-[#161922] text-white">
+                      3. 自定义网址
+                    </option>
+                  </select>
+
+                  {proxyTestTarget === 'custom' && (
+                    <div className="pt-1">
+                      <input
+                        type="text"
+                        value={customProxyTestUrl}
+                        onChange={(e) => setCustomProxyTestUrl(e.target.value)}
+                        placeholder="请输入测试网址，例如 https://api.github.com"
+                        className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-xl text-xs text-white placeholder-gray-500 focus:outline-none focus:border-primary font-mono"
+                      />
+                    </div>
+                  )}
+                </div>
+
                 {proxyTestResult && (
                   <div
                     className={`text-xs p-2.5 rounded-lg border ${

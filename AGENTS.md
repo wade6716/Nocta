@@ -88,4 +88,19 @@
 - **跨服点击无缝迁移**：
   - 用户点击非当前服务器的影视卡片时，在 `navigate('/detail/' + item.Id)` 前，必须同步调用 `useAuthStore.getState().setCurrentServer(target.id)` 并执行 `useMediaStore.getState().clearMediaCache()`，确保详情页和播放页直接使用目标服务器的 Token 与直链播放，彻底避免跨服会话错乱。
 
+### 6. 电视剧集数（媒体文件）角标展示与 API 字段规范
+- **Emby 服务端集数字段特性**：
+  - 在 Emby / Jellyfin 中，`Series`（电视剧系列）条目的总集数（包含的媒体文件数）为 `RecursiveItemCount`；`ChildCount` 通常为季（Season）数或直属子项数；
+  - Emby API 请求（`/emby/Users/{UserId}/Items`、`/Items/Latest` 等）必须显式在 `Fields` 参数中声明 `ChildCount,RecursiveItemCount,Status`，否则服务端默认会裁剪这些计数属性导致前端无法获取集数；
+- **智能文案规则 (`formatSeriesEpisodeBadge`)**：
+  - 连载中（`Status === 'Continuing'`）：展示为 `更新至 X 集`；
+  - 已完结（`Status === 'Ended'`）：展示为 `全 X 集`；
+  - 其它/未标注完结状态：展示为 `共 X 集`；
+  - 单集分集条目（`Episode`）：展示为 `第 X 集`；
+- **卡片四角非遮挡布局**：
+  - 左上角：服务器来源微标（`serverBadge`）；
+  - 右上角：媒体库分类徽章（`badge`，如 `动漫`、`电影`）或 `已看`；
+  - 右下角：剧集总集数角标（`effectiveEpisodeBadge`，带 `Tv` 图标与深色半透毛玻璃背景），位于底部细线进度条上方，互不遮挡。
+
+
 

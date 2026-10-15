@@ -36,6 +36,7 @@ import {
   mergeMediaBySeries,
   isVideoMedia,
   buildItemImageUrl,
+  formatSeriesEpisodeBadge,
 } from '../api/embyClient';
 import { MediaCard } from '../components/media/MediaCard';
 
@@ -422,6 +423,12 @@ export const HomePage: React.FC = () => {
                   {(spotlightItem.ProductionYear || spotlightItem.PremiereDate) && (
                     <span className="px-2 py-0.5 rounded-md bg-white/[0.08] text-slate-300 text-[11px] font-medium font-mono">
                       {spotlightItem.ProductionYear || spotlightItem.PremiereDate?.slice(0, 4)}
+                    </span>
+                  )}
+                  {formatSeriesEpisodeBadge(spotlightItem) && (
+                    <span className="px-2 py-0.5 rounded-md bg-sky-500/20 border border-sky-400/30 text-sky-300 text-[11px] font-semibold flex items-center space-x-1">
+                      <Tv className="w-3 h-3 text-sky-400" />
+                      <span>{formatSeriesEpisodeBadge(spotlightItem)}</span>
                     </span>
                   )}
                   <span className="px-2 py-0.5 rounded-md bg-white/[0.08] text-slate-300 text-[11px] font-medium font-mono uppercase">

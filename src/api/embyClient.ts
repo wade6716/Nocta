@@ -89,6 +89,9 @@ export interface EmbyItem {
   ServerId?: string;
   ServerName?: string;
   ServerUrl?: string;
+  ChildCount?: number;
+  RecursiveItemCount?: number;
+  Status?: string;
 }
 
 /**
@@ -117,6 +120,55 @@ export function isVideoMedia(item: EmbyItem): boolean {
     item.Type === 'Series' ||
     item.MediaType === 'Video'
   );
+}
+
+/**
+ * 格式化剧集总集数 / 媒体文件数角标
+ * 规则：
+ * 1. 电视剧 (Series)：
+ *    - 优先使用 RecursiveItemCount（递归包含的总集数/媒体文件数）
+ *    - 连载中 (Status === 'Continuing') -> "更新至 X 集"
+ *    - 已完结 (Status === 'Ended') -> "全 X 集"
+ *    - 其它状态 -> "共 X 集"
+ *    - 若无 RecursiveItemCount 但有 ChildCount 且 > 0 -> "共 X 季"
+ * 2. 剧集单集 (Episode)：
+ *    - 若有 IndexNumber -> "第 X 集"
+ * 3. 其他非剧集内容 (Movie 等) -> null
+ */
+export function formatSeriesEpisodeBadge(item: EmbyItem): string | null {
+  if (!item) return null;
+
+  if (item.Type === 'Series') {
+    const episodeCount =
+      typeof item.RecursiveItemCount === 'number' && item.RecursiveItemCount > 0
+        ? item.RecursiveItemCount
+        : undefined;
+
+    if (episodeCount !== undefined) {
+      const status = (item.Status || '').toLowerCase();
+      if (status === 'continuing') {
+        return `更新至 ${episodeCount} 集`;
+      }
+      if (status === 'ended') {
+        return `全 ${episodeCount} 集`;
+      }
+      return `共 ${episodeCount} 集`;
+    }
+
+    if (typeof item.ChildCount === 'number' && item.ChildCount > 0) {
+      return `共 ${item.ChildCount} 季`;
+    }
+
+    return null;
+  }
+
+  if (item.Type === 'Episode') {
+    if (typeof item.IndexNumber === 'number') {
+      return `第 ${item.IndexNumber} 集`;
+    }
+  }
+
+  return null;
 }
 
 export interface EmbyPlaybackInfoResponse {
@@ -245,7 +297,7 @@ export async function getUserViews(
  * 支持双重降级兜底，兼容所有 Emby 服务器版本
  */
 const PLAYBACK_MEDIA_FIELDS =
-  'PrimaryImageAspectRatio,BasicSyncInfo,MediaSources,Path,Overview,UserData,SeriesPrimaryImageTag,SeriesThumbImageTag,ParentThumbImageTag,ImageTags,BackdropImageTags,SeriesInfo';
+  'PrimaryImageAspectRatio,BasicSyncInfo,MediaSources,Path,Overview,UserData,SeriesPrimaryImageTag,SeriesThumbImageTag,ParentThumbImageTag,ImageTags,BackdropImageTags,SeriesInfo,ChildCount,RecursiveItemCount,Status';
 
 /**
  * 获取继续观看列表 (GET /emby/Users/{UserId}/Items/Resume)
@@ -401,7 +453,7 @@ export async function getLatestItems(
   limit = 16
 ): Promise<EmbyItem[]> {
   const base = normalizeServerUrl(serverUrl);
-  const url = `${base}/emby/Users/${userId}/Items/Latest?ParentId=${parentId}&Limit=${limit}&Fields=PrimaryImageAspectRatio,BasicSyncInfo,Overview`;
+  const url = `${base}/emby/Users/${userId}/Items/Latest?ParentId=${parentId}&Limit=${limit}&Fields=PrimaryImageAspectRatio,BasicSyncInfo,Overview,ChildCount,RecursiveItemCount,Status`;
   const res = await httpClient(url, {
     method: 'GET',
     headers: buildEmbyHeaders(userId, accessToken),
@@ -874,7 +926,7 @@ export async function searchMediaItems(
 
   // 1. 如果显式指定了某一个具体的媒体库 (parentId)，直接精准深度查询该库
   if (params.parentId && params.parentId !== 'All') {
-    const url = `${base}/emby/Users/${userId}/Items?ParentId=${params.parentId}&SearchTerm=${encodedTerm}&IncludeItemTypes=${includeTypes}&Recursive=true&Limit=${limit}&Fields=PrimaryImageAspectRatio,Overview,ProductionYear,PremiereDate,CommunityRating,UserData`;
+    const url = `${base}/emby/Users/${userId}/Items?ParentId=${params.parentId}&SearchTerm=${encodedTerm}&IncludeItemTypes=${includeTypes}&Recursive=true&Limit=${limit}&Fields=PrimaryImageAspectRatio,Overview,ProductionYear,PremiereDate,CommunityRating,UserData,ChildCount,RecursiveItemCount,Status`;
     try {
       const res = await httpClient(url, { method: 'GET', headers });
       if (res.ok) {
@@ -906,7 +958,7 @@ export async function searchMediaItems(
   const tasks: Promise<{ item: EmbyItem; viewName?: string; viewId?: string }[]>[] = [];
 
   // Task A: 全局用户目录深度递归查询
-  const globalUrl = `${base}/emby/Users/${userId}/Items?SearchTerm=${encodedTerm}&IncludeItemTypes=${includeTypes}&Recursive=true&Limit=${limit}&Fields=PrimaryImageAspectRatio,Overview,ProductionYear,PremiereDate,CommunityRating,UserData`;
+  const globalUrl = `${base}/emby/Users/${userId}/Items?SearchTerm=${encodedTerm}&IncludeItemTypes=${includeTypes}&Recursive=true&Limit=${limit}&Fields=PrimaryImageAspectRatio,Overview,ProductionYear,PremiereDate,CommunityRating,UserData,ChildCount,RecursiveItemCount,Status`;
   tasks.push(
     httpClient(globalUrl, { method: 'GET', headers })
       .then(async (res) => (res.ok ? (await res.json()).Items || [] : []))
@@ -916,7 +968,7 @@ export async function searchMediaItems(
 
   // Task B: 对每个具体媒体库并发按 ParentId 检索（穿透 Emby 服务器对部分库排除在全局搜索外的限制）
   for (const view of views) {
-    const viewUrl = `${base}/emby/Users/${userId}/Items?ParentId=${view.Id}&SearchTerm=${encodedTerm}&IncludeItemTypes=${includeTypes}&Recursive=true&Limit=${limit}&Fields=PrimaryImageAspectRatio,Overview,ProductionYear,PremiereDate,CommunityRating,UserData`;
+    const viewUrl = `${base}/emby/Users/${userId}/Items?ParentId=${view.Id}&SearchTerm=${encodedTerm}&IncludeItemTypes=${includeTypes}&Recursive=true&Limit=${limit}&Fields=PrimaryImageAspectRatio,Overview,ProductionYear,PremiereDate,CommunityRating,UserData,ChildCount,RecursiveItemCount,Status`;
     tasks.push(
       httpClient(viewUrl, { method: 'GET', headers })
         .then(async (res) => (res.ok ? (await res.json()).Items || [] : []))
@@ -984,6 +1036,15 @@ export async function searchMediaItems(
           if (!existing.UserData && it.UserData) existing.UserData = it.UserData;
           if (!existing.PrimaryImageAspectRatio && it.PrimaryImageAspectRatio) {
             existing.PrimaryImageAspectRatio = it.PrimaryImageAspectRatio;
+          }
+          if (existing.RecursiveItemCount === undefined && it.RecursiveItemCount !== undefined) {
+            existing.RecursiveItemCount = it.RecursiveItemCount;
+          }
+          if (existing.ChildCount === undefined && it.ChildCount !== undefined) {
+            existing.ChildCount = it.ChildCount;
+          }
+          if (!existing.Status && it.Status) {
+            existing.Status = it.Status;
           }
         }
       }

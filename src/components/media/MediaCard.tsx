@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { Play, Check, Server } from 'lucide-react';
-import { EmbyItem, buildItemImageUrl } from '../../api/embyClient';
+import { Play, Check, Server, Tv } from 'lucide-react';
+import { EmbyItem, buildItemImageUrl, formatSeriesEpisodeBadge } from '../../api/embyClient';
 
 interface MediaCardProps {
   item: EmbyItem;
@@ -10,6 +10,7 @@ interface MediaCardProps {
   subtitle?: string;
   badge?: string;
   serverBadge?: string;
+  episodeBadge?: string;
 }
 
 export const MediaCard: React.FC<MediaCardProps> = ({
@@ -20,10 +21,13 @@ export const MediaCard: React.FC<MediaCardProps> = ({
   subtitle,
   badge,
   serverBadge,
+  episodeBadge,
 }) => {
   const isBackdrop = aspectRatio === 'backdrop';
   const [isImageLoaded, setIsImageLoaded] = useState(false);
   const effectiveServerUrl = item.ServerUrl || serverUrl;
+  const effectiveEpisodeBadge =
+    episodeBadge !== undefined ? episodeBadge : formatSeriesEpisodeBadge(item);
 
   // 智能图片寻址：
   // 1. 如果是剧集分集（Episode）在竖版海报（poster）模式下，使用父级剧集的 SeriesPrimaryImageTag
@@ -140,6 +144,14 @@ export const MediaCard: React.FC<MediaCardProps> = ({
             <span>已看</span>
           </div>
         ) : null}
+
+        {/* Episode count badge on bottom right (角标：展示包含多少集/媒体文件) */}
+        {effectiveEpisodeBadge && (
+          <div className="absolute bottom-2 right-2 px-1.5 py-0.5 rounded-md bg-[#0B0E17]/85 backdrop-blur-md text-[10px] font-semibold text-sky-300 border border-sky-400/25 flex items-center space-x-1 shadow-lg z-10 select-none">
+            <Tv className="w-2.5 h-2.5 flex-shrink-0 text-sky-400" />
+            <span>{effectiveEpisodeBadge}</span>
+          </div>
+        )}
 
         {/* Resume progress bar (规范：h-1 w-full bg-white/20, 已看进度条为 bg-[#38BDF8]) */}
         {progressPercent > 0 && (

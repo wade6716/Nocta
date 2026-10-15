@@ -24,11 +24,34 @@ import {
   Palette,
   Volume2,
   Cpu,
+  FolderSync,
+  Download,
+  Upload,
+  Copy,
+  Lock,
+  Unlock,
+  FileText,
+  CheckCheck,
+  HardDrive,
+  Cloud,
+  Network,
+  ShieldCheck,
+  ArrowUpDown,
 } from 'lucide-react';
 import { useAuthStore, SavedServer } from '../stores/useAuthStore';
 import { useDanmuStore, DanmuServerEntry } from '../stores/useDanmuStore';
 import { usePlayerStore, DanmakuColorMode } from '../stores/usePlayerStore';
 import { useMediaStore } from '../stores/useMediaStore';
+import { useSyncStore, SyncProviderType } from '../stores/useSyncStore';
+import {
+  exportLocalConfig,
+  parseBackupPayload,
+  applyConfigToStores,
+  downloadBackupFile,
+  copyBackupToClipboard,
+  NoctaBackupPayload,
+  ConfigStats,
+} from '../services/configBackupService';
 import {
   testServerConnection,
   authenticateByName,
@@ -36,7 +59,7 @@ import {
 } from '../api/embyClient';
 import { ProxyConfig, ProxyType, fetchSystemProxy } from '../api/http';
 
-type TabKey = 'servers' | 'danmu' | 'danmaku_pref' | 'playback' | 'network' | 'about';
+type TabKey = 'servers' | 'danmu' | 'danmaku_pref' | 'playback' | 'network' | 'sync' | 'about';
 
 export const SettingsPage: React.FC = () => {
   const navigate = useNavigate();
@@ -281,6 +304,139 @@ export const SettingsPage: React.FC = () => {
     }
   };
 
+  // 导出导入与多端同步状态
+  const syncStore = useSyncStore();
+  const [exportIncludeSecrets, setExportIncludeSecrets] = useState(true);
+  const [exportPassphrase, setExportPassphrase] = useState('');
+  const [exporting, setExporting] = useState(false);
+  const [copiedToast, setCopiedToast] = useState(false);
+
+  const fileInputRef = React.useRef<HTMLInputElement | null>(null);
+  const [importFileText, setImportFileText] = useState<string | null>(null);
+  const [importFileName, setImportFileName] = useState<string>('');
+  const [importPayloadPreview, setImportPayloadPreview] = useState<NoctaBackupPayload | null>(null);
+  const [importPassphrase, setImportPassphrase] = useState('');
+  const [importMode, setImportMode] = useState<'merge' | 'replace'>('merge');
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importSuccessMsg, setImportSuccessMsg] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+
+  const [syncTesting, setSyncTesting] = useState(false);
+  const [syncTestResult, setSyncTestResult] = useState<{
+    ok: boolean;
+    fileExists: boolean;
+    latency: number;
+    error?: string;
+  } | null>(null);
+  const [syncActionMsg, setSyncActionMsg] = useState<{ text: string; ok: boolean } | null>(null);
+  const [showSyncPassphrase, setShowSyncPassphrase] = useState(false);
+  const [showSmbPassword, setShowSmbPassword] = useState(false);
+  const [showWebDavPassword, setShowWebDavPassword] = useState(false);
+  const [showS3Secret, setShowS3Secret] = useState(false);
+
+  const handleDownloadExport = async () => {
+    try {
+      setExporting(true);
+      const payload = await exportLocalConfig({
+        includeSecrets: exportIncludeSecrets,
+        passphrase: exportPassphrase.trim() || undefined,
+      });
+      downloadBackupFile(payload);
+    } catch (e: any) {
+      alert(`导出备份文件失败: ${e.message}`);
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handleCopyExport = async () => {
+    try {
+      setExporting(true);
+      const payload = await exportLocalConfig({
+        includeSecrets: exportIncludeSecrets,
+        passphrase: exportPassphrase.trim() || undefined,
+      });
+      await copyBackupToClipboard(payload);
+      setCopiedToast(true);
+      setTimeout(() => setCopiedToast(false), 2000);
+    } catch (e: any) {
+      alert(`复制失败: ${e.message}`);
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImportFileName(file.name);
+    setImportError(null);
+    setImportSuccessMsg(null);
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const content = event.target?.result as string;
+      setImportFileText(content);
+      try {
+        const parsed = JSON.parse(content);
+        setImportPayloadPreview(parsed);
+      } catch {
+        setImportError('文件内容不是有效的 JSON 格式');
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const handleExecuteImport = async () => {
+    if (!importFileText) {
+      setImportError('请先选择备份文件');
+      return;
+    }
+    setImporting(true);
+    setImportError(null);
+    setImportSuccessMsg(null);
+
+    try {
+      const { data } = await parseBackupPayload(
+        importFileText,
+        importPassphrase.trim() || undefined
+      );
+      const stats = applyConfigToStores(data, importMode);
+      setImportSuccessMsg(
+        `导入成功！已应用 ${stats.serverCount} 个服务器、${stats.danmuServerCount} 个弹幕节点、${stats.bindingCount} 个弹幕绑定`
+      );
+    } catch (err: any) {
+      setImportError(err.message || '导入配置失败');
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const handleTestSync = async () => {
+    setSyncTesting(true);
+    setSyncTestResult(null);
+    setSyncActionMsg(null);
+    try {
+      const res = await syncStore.testConnection();
+      setSyncTestResult(res);
+    } catch (err: any) {
+      setSyncTestResult({
+        ok: false,
+        fileExists: false,
+        latency: 0,
+        error: err.message || '测试失败',
+      });
+    } finally {
+      setSyncTesting(false);
+    }
+  };
+
+  const handleSyncNow = async (mode: 'smart_merge' | 'upload_only' | 'download_only') => {
+    setSyncActionMsg(null);
+    const res = await syncStore.syncNow(mode);
+    setSyncActionMsg({ text: res.message, ok: res.success });
+  };
+
   return (
     <div className="w-full min-h-full py-6 px-8 select-none">
       {/* 顶部标题栏 */}
@@ -312,6 +468,7 @@ export const SettingsPage: React.FC = () => {
             { id: 'danmaku_pref', label: '弹幕偏好', icon: Sliders },
             { id: 'playback', label: '播放与内核', icon: PlaySquare },
             { id: 'network', label: '网络与代理', icon: Globe },
+            { id: 'sync', label: '配置同步与备份', icon: FolderSync },
             { id: 'about', label: '关于 Nocta', icon: Info },
           ].map((item) => {
             const Icon = item.icon;
@@ -1105,7 +1262,735 @@ export const SettingsPage: React.FC = () => {
             </div>
           )}
 
-          {/* 6. 关于 Nocta 面板 */}
+          {/* 6. 配置同步与备份面板 */}
+          {activeTab === 'sync' && (
+            <div className="space-y-8">
+              {/* 顶部标题区 */}
+              <div className="border-b border-white/10 pb-4">
+                <h2 className="text-base font-bold text-white flex items-center space-x-2">
+                  <FolderSync className="w-5 h-5 text-primary" />
+                  <span>配置同步与备份</span>
+                </h2>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  支持本地 JSON 配置文件导出导入（可脱敏与加密），并可通过 WebDAV、S3、SMB 实现全量配置的多设备无缝流转
+                </p>
+              </div>
+
+              {/* 模块 1：本地文件备份与还原 */}
+              <div className="space-y-4">
+                <div className="flex items-center space-x-2 text-xs font-semibold text-white">
+                  <HardDrive className="w-4 h-4 text-primary" />
+                  <span>本地文件备份与恢复</span>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  {/* 导出卡片 */}
+                  <div className="bg-white/5 border border-white/10 rounded-xl p-4 flex flex-col justify-between space-y-4">
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-2">
+                          <Download className="w-4 h-4 text-primary" />
+                          <h3 className="text-sm font-semibold text-white">导出配置</h3>
+                        </div>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 text-gray-400">
+                          JSON 格式
+                        </span>
+                      </div>
+
+                      <p className="text-xs text-gray-400">
+                        将 Emby 服务器列表、弹幕 API 节点、弹幕偏好、手动匹配绑定及画面布局导出为标准备份文件。
+                      </p>
+
+                      <div className="p-2.5 rounded-lg bg-black/30 border border-white/5 space-y-1.5 text-[11px] text-gray-400">
+                        <div className="flex justify-between">
+                          <span>包含数据概览：</span>
+                          <span className="text-gray-300 font-mono">
+                            {embyServers.length} 个服务器 · {danmuServers.length} 个弹幕节点
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* 脱敏开关 */}
+                      <label className="flex items-center space-x-2 text-xs text-gray-300 cursor-pointer pt-1">
+                        <input
+                          type="checkbox"
+                          checked={exportIncludeSecrets}
+                          onChange={(e) => setExportIncludeSecrets(e.target.checked)}
+                          className="rounded border-white/20 text-primary focus:ring-primary accent-primary"
+                        />
+                        <span>包含登录密码与 Token (若取消勾选则进行安全脱敏)</span>
+                      </label>
+
+                      {/* 可选密码加密 */}
+                      <div>
+                        <label className="text-[11px] text-gray-400 block mb-1">
+                          备份文件加密密码 (可选，留空则为明文 JSON)
+                        </label>
+                        <input
+                          type="password"
+                          value={exportPassphrase}
+                          onChange={(e) => setExportPassphrase(e.target.value)}
+                          placeholder="设置文件密码 (AES-256-GCM 加密)"
+                          className="w-full px-3 py-1.5 bg-black/30 border border-white/10 rounded-lg text-xs text-white placeholder-gray-500 focus:outline-none focus:border-primary"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex items-center space-x-2 pt-2 border-t border-white/5">
+                      <button
+                        onClick={handleDownloadExport}
+                        disabled={exporting}
+                        className="flex-1 flex items-center justify-center space-x-1.5 px-3 py-2 rounded-lg bg-primary hover:bg-primary/90 text-white text-xs font-medium transition cursor-pointer"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span>下载备份文件</span>
+                      </button>
+                      <button
+                        onClick={handleCopyExport}
+                        disabled={exporting}
+                        className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-gray-300 hover:text-white text-xs font-medium transition cursor-pointer flex items-center space-x-1"
+                        title="复制 JSON 文本"
+                      >
+                        {copiedToast ? (
+                          <>
+                            <Check className="w-3.5 h-3.5 text-emerald-400" />
+                            <span className="text-emerald-400">已复制</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3.5 h-3.5" />
+                            <span>复制</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 导入卡片 */}
+                  <div className="bg-white/5 border border-white/10 rounded-xl p-4 flex flex-col justify-between space-y-4">
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center space-x-2">
+                          <Upload className="w-4 h-4 text-primary" />
+                          <h3 className="text-sm font-semibold text-white">导入配置</h3>
+                        </div>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 text-gray-400">
+                          本地恢复
+                        </span>
+                      </div>
+
+                      {/* 隐藏的 input[file] */}
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept=".json,application/json"
+                        onChange={handleFileChange}
+                        className="hidden"
+                      />
+
+                      {/* 文件选择区 */}
+                      {!importFileText ? (
+                        <div
+                          onClick={() => fileInputRef.current?.click()}
+                          className="border border-dashed border-white/20 hover:border-primary/60 rounded-xl p-5 text-center cursor-pointer transition bg-black/20 hover:bg-black/30 flex flex-col items-center justify-center space-y-2"
+                        >
+                          <FileText className="w-6 h-6 text-gray-400" />
+                          <div className="text-xs text-gray-300">
+                            点击选择备份文件，或将 <span className="text-primary font-mono">.json</span> 拖入此处
+                          </div>
+                          <div className="text-[10px] text-gray-500">仅支持 Nocta 导出的有效配置备份文件</div>
+                        </div>
+                      ) : (
+                        <div className="space-y-3 bg-black/30 border border-white/10 rounded-xl p-3">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center space-x-2 truncate">
+                              <FileText className="w-4 h-4 text-primary flex-shrink-0" />
+                              <span className="text-xs text-white truncate font-medium">
+                                {importFileName}
+                              </span>
+                            </div>
+                            <button
+                              onClick={() => {
+                                setImportFileText(null);
+                                setImportFileName('');
+                                setImportPayloadPreview(null);
+                                setImportError(null);
+                                setImportSuccessMsg(null);
+                              }}
+                              className="text-[11px] text-gray-400 hover:text-white underline cursor-pointer"
+                            >
+                              重选
+                            </button>
+                          </div>
+
+                          {importPayloadPreview?.encrypted && (
+                            <div className="flex items-center space-x-1.5 text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 p-2 rounded-lg">
+                              <Lock className="w-3.5 h-3.5 flex-shrink-0" />
+                              <span>该文件为加密备份，需输入密码解密</span>
+                            </div>
+                          )}
+
+                          {importPayloadPreview?.encrypted && (
+                            <div>
+                              <label className="text-[11px] text-gray-400 block mb-1">解密密码</label>
+                              <input
+                                type="password"
+                                value={importPassphrase}
+                                onChange={(e) => setImportPassphrase(e.target.value)}
+                                placeholder="输入该备份文件的加密密码"
+                                className="w-full px-3 py-1.5 bg-white/5 border border-white/10 rounded-lg text-xs text-white placeholder-gray-500 focus:outline-none focus:border-primary"
+                              />
+                            </div>
+                          )}
+
+                          {/* 导入模式 */}
+                          <div className="space-y-1 pt-1">
+                            <label className="text-[11px] text-gray-400 block">导入模式</label>
+                            <div className="grid grid-cols-2 gap-2 text-xs">
+                              <button
+                                type="button"
+                                onClick={() => setImportMode('merge')}
+                                className={`px-2.5 py-1.5 rounded-lg border text-left transition cursor-pointer ${
+                                  importMode === 'merge'
+                                    ? 'bg-primary/20 border-primary text-white'
+                                    : 'bg-white/5 border-white/10 text-gray-400 hover:text-white'
+                                }`}
+                              >
+                                <div className="font-semibold text-[11px]">智能合并 (推荐)</div>
+                                <div className="text-[9px] text-gray-400 mt-0.5">保留并整合现有项</div>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setImportMode('replace')}
+                                className={`px-2.5 py-1.5 rounded-lg border text-left transition cursor-pointer ${
+                                  importMode === 'replace'
+                                    ? 'bg-red-500/20 border-red-500 text-white'
+                                    : 'bg-white/5 border-white/10 text-gray-400 hover:text-white'
+                                }`}
+                              >
+                                <div className="font-semibold text-[11px]">全量覆盖</div>
+                                <div className="text-[9px] text-gray-400 mt-0.5">彻底替换本机全部项</div>
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {importError && (
+                        <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 p-2.5 rounded-lg">
+                          {importError}
+                        </div>
+                      )}
+                      {importSuccessMsg && (
+                        <div className="text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 p-2.5 rounded-lg">
+                          {importSuccessMsg}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="pt-2 border-t border-white/5">
+                      <button
+                        onClick={handleExecuteImport}
+                        disabled={!importFileText || importing}
+                        className={`w-full flex items-center justify-center space-x-1.5 px-3 py-2 rounded-lg text-xs font-medium transition cursor-pointer ${
+                          importFileText
+                            ? 'bg-primary hover:bg-primary/90 text-white'
+                            : 'bg-white/5 text-gray-500 cursor-not-allowed'
+                        }`}
+                      >
+                        {importing ? (
+                          <>
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                            <span>正在导入...</span>
+                          </>
+                        ) : (
+                          <>
+                            <CheckCheck className="w-3.5 h-3.5" />
+                            <span>确认执行导入</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* 模块 2：多端远程同步 (WebDAV / S3 / SMB) */}
+              <div className="space-y-4 pt-2">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-white/10 pt-6">
+                  <div>
+                    <div className="flex items-center space-x-2 text-xs font-semibold text-white">
+                      <Cloud className="w-4 h-4 text-primary" />
+                      <span>多端远程同步 (Multi-Device Sync)</span>
+                    </div>
+                    <p className="text-[11px] text-gray-400 mt-0.5">
+                      通过云端或局域网存储在手机、平板、HTPC 与 PC 间自动保持配置同步
+                    </p>
+                  </div>
+
+                  <div className="flex items-center space-x-4">
+                    <label className="flex items-center space-x-2 text-xs text-gray-300 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={syncStore.autoSyncOnStartup}
+                        onChange={(e) =>
+                          syncStore.updateSyncConfig({ autoSyncOnStartup: e.target.checked })
+                        }
+                        className="rounded border-white/20 text-primary focus:ring-primary accent-primary"
+                      />
+                      <span>启动时自动同步</span>
+                    </label>
+
+                    <label className="flex items-center space-x-2 text-xs text-gray-300 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={syncStore.enabled}
+                        onChange={(e) => syncStore.updateSyncConfig({ enabled: e.target.checked })}
+                        className="rounded border-white/20 text-primary focus:ring-primary accent-primary"
+                      />
+                      <span className="font-semibold text-white">启用配置同步</span>
+                    </label>
+                  </div>
+                </div>
+
+                {/* 协议选择标签页 */}
+                <div className="flex items-center space-x-2 border-b border-white/10 pb-2">
+                  {[
+                    { id: 'webdav', label: 'WebDAV 网盘', desc: '坚果云 / Nextcloud / Alist' },
+                    { id: 's3', label: 'S3 对象存储', desc: 'AWS / Cloudflare R2 / MinIO' },
+                    { id: 'smb', label: 'SMB 局域网共享', desc: '家庭 NAS / Windows 共享' },
+                  ].map((tab) => {
+                    const isSelected = syncStore.provider === tab.id;
+                    return (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        onClick={() =>
+                          syncStore.updateSyncConfig({ provider: tab.id as SyncProviderType })
+                        }
+                        className={`px-3.5 py-2 rounded-xl text-xs font-medium transition cursor-pointer text-left ${
+                          isSelected
+                            ? 'bg-primary text-white shadow-md shadow-primary/20'
+                            : 'bg-white/5 text-gray-400 hover:text-white hover:bg-white/10'
+                        }`}
+                      >
+                        <div className="font-semibold">{tab.label}</div>
+                        <div className={`text-[9px] mt-0.5 ${isSelected ? 'text-white/80' : 'text-gray-500'}`}>
+                          {tab.desc}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* 对应协议表单 */}
+                <div className="bg-black/30 border border-white/10 rounded-xl p-5 space-y-4">
+                  {/* WebDAV 表单 */}
+                  {syncStore.provider === 'webdav' && (
+                    <div className="space-y-4">
+                      <div className="text-xs text-gray-400">
+                        支持任意兼容标准 WebDAV 的网盘服务（坚果云、Nextcloud、Alist 等）。
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="md:col-span-2">
+                          <label className="text-[11px] text-gray-400 block mb-1">
+                            WebDAV 目录地址 (URL)
+                          </label>
+                          <input
+                            type="text"
+                            value={syncStore.webdav.url}
+                            onChange={(e) => syncStore.updateWebDavConfig({ url: e.target.value })}
+                            placeholder="如：https://dav.jianguoyun.com/dav/nocta/ 或 http://192.168.1.100:5244/dav/nocta/"
+                            className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-xl text-xs text-white placeholder-gray-500 focus:outline-none focus:border-primary font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[11px] text-gray-400 block mb-1">用户名 / 账号</label>
+                          <input
+                            type="text"
+                            value={syncStore.webdav.username}
+                            onChange={(e) =>
+                              syncStore.updateWebDavConfig({ username: e.target.value })
+                            }
+                            placeholder="如：user@example.com"
+                            className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-xl text-xs text-white placeholder-gray-500 focus:outline-none focus:border-primary"
+                          />
+                        </div>
+                        <div>
+                          <div className="flex justify-between items-center mb-1">
+                            <label className="text-[11px] text-gray-400">密码 / 应用专有密码</label>
+                            <button
+                              type="button"
+                              onClick={() => setShowWebDavPassword(!showWebDavPassword)}
+                              className="text-[10px] text-gray-400 hover:text-white"
+                            >
+                              {showWebDavPassword ? '隐藏' : '显示'}
+                            </button>
+                          </div>
+                          <input
+                            type={showWebDavPassword ? 'text' : 'password'}
+                            value={syncStore.webdav.password || ''}
+                            onChange={(e) =>
+                              syncStore.updateWebDavConfig({ password: e.target.value })
+                            }
+                            placeholder="网盘密码或 WebDAV 授权密码"
+                            className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-xl text-xs text-white placeholder-gray-500 focus:outline-none focus:border-primary font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[11px] text-gray-400 block mb-1">远端同步文件名</label>
+                          <input
+                            type="text"
+                            value={syncStore.webdav.fileName || 'nocta-sync.json'}
+                            onChange={(e) =>
+                              syncStore.updateWebDavConfig({ fileName: e.target.value })
+                            }
+                            placeholder="nocta-sync.json"
+                            className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-xl text-xs text-white placeholder-gray-500 focus:outline-none focus:border-primary font-mono"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* S3 表单 */}
+                  {syncStore.provider === 's3' && (
+                    <div className="space-y-4">
+                      <div className="text-xs text-gray-400">
+                        兼容 AWS S3、Cloudflare R2、MinIO、阿里云 OSS 及腾讯云 COS 等兼容 S3 的对象存储服务。
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="md:col-span-2">
+                          <label className="text-[11px] text-gray-400 block mb-1">
+                            S3 服务端点 (Endpoint URL)
+                          </label>
+                          <input
+                            type="text"
+                            value={syncStore.s3.endpoint}
+                            onChange={(e) => syncStore.updateS3Config({ endpoint: e.target.value })}
+                            placeholder="如：https://<account>.r2.cloudflarestorage.com 或 http://192.168.1.100:9000"
+                            className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-xl text-xs text-white placeholder-gray-500 focus:outline-none focus:border-primary font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[11px] text-gray-400 block mb-1">Bucket 存储桶名称</label>
+                          <input
+                            type="text"
+                            value={syncStore.s3.bucket}
+                            onChange={(e) => syncStore.updateS3Config({ bucket: e.target.value })}
+                            placeholder="如：nocta-sync"
+                            className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-xl text-xs text-white placeholder-gray-500 focus:outline-none focus:border-primary font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[11px] text-gray-400 block mb-1">区域 (Region)</label>
+                          <input
+                            type="text"
+                            value={syncStore.s3.region || 'auto'}
+                            onChange={(e) => syncStore.updateS3Config({ region: e.target.value })}
+                            placeholder="auto 或 us-east-1"
+                            className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-xl text-xs text-white placeholder-gray-500 focus:outline-none focus:border-primary font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[11px] text-gray-400 block mb-1">Access Key ID</label>
+                          <input
+                            type="text"
+                            value={syncStore.s3.accessKeyId}
+                            onChange={(e) =>
+                              syncStore.updateS3Config({ accessKeyId: e.target.value })
+                            }
+                            placeholder="S3 访问密钥 ID"
+                            className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-xl text-xs text-white placeholder-gray-500 focus:outline-none focus:border-primary font-mono"
+                          />
+                        </div>
+                        <div>
+                          <div className="flex justify-between items-center mb-1">
+                            <label className="text-[11px] text-gray-400">Secret Access Key</label>
+                            <button
+                              type="button"
+                              onClick={() => setShowS3Secret(!showS3Secret)}
+                              className="text-[10px] text-gray-400 hover:text-white"
+                            >
+                              {showS3Secret ? '隐藏' : '显示'}
+                            </button>
+                          </div>
+                          <input
+                            type={showS3Secret ? 'text' : 'password'}
+                            value={syncStore.s3.secretAccessKey}
+                            onChange={(e) =>
+                              syncStore.updateS3Config({ secretAccessKey: e.target.value })
+                            }
+                            placeholder="S3 私有访问秘钥"
+                            className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-xl text-xs text-white placeholder-gray-500 focus:outline-none focus:border-primary font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[11px] text-gray-400 block mb-1">路径前缀 (Prefix，可选)</label>
+                          <input
+                            type="text"
+                            value={syncStore.s3.prefix || 'nocta/'}
+                            onChange={(e) => syncStore.updateS3Config({ prefix: e.target.value })}
+                            placeholder="nocta/"
+                            className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-xl text-xs text-white placeholder-gray-500 focus:outline-none focus:border-primary font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[11px] text-gray-400 block mb-1">远端同步文件名</label>
+                          <input
+                            type="text"
+                            value={syncStore.s3.fileName || 'nocta-sync.json'}
+                            onChange={(e) => syncStore.updateS3Config({ fileName: e.target.value })}
+                            placeholder="nocta-sync.json"
+                            className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-xl text-xs text-white placeholder-gray-500 focus:outline-none focus:border-primary font-mono"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* SMB 表单 */}
+                  {syncStore.provider === 'smb' && (
+                    <div className="space-y-4">
+                      <div className="text-xs text-gray-400">
+                        支持局域网 NAS (群晖、极空间、威联通、TrueNAS) 及 Windows 网络文件共享。
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="text-[11px] text-gray-400 block mb-1">主机名或 IP 地址</label>
+                          <input
+                            type="text"
+                            value={syncStore.smb.host}
+                            onChange={(e) => syncStore.updateSmbConfig({ host: e.target.value })}
+                            placeholder="如：192.168.1.100 或 nas.local"
+                            className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-xl text-xs text-white placeholder-gray-500 focus:outline-none focus:border-primary font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[11px] text-gray-400 block mb-1">共享文件夹名称 (Share)</label>
+                          <input
+                            type="text"
+                            value={syncStore.smb.share}
+                            onChange={(e) => syncStore.updateSmbConfig({ share: e.target.value })}
+                            placeholder="如：share 或 media 或 backup"
+                            className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-xl text-xs text-white placeholder-gray-500 focus:outline-none focus:border-primary font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[11px] text-gray-400 block mb-1">子目录相对路径 (Path，可选)</label>
+                          <input
+                            type="text"
+                            value={syncStore.smb.path || 'nocta'}
+                            onChange={(e) => syncStore.updateSmbConfig({ path: e.target.value })}
+                            placeholder="nocta"
+                            className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-xl text-xs text-white placeholder-gray-500 focus:outline-none focus:border-primary font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[11px] text-gray-400 block mb-1">用户名 (可选，匿名可留空)</label>
+                          <input
+                            type="text"
+                            value={syncStore.smb.username || ''}
+                            onChange={(e) =>
+                              syncStore.updateSmbConfig({ username: e.target.value })
+                            }
+                            placeholder="NAS 账号或 Windows 账号"
+                            className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-xl text-xs text-white placeholder-gray-500 focus:outline-none focus:border-primary"
+                          />
+                        </div>
+                        <div>
+                          <div className="flex justify-between items-center mb-1">
+                            <label className="text-[11px] text-gray-400">密码 (可选)</label>
+                            <button
+                              type="button"
+                              onClick={() => setShowSmbPassword(!showSmbPassword)}
+                              className="text-[10px] text-gray-400 hover:text-white"
+                            >
+                              {showSmbPassword ? '隐藏' : '显示'}
+                            </button>
+                          </div>
+                          <input
+                            type={showSmbPassword ? 'text' : 'password'}
+                            value={syncStore.smb.password || ''}
+                            onChange={(e) =>
+                              syncStore.updateSmbConfig({ password: e.target.value })
+                            }
+                            placeholder="SMB 共享登录密码"
+                            className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-xl text-xs text-white placeholder-gray-500 focus:outline-none focus:border-primary font-mono"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[11px] text-gray-400 block mb-1">远端同步文件名</label>
+                          <input
+                            type="text"
+                            value={syncStore.smb.fileName || 'nocta-sync.json'}
+                            onChange={(e) => syncStore.updateSmbConfig({ fileName: e.target.value })}
+                            placeholder="nocta-sync.json"
+                            className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-xl text-xs text-white placeholder-gray-500 focus:outline-none focus:border-primary font-mono"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 端到端加密设置 (全协议共享) */}
+                  <div className="border-t border-white/10 pt-4 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-1.5 text-xs font-semibold text-white">
+                        <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                        <span>端到端同步加密密码 (Passphrase，推荐设置)</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowSyncPassphrase(!showSyncPassphrase)}
+                        className="text-[11px] text-gray-400 hover:text-white"
+                      >
+                        {showSyncPassphrase ? '隐藏' : '显示'}
+                      </button>
+                    </div>
+
+                    <p className="text-[11px] text-gray-400">
+                      设置密码后，配置数据在离开本机前将由系统通过 <span className="text-white font-mono">AES-256-GCM</span> 强加密，云端仅存放密文，彻底保障 Emby 账号密码与 Token 绝不外泄。多台设备同步需填写相同的密码。
+                    </p>
+
+                    <input
+                      type={showSyncPassphrase ? 'text' : 'password'}
+                      value={syncStore.encryptionPassphrase}
+                      onChange={(e) =>
+                        syncStore.updateSyncConfig({ encryptionPassphrase: e.target.value })
+                      }
+                      placeholder="设置或填写同步解密密码 (留空则传输明文 JSON)"
+                      className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-xl text-xs text-white placeholder-gray-500 focus:outline-none focus:border-primary font-mono"
+                    />
+                  </div>
+                </div>
+
+                {/* 测试连接反馈与操作控制台 */}
+                <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                    <div className="space-y-1">
+                      <div className="flex items-center space-x-2">
+                        <span className="text-gray-400">同步状态：</span>
+                        {syncStore.lastSyncStatus === 'success' && (
+                          <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 text-[10px] font-semibold">
+                            同步正常
+                          </span>
+                        )}
+                        {syncStore.lastSyncStatus === 'error' && (
+                          <span className="px-2 py-0.5 rounded-full bg-red-500/20 text-red-400 text-[10px] font-semibold">
+                            上次失败
+                          </span>
+                        )}
+                        {syncStore.lastSyncStatus === 'syncing' && (
+                          <span className="px-2 py-0.5 rounded-full bg-primary/20 text-primary text-[10px] font-semibold animate-pulse">
+                            正在同步
+                          </span>
+                        )}
+                        {syncStore.lastSyncStatus === 'idle' && (
+                          <span className="px-2 py-0.5 rounded-full bg-gray-500/20 text-gray-400 text-[10px]">
+                            尚未同步
+                          </span>
+                        )}
+                        {syncStore.lastSyncTime && (
+                          <span className="text-[10px] text-gray-500">
+                            {new Date(syncStore.lastSyncTime).toLocaleString()}
+                          </span>
+                        )}
+                      </div>
+                      {syncStore.lastSyncMessage && (
+                        <div className="text-[11px] text-gray-400">{syncStore.lastSyncMessage}</div>
+                      )}
+                    </div>
+
+                    <button
+                      onClick={handleTestSync}
+                      disabled={syncTesting}
+                      className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-xs text-white transition cursor-pointer flex items-center space-x-1.5 self-start sm:self-center"
+                    >
+                      {syncTesting ? (
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Activity className="w-3.5 h-3.5" />
+                      )}
+                      <span>测试远程连接</span>
+                    </button>
+                  </div>
+
+                  {syncTestResult && (
+                    <div
+                      className={`text-xs p-3 rounded-lg border ${
+                        syncTestResult.ok
+                          ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                          : 'bg-red-500/10 border-red-500/20 text-red-400'
+                      }`}
+                    >
+                      {syncTestResult.ok
+                        ? `连接成功 · 延迟 ${syncTestResult.latency} ms · 远程文件：${
+                            syncTestResult.fileExists ? '已存在' : '尚未创建 (首次同步将自动初始化)'
+                          }`
+                        : `连接失败：${syncTestResult.error}`}
+                    </div>
+                  )}
+
+                  {syncActionMsg && (
+                    <div
+                      className={`text-xs p-3 rounded-lg border ${
+                        syncActionMsg.ok
+                          ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                          : 'bg-red-500/10 border-red-500/20 text-red-400'
+                      }`}
+                    >
+                      {syncActionMsg.text}
+                    </div>
+                  )}
+
+                  {/* 核心同步操作按钮栏 */}
+                  <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-white/5">
+                    <button
+                      onClick={() => handleSyncNow('smart_merge')}
+                      disabled={syncStore.isSyncing}
+                      className="flex-1 min-w-[180px] flex items-center justify-center space-x-2 px-4 py-2 rounded-xl bg-primary hover:bg-primary/90 text-white text-xs font-semibold shadow-lg shadow-primary/25 transition cursor-pointer"
+                    >
+                      {syncStore.isSyncing ? (
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <ArrowUpDown className="w-4 h-4" />
+                      )}
+                      <span>立即同步 (双向智能合并)</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        if (confirm('确定要将本机配置强制推送到远端覆盖吗？')) {
+                          handleSyncNow('upload_only');
+                        }
+                      }}
+                      disabled={syncStore.isSyncing}
+                      className="px-3.5 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-gray-300 hover:text-white text-xs font-medium transition cursor-pointer flex items-center space-x-1.5"
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>上传覆盖远程</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        if (confirm('确定要从远端全量拉取并覆盖本机所有配置吗？')) {
+                          handleSyncNow('download_only');
+                        }
+                      }}
+                      disabled={syncStore.isSyncing}
+                      className="px-3.5 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-gray-300 hover:text-white text-xs font-medium transition cursor-pointer flex items-center space-x-1.5"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>从远程拉取覆盖</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 7. 关于 Nocta 面板 */}
           {activeTab === 'about' && (
             <div className="space-y-6">
               <div className="flex items-center space-x-4 border-b border-white/10 pb-6">

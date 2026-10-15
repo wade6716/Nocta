@@ -90,6 +90,16 @@ interface PlayerState {
   resetVideoLayout: (key: string) => void;
   setEngineType: (type: 'mpv' | 'html5') => void;
   resetPlayer: () => void;
+  importPlayerConfigs: (
+    configs: {
+      danmakuSettings?: Partial<DanmakuSettings>;
+      itemOffsets?: Record<string, number>;
+      danmakuBindings?: Record<string, DanmakuBinding>;
+      videoLayouts?: Record<string, VideoLayoutConfig>;
+      engineType?: 'mpv' | 'html5';
+    },
+    mode?: 'merge' | 'replace'
+  ) => void;
 }
 
 const SETTINGS_KEY = 'emby_danmaku_settings';
@@ -339,6 +349,83 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       subtitleTracks: [],
       selectedAudioId: null,
       selectedSubtitleId: null,
+    });
+  },
+
+  importPlayerConfigs: (configs, mode = 'merge') => {
+    set((state) => {
+      let nextSettings = state.danmakuSettings;
+      let nextOffsets = state.itemOffsets;
+      let nextBindings = state.danmakuBindings;
+      let nextLayouts = state.videoLayouts;
+      let nextEngine = state.engineType;
+
+      if (mode === 'replace') {
+        if (configs.danmakuSettings) {
+          nextSettings = { ...loadDanmakuSettings(), ...configs.danmakuSettings };
+        }
+        nextOffsets = configs.itemOffsets ?? {};
+        nextBindings = configs.danmakuBindings ?? {};
+        nextLayouts = configs.videoLayouts ?? {};
+        if (configs.engineType) {
+          nextEngine = configs.engineType;
+        }
+      } else {
+        // merge mode
+        if (configs.danmakuSettings) {
+          const mergedBlockedWords = Array.from(
+            new Set([
+              ...(state.danmakuSettings.blockedWords || []),
+              ...(configs.danmakuSettings.blockedWords || []),
+            ])
+          );
+          nextSettings = {
+            ...state.danmakuSettings,
+            ...configs.danmakuSettings,
+            blockedWords: mergedBlockedWords,
+          };
+        }
+
+        if (configs.itemOffsets) {
+          nextOffsets = { ...state.itemOffsets, ...configs.itemOffsets };
+        }
+
+        if (configs.danmakuBindings) {
+          nextBindings = { ...state.danmakuBindings };
+          Object.entries(configs.danmakuBindings).forEach(([itemId, binding]) => {
+            const existing = nextBindings[itemId];
+            if (!existing || (binding.boundAt || 0) >= (existing.boundAt || 0)) {
+              nextBindings[itemId] = binding;
+            }
+          });
+        }
+
+        if (configs.videoLayouts) {
+          nextLayouts = { ...state.videoLayouts, ...configs.videoLayouts };
+        }
+
+        if (configs.engineType) {
+          nextEngine = configs.engineType;
+        }
+      }
+
+      try {
+        localStorage.setItem(SETTINGS_KEY, JSON.stringify(nextSettings));
+        localStorage.setItem(OFFSETS_KEY, JSON.stringify(nextOffsets));
+        localStorage.setItem(BINDINGS_KEY, JSON.stringify(nextBindings));
+        localStorage.setItem(VIDEO_LAYOUTS_KEY, JSON.stringify(nextLayouts));
+        localStorage.setItem(ENGINE_TYPE_KEY, nextEngine);
+      } catch (e) {
+        console.error('Failed to save imported player configs:', e);
+      }
+
+      return {
+        danmakuSettings: nextSettings,
+        itemOffsets: nextOffsets,
+        danmakuBindings: nextBindings,
+        videoLayouts: nextLayouts,
+        engineType: nextEngine,
+      };
     });
   },
 }));

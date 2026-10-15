@@ -20,6 +20,9 @@ importers:
       '@tauri-apps/plugin-store':
         specifier: ^2.2.0
         version: 2.5.0
+      aws4fetch:
+        specifier: ^1.0.20
+        version: 1.0.20
       clsx:
         specifier: ^2.1.1
         version: 2.1.1
@@ -808,6 +811,9 @@ packages:
     hasBin: true
     peerDependencies:
       postcss: ^8.1.0
+
+  aws4fetch@1.0.20:
+    resolution: {integrity: sha512-/djoAN709iY65ETD6LKCtyyEI04XIBP5xVvfmNxsEP0uJB5tyaGBztSryRr4HqMStr9R06PisQE7m9zDTXKu6g==}
 
   baseline-browser-mapping@2.11.28:
     resolution: {integrity: sha512-br0LOmjJqr6Rt4AEkadbcNf67Zpo7EPwKsWbjnRrJIa1QYFHQBqM4C7F2WTbV8ahTEcg1Eo+Y0aWjjORInYFyA==}
@@ -1819,6 +1825,8 @@ snapshots:
       picocolors: 1.1.1
       postcss: 8.5.30
       postcss-value-parser: 4.2.0
+
+  aws4fetch@1.0.20: {}
 
   baseline-browser-mapping@2.11.28: {}
 

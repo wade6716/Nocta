@@ -43,6 +43,7 @@ interface AuthState {
     proxy: ProxyConfig,
     targetUrl: string
   ) => Promise<{ ok: boolean; latency?: number; error?: string }>;
+  importServers: (servers: SavedServer[], mode?: 'merge' | 'replace') => void;
 }
 
 const STORAGE_KEY = 'emby_auth_store';
@@ -274,6 +275,61 @@ export const useAuthStore = create<AuthState>((set, get) => {
       } catch (err: any) {
         return { ok: false, error: err.message || '连接失败' };
       }
+    },
+
+    importServers: (importedServers, mode = 'merge') => {
+      set((state) => {
+        let newServers: SavedServer[];
+        if (mode === 'replace') {
+          newServers = [...importedServers];
+        } else {
+          const map = new Map<string, SavedServer>();
+          state.servers.forEach((s) => {
+            const key = `${s.url.trim().toLowerCase()}___${s.username.trim().toLowerCase()}`;
+            map.set(key, s);
+          });
+
+          importedServers.forEach((imp) => {
+            const key = `${imp.url.trim().toLowerCase()}___${imp.username.trim().toLowerCase()}`;
+            const existing = map.get(key);
+            if (existing) {
+              map.set(key, {
+                ...existing,
+                ...imp,
+                // 保留已有密码与令牌（若导入的数据处于脱敏状态）
+                password: imp.password || existing.password,
+                accessToken: imp.accessToken || existing.accessToken,
+                lastActive: Math.max(existing.lastActive || 0, imp.lastActive || 0),
+              });
+            } else {
+              map.set(key, imp);
+            }
+          });
+
+          newServers = Array.from(map.values());
+        }
+
+        newServers.sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0));
+
+        let nextCurrentId = state.currentServerId;
+        if (!nextCurrentId || !newServers.some((s) => s.id === nextCurrentId)) {
+          nextCurrentId = newServers[0]?.id || null;
+        }
+
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(newServers));
+          if (nextCurrentId) {
+            localStorage.setItem(CURRENT_SERVER_KEY, nextCurrentId);
+          }
+        } catch (e) {
+          console.error(e);
+        }
+
+        return {
+          servers: newServers,
+          currentServerId: nextCurrentId,
+        };
+      });
     },
   };
 });

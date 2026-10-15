@@ -61,3 +61,19 @@
 - **闭包过时防护**：销毁上报与心跳定时器中，禁止直接读取旧闭包中的 `currentTime`，必须通过 `videoElemRef.current?.currentTime ?? usePlayerStore.getState().currentTime` 获取现场真实秒数。
 - **完播防回滚**：当进度距片尾不足 15 秒或超过 98% 时，视为完播，下次重新起播应从 0:00 开始。
 
+### 4. 多端配置同步与本地备份设计准则 (Sync & Backup Architecture)
+- **敏感信息安全与端到端加密 (E2EE)**：
+  - 本地导出支持脱敏开关（清除密码与 Access Token），并支持可选加密密码。
+  - 多端同步支持端到端同步密钥（Passphrase）：基于 Web Crypto API 使用 PBKDF2 (100,000 次 SHA-256 迭代) + AES-256-GCM 强加密。云端仅存储密文，彻底杜绝 Emby 凭据在公网 S3 或共享盘泄露。
+- **SMB 局域网协议穿透**：
+  - 在 Windows 平台，通过 Rust FFI 调用 Windows 原生 `WNetAddConnection2W` (链接系统库 `mpr`) 建立临时网络凭据会话，通过 UNC 路径 `\\host\share\path` 直接借助 `std::fs` 读写，完美支持 SMB 2/3、NTLMv2，无跨平台三方库的兼容性缺陷。
+  - macOS / Linux 环境下直接使用标准挂载路径（如 `/Volumes/...` 或 `/mnt/...`）进行透明文件读写。
+- **WebDAV 与 S3 驱动架构**：
+  - WebDAV 直接依托统一 `httpClient` 发送 `PUT` / `GET` / Basic Auth，自动穿透全局代理并绕过 CORS。
+  - S3 采用轻量级 `aws4fetch` 计算 AWS SigV4 规范签名，随后将签名头交由 `httpClient` 发送，实现对 AWS S3、Cloudflare R2、MinIO、阿里云 OSS、腾讯云 COS 的全兼容与代理继承。
+- **双向智能合并算法 (Smart Merge)**：
+  - Emby 服务器：按 `url + username` 联合唯一标识合并，去重保留并集；导入脱敏配置时必须自动保留本机已有密码与 Token；活跃时间戳更新的一方优先。
+  - 弹幕节点：按 `baseUrl` 去重合并。
+  - 弹幕绑定：按 `itemId` 字典合并，以最新 `boundAt` 时间戳优先，保证各端绑定的剧集弹幕互补而不被抹除。
+  - 弹幕屏蔽词：数组去重求并集。
+

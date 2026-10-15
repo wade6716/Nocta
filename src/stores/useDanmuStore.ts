@@ -23,6 +23,7 @@ interface DanmuState {
   setActiveServer: (id: string) => void;
   getActiveServer: () => DanmuServerEntry;
   testServerConnection: (id: string) => Promise<{ ok: boolean; latency: number; error?: string }>;
+  importServers: (servers: DanmuServerEntry[], activeId?: string, mode?: 'merge' | 'replace') => void;
 }
 
 const SERVERS_KEY = 'emby_danmu_servers_v2';
@@ -39,6 +40,9 @@ const DEFAULT_SERVER: DanmuServerEntry = {
 
 function loadInitialServers(): DanmuServerEntry[] {
   try {
+    if (typeof window === 'undefined' || !window.localStorage) {
+      return [DEFAULT_SERVER];
+    }
     const raw = localStorage.getItem(SERVERS_KEY);
     if (raw) {
       const parsed: DanmuServerEntry[] = JSON.parse(raw);
@@ -85,6 +89,9 @@ function loadInitialServers(): DanmuServerEntry[] {
 
 function loadInitialActiveId(servers: DanmuServerEntry[]): string {
   try {
+    if (typeof window === 'undefined' || !window.localStorage) {
+      return servers[0]?.id || DEFAULT_SERVER.id;
+    }
     const saved = localStorage.getItem(ACTIVE_SERVER_KEY);
     if (saved && servers.some((s) => s.id === saved)) {
       return saved;
@@ -238,6 +245,36 @@ export const useDanmuStore = create<DanmuState>((set, get) => {
         get().updateServer(id, { status: 'error', latency, errorMessage: errText });
         return { ok: false, latency, error: errText };
       }
+    },
+
+    importServers: (imported, activeId, mode = 'merge') => {
+      set((state) => {
+        let next: DanmuServerEntry[];
+        if (mode === 'replace') {
+          next = imported.length > 0 ? imported : [DEFAULT_SERVER];
+        } else {
+          const map = new Map<string, DanmuServerEntry>();
+          state.servers.forEach((s) => map.set(s.baseUrl.trim().toLowerCase(), s));
+          imported.forEach((s) => {
+            const key = s.baseUrl.trim().toLowerCase();
+            if (map.has(key)) {
+              const old = map.get(key)!;
+              map.set(key, { ...old, ...s, token: s.token || old.token });
+            } else {
+              map.set(key, s);
+            }
+          });
+          next = Array.from(map.values());
+        }
+
+        let nextActive = activeId || state.activeServerId;
+        if (!next.some((s) => s.id === nextActive)) {
+          nextActive = next[0]?.id || DEFAULT_SERVER.id;
+        }
+
+        persist(next, nextActive);
+        return { servers: next, activeServerId: nextActive };
+      });
     },
   };
 });

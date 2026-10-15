@@ -18,6 +18,7 @@ import { useMediaStore } from '../stores/useMediaStore';
 import { DanmuServerModal } from '../components/danmu/DanmuServerModal';
 import { EmbyServerModal } from '../components/settings/EmbyServerModal';
 import { NetworkProxyModal } from '../components/settings/NetworkProxyModal';
+import { ServerSwitcherDropdown } from '../components/layout/ServerSwitcherDropdown';
 import {
   EmbyItem,
   getUserViews,
@@ -304,18 +305,12 @@ export const HomePage: React.FC = () => {
       {/* Top Navbar */}
       <div className="flex items-center justify-between mb-8">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-white flex items-center space-x-2">
+          <h1 className="text-2xl font-bold tracking-tight text-white flex items-center space-x-2.5">
             <span>媒体库</span>
-            {currentServer && (
-              <button
-                onClick={() => setIsServerModalOpen(true)}
-                className="text-xs px-2.5 py-1 bg-white/10 hover:bg-white/20 rounded-full font-normal text-gray-300 hover:text-white transition cursor-pointer flex items-center space-x-1.5 group"
-                title="编辑服务器信息"
-              >
-                <span>{currentServer.name}</span>
-                <Pencil className="w-3 h-3 opacity-60 group-hover:opacity-100" />
-              </button>
-            )}
+            <ServerSwitcherDropdown
+              onOpenManageModal={() => setIsServerModalOpen(true)}
+              onOpenAddModal={() => setIsServerModalOpen(true)}
+            />
           </h1>
           <p className="text-xs text-gray-400 mt-1">欢迎回来，{currentServer?.username || '用户'}</p>
         </div>

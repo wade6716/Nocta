@@ -825,3 +825,50 @@ export async function getViewItemCounts(
   return counts;
 }
 
+export type SearchFilterType = 'All' | 'Movie' | 'Series';
+
+export interface SearchMediaParams {
+  keyword: string;
+  filterType?: SearchFilterType;
+  limit?: number;
+}
+
+/**
+ * 跨媒体库聚合搜索 (GET /emby/Users/{UserId}/Items?SearchTerm=...)
+ */
+export async function searchMediaItems(
+  serverUrl: string,
+  userId: string,
+  accessToken: string,
+  params: SearchMediaParams
+): Promise<EmbyItem[]> {
+  const base = normalizeServerUrl(serverUrl);
+  const cleanTerm = params.keyword.trim();
+  if (!cleanTerm) return [];
+
+  let includeTypes = 'Movie,Series';
+  if (params.filterType === 'Movie') {
+    includeTypes = 'Movie';
+  } else if (params.filterType === 'Series') {
+    includeTypes = 'Series';
+  }
+
+  const limit = params.limit || 60;
+  const encodedTerm = encodeURIComponent(cleanTerm);
+  const url = `${base}/emby/Users/${userId}/Items?SearchTerm=${encodedTerm}&IncludeItemTypes=${includeTypes}&Recursive=true&Limit=${limit}&Fields=PrimaryImageAspectRatio,Overview,ProductionYear,PremiereDate,CommunityRating,UserData`;
+
+  const res = await httpClient(url, {
+    method: 'GET',
+    headers: buildEmbyHeaders(userId, accessToken),
+  });
+
+  if (!res.ok) {
+    throw new Error(`搜索失败，状态码: ${res.status}`);
+  }
+
+  const data = await res.json();
+  const items: EmbyItem[] = data.Items || [];
+  return items.filter(isVideoMedia);
+}
+
+

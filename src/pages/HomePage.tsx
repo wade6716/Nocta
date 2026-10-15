@@ -10,6 +10,7 @@ import {
   Server,
   MessagesSquare,
   Globe,
+  Search,
   Pencil,
   TriangleAlert,
 } from 'lucide-react';
@@ -251,6 +252,24 @@ export const HomePage: React.FC = () => {
     };
   }, [setHomeScrollY]);
 
+  // 全局搜索快捷键监听 (Ctrl+K / Cmd+K / 斜杠)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        navigate('/search');
+      } else if (
+        e.key === '/' &&
+        !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)
+      ) {
+        e.preventDefault();
+        navigate('/search');
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [navigate]);
+
   const handleCardClick = (item: EmbyItem) => {
     const container = document.getElementById('main-scroll-container');
     if (container) {
@@ -316,6 +335,17 @@ export const HomePage: React.FC = () => {
         </div>
 
         <div className="flex items-center space-x-2">
+          <button
+            onClick={() => navigate('/search')}
+            className="flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-surface hover:bg-white/10 text-gray-300 hover:text-white transition cursor-pointer border border-white/5"
+            title="跨媒体库搜索 (Ctrl+K)"
+          >
+            <Search className="w-4 h-4 text-primary" />
+            <span className="text-xs font-medium">搜索</span>
+            <kbd className="hidden sm:inline-block ml-1 text-[10px] font-mono px-1.5 py-0.5 rounded bg-white/10 text-gray-400">
+              Ctrl K
+            </kbd>
+          </button>
           <button
             onClick={() => setIsServerModalOpen(true)}
             className="p-2 rounded-xl bg-surface hover:bg-white/10 text-gray-300 hover:text-white transition cursor-pointer"

@@ -249,3 +249,22 @@ pnpm tauri build
 - **原生播放器内核**：[`MpvPlayerEngine.ts`](file:///d:/wade/code/emby-tauri-player/src/player/MpvPlayerEngine.ts) 在 `init()` 阶段注入 `initialOptions['http-proxy'] = proxyUrl`，并在每次 `load()` 新视频时动态同步 `setProperty('http-proxy', proxyUrl || '')`。
 - **UI 配置与多目标测速**：系统设置页 [`SettingsPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/SettingsPage.tsx) 与弹窗 [`NetworkProxyModal.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/settings/NetworkProxyModal.tsx) 均支持一键切换「跟随系统代理 (默认)」、「手动自定义 (HTTP/SOCKS5)」、「强制直连」，并提供测试目标下拉选择框（1. Google 全球连通性 / 2. 当前 Emby 服务器 / 3. 自定义网址输入），探测往返延迟与链路健康状态。
 
+---
+
+## 10. 跨媒体库聚合搜索中心 (Cross-Library Unified Search)
+
+### 10.1 搜索漏检根因与 Emby 服务端排坑
+1. **服务端「从全局搜索中排除」机制**：
+   - Emby 服务器管理员常常在特定媒体库（如动漫、纪录片、4K、短片、家庭录像等）的高级设置中勾选了「从全局搜索结果中排除」，导致客户端直接请求无 `ParentId` 的全局接口（`/emby/Users/{UserId}/Items?SearchTerm=...`）时，服务端会完全忽略这些库；
+   - **解决方案（分库并发穿透）**：客户端先获取用户全部可用视图（`getUserViews`），除了并发发起一次全局检索与 `/emby/Search/Hints` 之外，**对每个具体媒体库带上 `ParentId=${view.Id}` 并发深度递归检索**，彻底打破服务端单库隐藏限制。
+2. **媒体类型白名单扩展**：
+   - 原仅过滤 `Movie,Series` 会将部分混合库、动漫剧场版或 BoxSet/Video 彻底漏掉；
+   - 必须放宽包含 `IncludeItemTypes=Movie,Series,Episode,Video,BoxSet`，再由前端统一执行 `isVideoMedia` 与 `mergeMediaBySeries` 去重。
+3. **所属媒体库标签（LibraryName）感知**：
+   - 并发穿透检索返回的每部影视条目，均注入所在媒体库的 `LibraryName` 和 `LibraryId`；
+   - 搜索结果卡片直接高亮展示来源库徽章（如 `[动漫] 进击的巨人`、`[4K电影] 奥本海默`），便于用户一目了然定位内容。
+4. **分类筛选胶囊与服务器快速切换**：
+   - 搜索界面提供「全部影视 / 电影 / 剧集」类型过滤，并动态呈现「全部媒体库 + 各具体媒体库」分类胶囊；
+   - 整合 `ServerSwitcherDropdown`，用户可在搜索界面即时切换不同的 Emby 服务器进行检索。
+
+

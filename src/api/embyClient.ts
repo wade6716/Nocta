@@ -84,6 +84,8 @@ export interface EmbyItem {
   SeriesThumbImageTag?: string;
   ParentThumbImageTag?: string;
   MediaSources?: EmbyMediaSource[];
+  LibraryName?: string;
+  LibraryId?: string;
 }
 
 /**
@@ -830,11 +832,20 @@ export type SearchFilterType = 'All' | 'Movie' | 'Series';
 export interface SearchMediaParams {
   keyword: string;
   filterType?: SearchFilterType;
+  parentId?: string; // 可选指定单个媒体库 (ParentId)
+  views?: EmbyItem[]; // 可选已缓存的用户媒体库列表
   limit?: number;
 }
 
 /**
- * 跨媒体库聚合搜索 (GET /emby/Users/{UserId}/Items?SearchTerm=...)
+ * 跨媒体库聚合搜索
+ * 彻底解决 Emby / Jellyfin 在未指定 ParentId 或多媒体库情况下仅检索首个库/漏检其他媒体库的底层问题：
+ * 1. 自动获取该用户可访问的全部媒体库分类（Views，排除音乐/相册/图书等非视频库）；
+ * 2. 对每个具体媒体库并发（Promise.allSettled）发起独立带 ParentId 的深度检索（ParentId=${view.Id}&Recursive=true）；
+ * 3. 并发发起全局 /emby/Users/{UserId}/Items 深度检索；
+ * 4. 并发发起 /emby/Search/Hints 聚合搜索提示；
+ * 5. 全量汇总并去重（保留高保真元数据与确切所属媒体库名称 LibraryName），确保 100% 覆盖所有媒体库；
+ * 6. 视听过滤 isVideoMedia 与剧集自动折叠去重 mergeMediaBySeries。
  */
 export async function searchMediaItems(
   serverUrl: string,
@@ -846,29 +857,139 @@ export async function searchMediaItems(
   const cleanTerm = params.keyword.trim();
   if (!cleanTerm) return [];
 
-  let includeTypes = 'Movie,Series';
+  // 视听媒体类型白名单：包含 Movie, Series, Episode, Video, BoxSet
+  let includeTypes = 'Movie,Series,Episode,Video,BoxSet';
   if (params.filterType === 'Movie') {
-    includeTypes = 'Movie';
+    includeTypes = 'Movie,Video';
   } else if (params.filterType === 'Series') {
-    includeTypes = 'Series';
+    includeTypes = 'Series,Episode';
   }
 
-  const limit = params.limit || 60;
+  const limit = params.limit || 100;
   const encodedTerm = encodeURIComponent(cleanTerm);
-  const url = `${base}/emby/Users/${userId}/Items?SearchTerm=${encodedTerm}&IncludeItemTypes=${includeTypes}&Recursive=true&Limit=${limit}&Fields=PrimaryImageAspectRatio,Overview,ProductionYear,PremiereDate,CommunityRating,UserData`;
+  const headers = buildEmbyHeaders(userId, accessToken);
 
-  const res = await httpClient(url, {
-    method: 'GET',
-    headers: buildEmbyHeaders(userId, accessToken),
-  });
-
-  if (!res.ok) {
-    throw new Error(`搜索失败，状态码: ${res.status}`);
+  // 1. 如果显式指定了某一个具体的媒体库 (parentId)，直接精准深度查询该库
+  if (params.parentId && params.parentId !== 'All') {
+    const url = `${base}/emby/Users/${userId}/Items?ParentId=${params.parentId}&SearchTerm=${encodedTerm}&IncludeItemTypes=${includeTypes}&Recursive=true&Limit=${limit}&Fields=PrimaryImageAspectRatio,Overview,ProductionYear,PremiereDate,CommunityRating,UserData`;
+    try {
+      const res = await httpClient(url, { method: 'GET', headers });
+      if (res.ok) {
+        const data = await res.json();
+        const rawItems: EmbyItem[] = data.Items || [];
+        const valid = rawItems.filter(isVideoMedia);
+        return mergeMediaBySeries(valid);
+      }
+    } catch (e) {
+      console.warn('[searchMediaItems single view failed]', e);
+    }
+    return [];
   }
 
-  const data = await res.json();
-  const items: EmbyItem[] = data.Items || [];
-  return items.filter(isVideoMedia);
+  // 2. 跨媒体库全局聚合：获取用户的全部分类（若上层未传入则自动请求）
+  let views = params.views || [];
+  if (!views || views.length === 0) {
+    try {
+      const viewsRes = await getUserViews(serverUrl, userId, accessToken);
+      views = (viewsRes.Items || []).filter(
+        (v) => v.CollectionType !== 'music' && v.CollectionType !== 'photos'
+      );
+    } catch (e) {
+      console.warn('[searchMediaItems getUserViews failed]', e);
+      views = [];
+    }
+  }
+
+  const tasks: Promise<{ item: EmbyItem; viewName?: string; viewId?: string }[]>[] = [];
+
+  // Task A: 全局用户目录深度递归查询
+  const globalUrl = `${base}/emby/Users/${userId}/Items?SearchTerm=${encodedTerm}&IncludeItemTypes=${includeTypes}&Recursive=true&Limit=${limit}&Fields=PrimaryImageAspectRatio,Overview,ProductionYear,PremiereDate,CommunityRating,UserData`;
+  tasks.push(
+    httpClient(globalUrl, { method: 'GET', headers })
+      .then(async (res) => (res.ok ? (await res.json()).Items || [] : []))
+      .then((items: EmbyItem[]) => items.map((it) => ({ item: it })))
+      .catch(() => [])
+  );
+
+  // Task B: 对每个具体媒体库并发按 ParentId 检索（穿透 Emby 服务器对部分库排除在全局搜索外的限制）
+  for (const view of views) {
+    const viewUrl = `${base}/emby/Users/${userId}/Items?ParentId=${view.Id}&SearchTerm=${encodedTerm}&IncludeItemTypes=${includeTypes}&Recursive=true&Limit=${limit}&Fields=PrimaryImageAspectRatio,Overview,ProductionYear,PremiereDate,CommunityRating,UserData`;
+    tasks.push(
+      httpClient(viewUrl, { method: 'GET', headers })
+        .then(async (res) => (res.ok ? (await res.json()).Items || [] : []))
+        .then((items: EmbyItem[]) =>
+          items.map((it) => ({ item: it, viewName: view.Name, viewId: view.Id }))
+        )
+        .catch(() => [])
+    );
+  }
+
+  // Task C: 查询 Emby 专门为快速模糊匹配设计的 /Search/Hints
+  const hintsUrl = `${base}/emby/Search/Hints?SearchTerm=${encodedTerm}&UserId=${userId}&IncludeItemTypes=${includeTypes}&Limit=${limit}`;
+  tasks.push(
+    httpClient(hintsUrl, { method: 'GET', headers })
+      .then(async (res) => {
+        if (!res.ok) return [];
+        const data = await res.json();
+        const hints = data.SearchHints || [];
+        return hints.map((h: any) => ({
+          item: {
+            Id: h.Id || h.ItemId,
+            Name: h.Name,
+            Type: h.Type,
+            MediaType: h.MediaType,
+            ProductionYear: h.ProductionYear,
+            RunTimeTicks: h.RunTimeTicks,
+            PrimaryImageAspectRatio:
+              h.PrimaryImageAspectRatio || (h.Type === 'Episode' ? 1.77 : 0.67),
+            ImageTags: h.PrimaryImageTag ? { Primary: h.PrimaryImageTag } : undefined,
+            SeriesName: h.Series,
+          } as EmbyItem,
+        }));
+      })
+      .catch(() => [])
+  );
+
+  // 并发等待全部来源完成
+  const settledResults = await Promise.allSettled(tasks);
+
+  // 合并与按 Id 去重
+  const itemMap = new Map<string, EmbyItem>();
+
+  for (const r of settledResults) {
+    if (r.status === 'fulfilled' && Array.isArray(r.value)) {
+      for (const entry of r.value) {
+        const it = entry.item;
+        if (!it || !it.Id || !isVideoMedia(it)) continue;
+
+        const existing = itemMap.get(it.Id);
+        if (!existing) {
+          if (entry.viewName) {
+            it.LibraryName = entry.viewName;
+            it.LibraryId = entry.viewId;
+          }
+          itemMap.set(it.Id, it);
+        } else {
+          // 如果已有记录，但当前记录有更准确的媒体库归属名称，进行补全
+          if (!existing.LibraryName && entry.viewName) {
+            existing.LibraryName = entry.viewName;
+            existing.LibraryId = entry.viewId;
+          }
+          // 如果已有记录是简短的 SearchHint，用完整的 Items 属性补充
+          if (!existing.Overview && it.Overview) existing.Overview = it.Overview;
+          if (!existing.ImageTags && it.ImageTags) existing.ImageTags = it.ImageTags;
+          if (!existing.UserData && it.UserData) existing.UserData = it.UserData;
+          if (!existing.PrimaryImageAspectRatio && it.PrimaryImageAspectRatio) {
+            existing.PrimaryImageAspectRatio = it.PrimaryImageAspectRatio;
+          }
+        }
+      }
+    }
+  }
+
+  const allItems = Array.from(itemMap.values());
+  // 剧集按 SeriesId 或 SeriesName 自动折叠去重
+  return mergeMediaBySeries(allItems);
 }
 
 

@@ -11,14 +11,19 @@ import {
   Trash2,
   Loader2,
   Sparkles,
+  Folder,
+  Layers,
 } from 'lucide-react';
 import { useAuthStore } from '../stores/useAuthStore';
+import { useMediaStore } from '../stores/useMediaStore';
 import {
   EmbyItem,
   searchMediaItems,
   SearchFilterType,
+  getUserViews,
 } from '../api/embyClient';
 import { MediaCard } from '../components/media/MediaCard';
+import { ServerSwitcherDropdown } from '../components/layout/ServerSwitcherDropdown';
 
 const HISTORY_STORAGE_KEY = 'nocta_search_history';
 const MAX_HISTORY_COUNT = 12;
@@ -41,9 +46,12 @@ function saveSearchHistory(history: string[]) {
 export const SearchPage: React.FC = () => {
   const navigate = useNavigate();
   const currentServer = useAuthStore((s) => s.getCurrentServer());
+  const storeViews = useMediaStore((s) => s.views);
 
   const [keyword, setKeyword] = useState('');
   const [filterType, setFilterType] = useState<SearchFilterType>('All');
+  const [selectedLibraryId, setSelectedLibraryId] = useState<string>('All');
+  const [views, setViews] = useState<EmbyItem[]>(storeViews);
   const [results, setResults] = useState<EmbyItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
@@ -52,16 +60,34 @@ export const SearchPage: React.FC = () => {
   const inputRef = useRef<HTMLInputElement>(null);
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
+  // 确保在页面加载时获取全部分类
   useEffect(() => {
     if (!currentServer) {
       navigate('/login');
       return;
     }
     inputRef.current?.focus();
-  }, [currentServer, navigate]);
+
+    if (storeViews.length > 0) {
+      setViews(storeViews.filter((v) => v.CollectionType !== 'music' && v.CollectionType !== 'photos'));
+    } else {
+      getUserViews(currentServer.url, currentServer.userId, currentServer.accessToken)
+        .then((res) => {
+          const validViews = (res.Items || []).filter(
+            (v) => v.CollectionType !== 'music' && v.CollectionType !== 'photos'
+          );
+          setViews(validViews);
+        })
+        .catch((err) => console.warn('[SearchPage getUserViews error]', err));
+    }
+  }, [currentServer, navigate, storeViews]);
 
   const executeSearch = useCallback(
-    async (searchTerm: string, type: SearchFilterType) => {
+    async (
+      searchTerm: string,
+      type: SearchFilterType,
+      libraryId: string = selectedLibraryId
+    ) => {
       const cleanTerm = searchTerm.trim();
       if (!cleanTerm || !currentServer) {
         setResults([]);
@@ -81,7 +107,9 @@ export const SearchPage: React.FC = () => {
           {
             keyword: cleanTerm,
             filterType: type,
-            limit: 60,
+            parentId: libraryId !== 'All' ? libraryId : undefined,
+            views,
+            limit: 100,
           }
         );
         setResults(items);
@@ -102,10 +130,10 @@ export const SearchPage: React.FC = () => {
         setLoading(false);
       }
     },
-    [currentServer]
+    [currentServer, views, selectedLibraryId]
   );
 
-  // 输入防抖触发
+  // 输入或条件切换时防抖触发
   useEffect(() => {
     if (debounceTimerRef.current) {
       clearTimeout(debounceTimerRef.current);
@@ -119,7 +147,7 @@ export const SearchPage: React.FC = () => {
     }
 
     debounceTimerRef.current = setTimeout(() => {
-      executeSearch(keyword, filterType);
+      executeSearch(keyword, filterType, selectedLibraryId);
     }, 350);
 
     return () => {
@@ -127,7 +155,7 @@ export const SearchPage: React.FC = () => {
         clearTimeout(debounceTimerRef.current);
       }
     };
-  }, [keyword, filterType, executeSearch]);
+  }, [keyword, filterType, selectedLibraryId, executeSearch]);
 
   const handleClearInput = () => {
     setKeyword('');
@@ -154,7 +182,7 @@ export const SearchPage: React.FC = () => {
 
   return (
     <div className="w-full min-h-full py-6 px-8 select-none">
-      {/* 顶部搜索操作栏 */}
+      {/* 顶部搜索操作栏与服务器切换 */}
       <div className="flex items-center space-x-4 mb-6">
         <button
           onClick={() => navigate(-1)}
@@ -165,7 +193,7 @@ export const SearchPage: React.FC = () => {
         </button>
 
         {/* 搜索框 */}
-        <div className="relative flex-1 max-w-3xl">
+        <div className="relative flex-1 max-w-2xl">
           <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
             {loading ? (
               <Loader2 className="w-5 h-5 text-primary animate-spin" />
@@ -180,10 +208,10 @@ export const SearchPage: React.FC = () => {
             onChange={(e) => setKeyword(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
-                executeSearch(keyword, filterType);
+                executeSearch(keyword, filterType, selectedLibraryId);
               }
             }}
-            placeholder="搜索当前服务器全部分类电影、电视剧、动漫..."
+            placeholder="跨媒体库聚合搜索电影、电视剧、动漫、纪录片..."
             className="w-full pl-11 pr-10 py-3 rounded-2xl bg-surface/90 border border-white/10 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary/50 transition text-sm font-medium"
           />
           {keyword && (
@@ -195,34 +223,83 @@ export const SearchPage: React.FC = () => {
             </button>
           )}
         </div>
+
+        {/* 服务器快速切换器 */}
+        <div className="flex-shrink-0">
+          <ServerSwitcherDropdown />
+        </div>
       </div>
 
-      {/* 筛选标签 */}
-      <div className="flex items-center space-x-2 mb-8 max-w-3xl pl-14">
-        {(
-          [
-            { id: 'All', label: '全部', icon: Clapperboard },
-            { id: 'Movie', label: '电影', icon: Film },
-            { id: 'Series', label: '电视剧 / 剧集', icon: Tv },
-          ] as const
-        ).map((tab) => {
-          const Icon = tab.icon;
-          const isActive = filterType === tab.id;
-          return (
+      {/* 筛选标签栏 (类型过滤 + 媒体库分类胶囊) */}
+      <div className="space-y-3 mb-8 max-w-4xl pl-14">
+        {/* 第一排：影视类型过滤 */}
+        <div className="flex items-center space-x-2">
+          {(
+            [
+              { id: 'All', label: '全部影视', icon: Clapperboard },
+              { id: 'Movie', label: '电影', icon: Film },
+              { id: 'Series', label: '剧集 / 动漫', icon: Tv },
+            ] as const
+          ).map((tab) => {
+            const Icon = tab.icon;
+            const isActive = filterType === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setFilterType(tab.id)}
+                className={`flex items-center space-x-1.5 px-3.5 py-1.5 rounded-full text-xs font-medium transition cursor-pointer border ${
+                  isActive
+                    ? 'bg-primary text-white border-primary shadow-lg shadow-primary/25'
+                    : 'bg-white/5 hover:bg-white/10 text-gray-300 border-white/10 hover:border-white/20'
+                }`}
+              >
+                <Icon className="w-3.5 h-3.5" />
+                <span>{tab.label}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* 第二排：各媒体库精确筛选胶囊（如果服务器有多分类） */}
+        {views.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-white/[0.04]">
+            <span className="text-[11px] text-gray-500 mr-1 flex items-center space-x-1">
+              <Layers className="w-3 h-3 text-primary/70" />
+              <span>媒体库:</span>
+            </span>
+
+            {/* 全部媒体库选项 */}
             <button
-              key={tab.id}
-              onClick={() => setFilterType(tab.id)}
-              className={`flex items-center space-x-1.5 px-3.5 py-1.5 rounded-full text-xs font-medium transition cursor-pointer border ${
-                isActive
-                  ? 'bg-primary text-white border-primary shadow-lg shadow-primary/25'
-                  : 'bg-white/5 hover:bg-white/10 text-gray-300 border-white/10 hover:border-white/20'
+              onClick={() => setSelectedLibraryId('All')}
+              className={`px-2.5 py-1 rounded-lg text-xs transition cursor-pointer border ${
+                selectedLibraryId === 'All'
+                  ? 'bg-primary/20 text-primary border-primary/40 font-semibold'
+                  : 'bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white border-white/5'
               }`}
             >
-              <Icon className="w-3.5 h-3.5" />
-              <span>{tab.label}</span>
+              全部媒体库 ({views.length})
             </button>
-          );
-        })}
+
+            {/* 单个具体媒体库选项 */}
+            {views.map((v) => {
+              const isSelected = selectedLibraryId === v.Id;
+              return (
+                <button
+                  key={v.Id}
+                  onClick={() => setSelectedLibraryId(v.Id)}
+                  className={`px-2.5 py-1 rounded-lg text-xs transition cursor-pointer border flex items-center space-x-1 ${
+                    isSelected
+                      ? 'bg-primary/20 text-primary border-primary/40 font-semibold'
+                      : 'bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white border-white/5'
+                  }`}
+                >
+                  <Folder className="w-3 h-3 text-gray-400" />
+                  <span>{v.Name}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* 内容区域 */}
@@ -264,9 +341,9 @@ export const SearchPage: React.FC = () => {
             <div className="w-12 h-12 rounded-2xl bg-white/5 border border-white/10 flex items-center justify-center text-gray-400">
               <Sparkles className="w-6 h-6 text-primary/70" />
             </div>
-            <p className="text-sm font-medium text-gray-300">跨媒体库聚合搜索</p>
+            <p className="text-sm font-medium text-gray-300">跨媒体库深度聚合检索</p>
             <p className="text-xs text-gray-500 max-w-sm leading-relaxed">
-              输入片名、剧名或演员，在当前服务器所有媒体库分类中即时检索。
+              并发穿透当前服务器下的全部媒体库分类，即时呈现电影、电视剧、番剧、纪录片匹配结果。
             </p>
           </div>
         )}
@@ -278,7 +355,11 @@ export const SearchPage: React.FC = () => {
               <div className="text-xs text-gray-400">
                 搜索「<span className="text-white font-medium">{keyword}</span>」的结果
                 <span className="ml-2 font-mono text-gray-500">
-                  ({results.length} 部作品)
+                  (已聚合找到 {results.length} 部作品
+                  {views.length > 0 && selectedLibraryId === 'All'
+                    ? ` · 覆盖 ${views.length} 个媒体库`
+                    : ''}
+                  )
                 </span>
               </div>
             </div>
@@ -293,7 +374,9 @@ export const SearchPage: React.FC = () => {
                     onClick={handleCardClick}
                     aspectRatio="poster"
                     badge={
-                      item.Type === 'Series'
+                      item.LibraryName
+                        ? item.LibraryName
+                        : item.Type === 'Series'
                         ? '剧集'
                         : item.Type === 'Movie'
                         ? '电影'
@@ -310,7 +393,7 @@ export const SearchPage: React.FC = () => {
                   </div>
                   <p className="text-sm font-medium text-gray-300">未找到相关影视内容</p>
                   <p className="text-xs text-gray-500 max-w-xs">
-                    请尝试检查拼写，或者更换更简短的关键词重新搜索。
+                    请尝试检查片名拼写，或切换至「全部媒体库」或简短关键词重新检索。
                   </p>
                 </div>
               )
@@ -323,3 +406,4 @@ export const SearchPage: React.FC = () => {
 };
 
 export default SearchPage;
+

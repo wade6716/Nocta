@@ -277,6 +277,52 @@ pnpm tauri build
    - API 请求必须显式在 `Fields` 声明 `ChildCount,RecursiveItemCount,Status`，否则服务端会默认截断；
    - 卡片在封面右下角渲染半透毛玻璃角标：已完结展示 `全 X 集`，连载中展示 `更新至 X 集`，单集展示 `第 X 集`，与左上角服务器、右上角媒体库无重叠协同呈现。
 
+---
+
+## 11. 播放器媒体技术信息面板 (Playback Information & Stats HUD)
+
+### 11.1 功能定位与体验设计
+- **非模态非阻断 HUD**：
+  - 传统设置弹窗往往会阻断视频交互或遮盖整个屏幕；
+  - Nocta 采用专业级媒体播放信息 HUD（`PlaybackInfoModal`），以深色半透毛玻璃悬浮在视频播放画面右上侧，用户可边观看视频边实时监测各项音视频解码技术指标。
+- **快捷交互入口**：
+  - OSD 控制栏右侧常驻专属信息按钮（`<Info />`），鼠标悬停显示工具提示与快捷键说明；
+  - 快捷键：支持键盘单键 `I`（Info）秒级开关，按 `Escape` 优先收起。
+
+### 11.2 六大技术数据分类体系
+1. **播放状态 (Playback Status)**：
+   - 当前时间 / 影片总长与精确播放百分比；
+   - 播放倍速；
+   - 传输模式（DirectStream 原始直连 / 兼容重封装 / 转码流）；
+   - 当前连接的 Emby 媒体服务器名称。
+2. **视频流参数 (Video Stream)**：
+   - 画质分辨率（如 3840×2160 4K、1920×1080 1080p）与宽高比；
+   - 编码格式（HEVC、H.264、AV1、VP9 等）；
+   - 实时与平均帧率（fps）；
+   - 色彩位数（10-bit / 8-bit）；
+   - 动态范围标准（HDR10 / Dolby Vision / SDR、BT.2020、SMPTE ST 2084）；
+   - 编码规格 Profile / Level 与视频码率（Mbps / kbps）。
+3. **音频流参数 (Audio Stream)**：
+   - 当前生效音轨名称与语言；
+   - 音频编码格式（Dolby TrueHD、DTS-HD MA、FLAC、AAC、AC3 等）；
+   - 声道布局（7.1 Surround、5.1 Surround、Stereo 立体声）；
+   - 采样率（如 48 kHz、96 kHz）与音频码率。
+4. **字幕流参数 (Subtitle Stream)**：
+   - 当前加载字幕标题与语言；
+   - 字幕格式（ASS 动态特效字幕、SRT 纯文本字幕、PGS 图形字幕等）；
+   - 装载方式（外挂 External / 内嵌 Embedded）。
+5. **播放内核与环境 (Player Engine & Hardware)**：
+   - 播放器引擎类型（基于 Rust + libmpv 原生 GPU 硬件解码 / HTML5 Video 网页解码）；
+   - GPU 硬件加速状态与渲染管线。
+6. **存储容器与弹幕源 (Container & Danmaku)**：
+   - 容器格式（MKV / MP4 / TS 等）与服务器原始物理文件路径；
+   - 弹幕匹配源番剧及单集标题；
+   - 当前挂载弹幕总条数与微调时间偏移（±秒数）。
+
+### 11.3 一键诊断报告复制
+- 面板底部配备「复制全部信息」按钮，点击自动将所有结构化音视频元数据复制为整洁的 Markdown / 纯文本格式，方便向服务器管理员提供排障日志。
+
+
 
 
 

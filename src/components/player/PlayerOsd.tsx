@@ -15,6 +15,7 @@ import {
   ListVideo,
   AudioLines,
   Subtitles,
+  Info,
 } from 'lucide-react';
 import { MappedTrack } from '../../api/embyClient';
 
@@ -48,6 +49,8 @@ interface PlayerOsdProps {
   onToggleDanmaku: () => void;
   onToggleDanmakuDrawer: () => void;
   onToggleEpisodeDrawer?: () => void;
+  onTogglePlaybackInfo?: () => void;
+  isPlaybackInfoOpen?: boolean;
   onSelectAudioTrack: (id: string | null) => void;
   onSelectSubtitleTrack: (id: string | null) => void;
   onToggleWindowMode: () => void;
@@ -96,6 +99,8 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
   onToggleDanmaku,
   onToggleDanmakuDrawer,
   onToggleEpisodeDrawer,
+  onTogglePlaybackInfo,
+  isPlaybackInfoOpen,
   onSelectAudioTrack,
   onSelectSubtitleTrack,
   onToggleWindowMode,
@@ -514,6 +519,24 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
                 title="分集列表"
               >
                 <ListVideo className="w-4 h-4" />
+              </button>
+            )}
+
+            {/* Playback Info Modal Trigger */}
+            {onTogglePlaybackInfo && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onTogglePlaybackInfo();
+                }}
+                className={`p-1.5 rounded-xl transition cursor-pointer border ${
+                  isPlaybackInfoOpen
+                    ? 'bg-primary/20 text-primary border-primary/40'
+                    : 'bg-white/5 text-white hover:bg-white/15 border-white/5'
+                }`}
+                title="播放详细信息 (快捷键 I)"
+              >
+                <Info className="w-4 h-4" />
               </button>
             )}
 

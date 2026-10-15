@@ -35,6 +35,22 @@ export interface EmbyMediaStream {
   DeliveryUrl?: string;
   ChannelLayout?: string;
   BitRate?: number;
+  Width?: number;
+  Height?: number;
+  AspectRatio?: string;
+  AverageFrameRate?: number;
+  RealFrameRate?: number;
+  Profile?: string;
+  Level?: number;
+  BitDepth?: number;
+  ColorSpace?: string;
+  ColorRange?: string;
+  ColorPrimaries?: string;
+  ColorTransfer?: string;
+  PixelFormat?: string;
+  VideoRange?: string;
+  Channels?: number;
+  SampleRate?: number;
 }
 
 export interface EmbyMediaSource {

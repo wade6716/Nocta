@@ -39,6 +39,7 @@ import { MpvDanmakuBridge } from '../components/player/MpvDanmakuBridge';
 import { DanmakuLayer } from '../components/player/DanmakuLayer';
 import { PlayerOsd } from '../components/player/PlayerOsd';
 import { DanmakuDrawer } from '../components/player/DanmakuDrawer';
+import { PlaybackInfoModal } from '../components/player/PlaybackInfoModal';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 
 export const PlayerPage: React.FC = () => {
@@ -113,6 +114,7 @@ export const PlayerPage: React.FC = () => {
   const [danmuToast, setDanmuToast] = useState<string | null>(null);
   const [durationAlert, setDurationAlert] = useState<string | null>(null);
   const [isDanmakuDrawerOpen, setIsDanmakuDrawerOpen] = useState(false);
+  const [isPlaybackInfoOpen, setIsPlaybackInfoOpen] = useState(false);
 
   // OSD and Mouse interaction
   const [isOsdVisible, setIsOsdVisible] = useState(true);
@@ -736,8 +738,14 @@ export const PlayerPage: React.FC = () => {
           e.preventDefault();
           handleToggleFullscreen();
           break;
+        case 'KeyI':
+          e.preventDefault();
+          setIsPlaybackInfoOpen((prev) => !prev);
+          break;
         case 'Escape':
-          if (isDanmakuDrawerOpen) {
+          if (isPlaybackInfoOpen) {
+            setIsPlaybackInfoOpen(false);
+          } else if (isDanmakuDrawerOpen) {
             setIsDanmakuDrawerOpen(false);
           } else if (isFullscreen) {
             handleToggleFullscreen();
@@ -759,6 +767,7 @@ export const PlayerPage: React.FC = () => {
     danmakuSettings.visible,
     isFullscreen,
     isDanmakuDrawerOpen,
+    isPlaybackInfoOpen,
     isLoadingVideo,
     videoError,
     resetHideTimer,
@@ -980,6 +989,8 @@ export const PlayerPage: React.FC = () => {
         onRateChange={handleRateChange}
         onToggleDanmaku={() => updateDanmakuSettings({ visible: !danmakuSettings.visible })}
         onToggleDanmakuDrawer={() => setIsDanmakuDrawerOpen(!isDanmakuDrawerOpen)}
+        onTogglePlaybackInfo={() => setIsPlaybackInfoOpen(!isPlaybackInfoOpen)}
+        isPlaybackInfoOpen={isPlaybackInfoOpen}
         onSelectAudioTrack={handleSelectAudioTrack}
         onSelectSubtitleTrack={handleSelectSubtitleTrack}
         onToggleWindowMode={handleToggleWindowMode}
@@ -1047,6 +1058,27 @@ export const PlayerPage: React.FC = () => {
         onReAutoMatch={() => {
           triggerDanmakuLoad(true);
         }}
+      />
+
+      {/* 详细播放信息 HUD 浮层 (Z-Index 35) */}
+      <PlaybackInfoModal
+        isOpen={isPlaybackInfoOpen}
+        onClose={() => setIsPlaybackInfoOpen(false)}
+        item={item}
+        mediaSource={mediaSource}
+        streamUrl={currentStreamUrl || streamUrl}
+        engineType={engineType}
+        currentTime={currentTime}
+        duration={duration || ticksToSeconds(item.RunTimeTicks || 0)}
+        playbackRate={playbackRate}
+        audioTracks={audioTracks}
+        subtitleTracks={subtitleTracks}
+        selectedAudioId={selectedAudioId}
+        selectedSubtitleId={selectedSubtitleId}
+        currentServerName={currentServer?.name}
+        danmakuMatchedTitle={matchedTitle}
+        danmakuCount={rawComments.length}
+        danmakuOffset={savedOffset}
       />
     </div>
   );

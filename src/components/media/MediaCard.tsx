@@ -1,26 +1,29 @@
 import React, { useState } from 'react';
-import { Play, Check } from 'lucide-react';
+import { Play, Check, Server } from 'lucide-react';
 import { EmbyItem, buildItemImageUrl } from '../../api/embyClient';
 
 interface MediaCardProps {
   item: EmbyItem;
-  serverUrl: string;
+  serverUrl?: string;
   onClick: (item: EmbyItem) => void;
   aspectRatio?: 'poster' | 'backdrop';
   subtitle?: string;
   badge?: string;
+  serverBadge?: string;
 }
 
 export const MediaCard: React.FC<MediaCardProps> = ({
   item,
-  serverUrl,
+  serverUrl = '',
   onClick,
   aspectRatio = 'poster',
   subtitle,
   badge,
+  serverBadge,
 }) => {
   const isBackdrop = aspectRatio === 'backdrop';
   const [isImageLoaded, setIsImageLoaded] = useState(false);
+  const effectiveServerUrl = item.ServerUrl || serverUrl;
 
   // 智能图片寻址：
   // 1. 如果是剧集分集（Episode）在竖版海报（poster）模式下，使用父级剧集的 SeriesPrimaryImageTag
@@ -55,7 +58,7 @@ export const MediaCard: React.FC<MediaCardProps> = ({
     }
   }
 
-  const imageUrl = buildItemImageUrl(serverUrl, imageItemId, imageTag, {
+  const imageUrl = buildItemImageUrl(effectiveServerUrl, imageItemId, imageTag, {
     type: imageType,
     maxWidth: isBackdrop ? 600 : 400,
     quality: 85,
@@ -98,7 +101,7 @@ export const MediaCard: React.FC<MediaCardProps> = ({
             const target = e.target as HTMLImageElement;
             // 针对分集海报未命中时的两级平滑降级：尝试取剧集封面
             if (item.SeriesId && imageItemId !== item.SeriesId) {
-              target.src = buildItemImageUrl(serverUrl, item.SeriesId, item.SeriesPrimaryImageTag, {
+              target.src = buildItemImageUrl(effectiveServerUrl, item.SeriesId, item.SeriesPrimaryImageTag, {
                 type: 'Primary',
                 maxWidth: 400,
                 quality: 85,
@@ -117,6 +120,14 @@ export const MediaCard: React.FC<MediaCardProps> = ({
             <Play className="w-5 h-5 fill-white ml-0.5" />
           </div>
         </div>
+
+        {/* Server Badge on top left (if multi-server search or specified) */}
+        {(serverBadge || item.ServerName) && (
+          <div className="absolute top-2 left-2 px-1.5 py-0.5 rounded-md bg-[#0B0E17]/85 backdrop-blur-md text-[10px] font-medium text-amber-300 border border-amber-500/30 flex items-center space-x-1 shadow-md max-w-[100px] z-10">
+            <Server className="w-2.5 h-2.5 flex-shrink-0 text-amber-400" />
+            <span className="truncate">{serverBadge || item.ServerName}</span>
+          </div>
+        )}
 
         {/* Badge on top right */}
         {badge ? (

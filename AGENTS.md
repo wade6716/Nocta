@@ -77,3 +77,15 @@
   - 弹幕绑定：按 `itemId` 字典合并，以最新 `boundAt` 时间戳优先，保证各端绑定的剧集弹幕互补而不被抹除。
   - 弹幕屏蔽词：数组去重求并集。
 
+### 5. 跨多个 Emby 服务器联合聚合搜索 (Federated Multi-Server Search)
+- **多服并发联合检索与容错机制**：
+  - 调用 `searchFederatedMediaItems(targets, params)`，利用 `Promise.allSettled` 并发检索全部已配置的 Emby 服务器（各服务器内部依然自动穿透全部分类库）；
+  - 任何单台服务器超时、凭据失效或离线时，通过独立的 try-catch 容错捕获并记录在 `stats` 中，绝不能让单台故障抛出异常阻断其他健康服务器的搜索结果呈现；
+- **条目来源标定与多服海报寻址**：
+  - 搜索结果条目必须注入所在服务器信息：`ServerId`、`ServerName`、`ServerUrl`；
+  - `MediaCard` 海报封面寻址必须优先使用 `effectiveServerUrl = item.ServerUrl || serverUrl`，防止向非当前主服务器请求图片导致 401/404；
+  - 卡片左上角渲染来源服务器微标（`serverBadge || item.ServerName`），右上角渲染媒体库或剧集分类；
+- **跨服点击无缝迁移**：
+  - 用户点击非当前服务器的影视卡片时，在 `navigate('/detail/' + item.Id)` 前，必须同步调用 `useAuthStore.getState().setCurrentServer(target.id)` 并执行 `useMediaStore.getState().clearMediaCache()`，确保详情页和播放页直接使用目标服务器的 Token 与直链播放，彻底避免跨服会话错乱。
+
+

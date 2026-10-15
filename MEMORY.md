@@ -251,20 +251,27 @@ pnpm tauri build
 
 ---
 
-## 10. 跨媒体库聚合搜索中心 (Cross-Library Unified Search)
+## 10. 跨 Emby 服务器与媒体库聚合搜索中心 (Cross-Server & Cross-Library Federated Search)
 
-### 10.1 搜索漏检根因与 Emby 服务端排坑
-1. **服务端「从全局搜索中排除」机制**：
-   - Emby 服务器管理员常常在特定媒体库（如动漫、纪录片、4K、短片、家庭录像等）的高级设置中勾选了「从全局搜索结果中排除」，导致客户端直接请求无 `ParentId` 的全局接口（`/emby/Users/{UserId}/Items?SearchTerm=...`）时，服务端会完全忽略这些库；
-   - **解决方案（分库并发穿透）**：客户端先获取用户全部可用视图（`getUserViews`），除了并发发起一次全局检索与 `/emby/Search/Hints` 之外，**对每个具体媒体库带上 `ParentId=${view.Id}` 并发深度递归检索**，彻底打破服务端单库隐藏限制。
-2. **媒体类型白名单扩展**：
-   - 原仅过滤 `Movie,Series` 会将部分混合库、动漫剧场版或 BoxSet/Video 彻底漏掉；
-   - 必须放宽包含 `IncludeItemTypes=Movie,Series,Episode,Video,BoxSet`，再由前端统一执行 `isVideoMedia` 与 `mergeMediaBySeries` 去重。
-3. **所属媒体库标签（LibraryName）感知**：
-   - 并发穿透检索返回的每部影视条目，均注入所在媒体库的 `LibraryName` 和 `LibraryId`；
-   - 搜索结果卡片直接高亮展示来源库徽章（如 `[动漫] 进击的巨人`、`[4K电影] 奥本海默`），便于用户一目了然定位内容。
-4. **分类筛选胶囊与服务器快速切换**：
-   - 搜索界面提供「全部影视 / 电影 / 剧集」类型过滤，并动态呈现「全部媒体库 + 各具体媒体库」分类胶囊；
-   - 整合 `ServerSwitcherDropdown`，用户可在搜索界面即时切换不同的 Emby 服务器进行检索。
+### 10.1 搜索架构与服务端排坑
+1. **跨多个 Emby 服务器联合并发检索**：
+   - 用户往往在 Nocta 中配置并保存了多台 Emby 服务器（如家用 NAS、朋友服、海外 VPS 备用服）；
+   - 搜索中心支持以「全部服务器」为默认范围并发调度（`searchFederatedMediaItems`），通过 `Promise.allSettled` 并发向所有配置的服务器派发检索任务；
+   - 任何单台服务器超时、连接失败或离线（`lastTestOk === false`），通过独立的 try-catch 容错记录在 `stats` 中并在前端状态栏给出温和的琥珀色提示，绝不抛出异常阻断其他健康服务器的搜索呈现。
+2. **单服务器内部的分库穿透（从全局搜索中排除机制）**：
+   - Emby 服务器管理员常在特定媒体库（动漫、纪录片、4K 库等）高级设置中勾选「从全局搜索结果中排除」，无 `ParentId` 的全局接口会直接漏查；
+   - 解决方案：并发发起用户全部分类视图检索（带 `ParentId=${view.Id}` 穿透）、全局检索与 `/emby/Search/Hints`，全量汇总并去重。
+3. **所属服务器与媒体库双重标识注入**：
+   - 搜出的每个影视条目均注入 `ServerId`、`ServerName`、`ServerUrl` 以及 `LibraryName`、`LibraryId`；
+   - `MediaCard` 优先使用 `item.ServerUrl || serverUrl` 请求海报图片，避免因跨服务器请求导致海报 401/404；
+   - 卡片左上角标明所属服务器（如 `[NAS]`），右上角标明所属媒体库（如 `[动漫]`）。
+4. **跨服点击无缝迁移与平滑播放**：
+   - 用户在搜索结果中点击非当前活动服务器的卡片时，系统在跳转前自动调用 `useAuthStore.setCurrentServer(item.ServerId)` 并执行 `useMediaStore.clearMediaCache()`；
+   - 随后导航至 `/detail/${item.Id}`，详情页与播放器将直接使用该目标服务器的 Token 与直链播放，免去手动换服步骤。
+5. **多级筛选胶囊体系**：
+   - 第 1 级（类型）：全部影视 / 电影 / 剧集；
+   - 第 2 级（服务器）：全部服务器 (共 N 部) / 各独立服务器名称 (带健康状态与部数)，点击一键过滤；
+   - 第 3 级（媒体库）：选定单台服务器时展示该服务器下的分类库胶囊。
+
 
 

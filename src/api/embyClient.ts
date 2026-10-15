@@ -86,6 +86,9 @@ export interface EmbyItem {
   MediaSources?: EmbyMediaSource[];
   LibraryName?: string;
   LibraryId?: string;
+  ServerId?: string;
+  ServerName?: string;
+  ServerUrl?: string;
 }
 
 /**
@@ -990,6 +993,141 @@ export async function searchMediaItems(
   const allItems = Array.from(itemMap.values());
   // 剧集按 SeriesId 或 SeriesName 自动折叠去重
   return mergeMediaBySeries(allItems);
+}
+
+export interface FederatedServerTarget {
+  id: string;
+  name: string;
+  url: string;
+  userId: string;
+  accessToken: string;
+  views?: EmbyItem[];
+}
+
+export interface FederatedSearchStats {
+  serverId: string;
+  serverName: string;
+  ok: boolean;
+  count: number;
+  durationMs: number;
+  error?: string;
+}
+
+export interface FederatedSearchResponse {
+  items: EmbyItem[];
+  stats: FederatedSearchStats[];
+}
+
+/**
+ * 跨多个 Emby 服务器联合并发聚合检索
+ * 1. 并发请求各台已配置并处于活动状态的 Emby 服务器（通过 searchMediaItems 穿透各服务器全部分类库）；
+ * 2. 任何单台服务器超时或网络异常均通过 Promise.allSettled 容错捕获，不阻塞其他健康服务器；
+ * 3. 为所有返回影视条目自动注入来源 ServerId、ServerName、ServerUrl；
+ * 4. 跨服务器智能合并与相关度排序（精准匹配优先、年份最新优先）；
+ * 5. 附带返回各服务器的响应状态与匹配条数统计。
+ */
+export async function searchFederatedMediaItems(
+  targets: FederatedServerTarget[],
+  params: {
+    keyword: string;
+    filterType?: SearchFilterType;
+    limitPerServer?: number;
+  }
+): Promise<FederatedSearchResponse> {
+  const cleanTerm = params.keyword.trim();
+  if (!cleanTerm || targets.length === 0) {
+    return { items: [], stats: [] };
+  }
+
+  const stats: FederatedSearchStats[] = [];
+  const allResults: EmbyItem[] = [];
+
+  const tasks = targets.map(async (target) => {
+    const startTime = performance.now();
+    try {
+      const items = await searchMediaItems(
+        target.url,
+        target.userId,
+        target.accessToken,
+        {
+          keyword: cleanTerm,
+          filterType: params.filterType,
+          views: target.views,
+          limit: params.limitPerServer || 60,
+        }
+      );
+      const durationMs = Math.round(performance.now() - startTime);
+
+      const enriched = items.map((it) => ({
+        ...it,
+        ServerId: target.id,
+        ServerName: target.name,
+        ServerUrl: target.url,
+      }));
+
+      return {
+        serverId: target.id,
+        serverName: target.name,
+        ok: true,
+        count: enriched.length,
+        durationMs,
+        items: enriched,
+      };
+    } catch (err: any) {
+      const durationMs = Math.round(performance.now() - startTime);
+      console.warn(`[searchFederatedMediaItems] Server ${target.name} (${target.id}) error:`, err);
+      return {
+        serverId: target.id,
+        serverName: target.name,
+        ok: false,
+        count: 0,
+        durationMs,
+        error: err?.message || '连接失败或超时',
+        items: [] as EmbyItem[],
+      };
+    }
+  });
+
+  const settled = await Promise.allSettled(tasks);
+
+  for (const s of settled) {
+    if (s.status === 'fulfilled') {
+      const { items, ...stat } = s.value;
+      stats.push(stat);
+      allResults.push(...items);
+    }
+  }
+
+  // 跨服结果智能排序：
+  // 1. 完全匹配片名优先
+  // 2. 前缀匹配优先
+  // 3. 上映年份较新优先
+  const lowerTerm = cleanTerm.toLowerCase();
+  allResults.sort((a, b) => {
+    const aName = (a.Name || '').toLowerCase();
+    const bName = (b.Name || '').toLowerCase();
+
+    const aExact = aName === lowerTerm;
+    const bExact = bName === lowerTerm;
+    if (aExact && !bExact) return -1;
+    if (!aExact && bExact) return 1;
+
+    const aStart = aName.startsWith(lowerTerm);
+    const bStart = bName.startsWith(lowerTerm);
+    if (aStart && !bStart) return -1;
+    if (!aStart && bStart) return 1;
+
+    const aYear = a.ProductionYear || 0;
+    const bYear = b.ProductionYear || 0;
+    if (aYear !== bYear) return bYear - aYear;
+
+    return 0;
+  });
+
+  return {
+    items: allResults,
+    stats,
+  };
 }
 
 

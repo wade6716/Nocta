@@ -72,7 +72,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
     >
       {/* 顶部 Logo 与折叠按钮 */}
       <div className="flex flex-col flex-1 min-h-0">
-        <div className="h-14 flex items-center justify-between px-3.5 border-b border-white/[0.04]">
+        <div
+          className={`h-14 flex items-center justify-between border-b border-white/[0.04] ${
+            isCollapsed ? 'px-2 justify-center' : 'px-3.5'
+          }`}
+        >
           <div
             onClick={() => navigate('/')}
             className={`flex items-center space-x-2.5 cursor-pointer overflow-hidden ${
@@ -114,11 +118,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {/* 首页发现 */}
             <button
               onClick={() => handleNavClick('/')}
-              className={`w-full h-10 px-3 rounded-xl flex items-center gap-3 text-sm transition-all cursor-pointer relative group ${
+              className={`w-full h-10 rounded-xl flex items-center text-sm transition-all cursor-pointer relative group ${
+                isCollapsed ? 'justify-center px-0' : 'px-3 gap-3'
+              } ${
                 currentPath === '/' && !location.hash
                   ? 'bg-[#38BDF8]/12 text-[#38BDF8] font-medium'
                   : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.04]'
-              } ${isCollapsed ? 'justify-center' : ''}`}
+              }`}
               title="首页发现"
             >
               {currentPath === '/' && !location.hash && (
@@ -131,11 +137,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {/* 继续观看 */}
             <button
               onClick={() => handleNavClick('/', 'continue-watching')}
-              className={`w-full h-10 px-3 rounded-xl flex items-center gap-3 text-sm transition-all cursor-pointer relative group ${
+              className={`w-full h-10 rounded-xl flex items-center text-sm transition-all cursor-pointer relative group ${
+                isCollapsed ? 'justify-center px-0' : 'px-3 gap-3'
+              } ${
                 location.hash === '#continue-watching'
                   ? 'bg-[#38BDF8]/12 text-[#38BDF8] font-medium'
                   : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.04]'
-              } ${isCollapsed ? 'justify-center' : ''}`}
+              }`}
               title="继续观看"
             >
               {location.hash === '#continue-watching' && (
@@ -148,24 +156,30 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {/* 跨库聚合搜索 */}
             <button
               onClick={() => handleNavClick('/search')}
-              className={`w-full h-10 px-3 rounded-xl flex items-center justify-between text-sm transition-all cursor-pointer relative group ${
+              className={`w-full h-10 rounded-xl flex items-center text-sm transition-all cursor-pointer relative group ${
+                isCollapsed ? 'justify-center px-0' : 'justify-between px-3'
+              } ${
                 currentPath === '/search'
                   ? 'bg-[#38BDF8]/12 text-[#38BDF8] font-medium'
                   : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.04]'
-              } ${isCollapsed ? 'justify-center' : 'px-3'}`}
+              }`}
               title="全库聚合搜索 (Ctrl+K)"
             >
               {currentPath === '/search' && (
                 <span className="absolute left-0 w-1 h-5 rounded-full bg-[#38BDF8]" />
               )}
-              <div className="flex items-center gap-3">
+              {isCollapsed ? (
                 <Search className="w-4 h-4 flex-shrink-0" />
-                {!isCollapsed && <span>聚合搜索</span>}
-              </div>
-              {!isCollapsed && (
-                <kbd className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white/[0.06] text-slate-400 border border-white/[0.08]">
-                  ⌘K
-                </kbd>
+              ) : (
+                <>
+                  <div className="flex items-center gap-3">
+                    <Search className="w-4 h-4 flex-shrink-0" />
+                    <span>聚合搜索</span>
+                  </div>
+                  <kbd className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white/[0.06] text-slate-400 border border-white/[0.08]">
+                    ⌘K
+                  </kbd>
+                </>
               )}
             </button>
           </div>
@@ -189,25 +203,33 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <button
                     key={v.Id}
                     onClick={() => handleNavClick('/', `view-${v.Id}`)}
-                    className={`w-full h-10 px-3 rounded-xl flex items-center justify-between text-sm transition-all cursor-pointer relative group ${
+                    className={`w-full h-10 rounded-xl flex items-center text-sm transition-all cursor-pointer relative group ${
+                      isCollapsed ? 'justify-center px-0' : 'justify-between px-3'
+                    } ${
                       isSelected
                         ? 'bg-[#38BDF8]/12 text-[#38BDF8] font-medium'
                         : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.04]'
-                    } ${isCollapsed ? 'justify-center' : ''}`}
+                    }`}
                     title={v.Name}
                   >
                     {isSelected && (
                       <span className="absolute left-0 w-1 h-5 rounded-full bg-[#38BDF8]" />
                     )}
-                    <div className="flex items-center gap-3 truncate">
-                      {renderViewIcon(v.CollectionType)}
-                      {!isCollapsed && <span className="truncate">{v.Name}</span>}
-                    </div>
+                    {isCollapsed ? (
+                      renderViewIcon(v.CollectionType)
+                    ) : (
+                      <>
+                        <div className="flex items-center gap-3 truncate">
+                          {renderViewIcon(v.CollectionType)}
+                          <span className="truncate">{v.Name}</span>
+                        </div>
 
-                    {!isCollapsed && typeof countNum === 'number' && countNum > 0 && (
-                      <span className="text-[11px] font-mono text-slate-500 tabular-nums">
-                        {countNum}
-                      </span>
+                        {typeof countNum === 'number' && countNum > 0 && (
+                          <span className="text-[11px] font-mono text-slate-500 tabular-nums">
+                            {countNum}
+                          </span>
+                        )}
+                      </>
                     )}
                   </button>
                 );
@@ -222,11 +244,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* 系统设置 */}
         <button
           onClick={() => handleNavClick('/settings')}
-          className={`w-full h-10 px-3 rounded-xl flex items-center gap-3 text-sm transition-all cursor-pointer relative ${
+          className={`w-full h-10 rounded-xl flex items-center text-sm transition-all cursor-pointer relative ${
+            isCollapsed ? 'justify-center px-0' : 'px-3 gap-3'
+          } ${
             currentPath === '/settings'
               ? 'bg-[#38BDF8]/12 text-[#38BDF8] font-medium'
               : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.04]'
-          } ${isCollapsed ? 'justify-center' : ''}`}
+          }`}
           title="系统设置"
         >
           {currentPath === '/settings' && (

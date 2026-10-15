@@ -116,6 +116,18 @@
 - **一键技术支持复制（Copy to Clipboard）**：
   - 提供一键复制全部纯文本参数功能，方便用户向服务端管理员或开发者提供完整的故障排查报告。
 
+### 8. 版本发布与 GitHub Actions 自动化打包规范 (Release & Packaging Pipeline)
+- **版本号格式规范与 Windows MSI 避坑**：
+  - Windows MSI (WiX) 安装包生成器要求版本格式必须为纯数字（`major.minor.patch`，如 `0.1.0`），如果 `src-tauri/tauri.conf.json` 中配置了非数字后缀（如 `0.1.0-alpha.2`），打包时会直接报错中断。
+  - 因此，Pre-release 版本（Alpha / Beta / RC）必须将 tag 命名为 `v0.1.0-alpha.2`，由 GitHub Actions 中的 `contains(github.ref_name, 'alpha')` 自动识别为预发布状态，`tauri.conf.json` 保持为标准数字 SemVer（`0.1.0`）；
+- **发布流程自动化触发**：
+  1. 更新 `package.json` 及关于页面显示的客户端版本号；
+  2. 运行 `pnpm build` 与 `cargo check` 确保零错误；
+  3. 提交版本变更并打带注释的标签：`git tag -a v0.1.0-alpha.2 -m "Release v0.1.0-alpha.2: ..."`；
+  4. 推送主分支与标签：`git push origin main && git push origin v0.1.0-alpha.2`；
+  5. GitHub Actions 自动矩阵构建 Windows x64、macOS Apple Silicon (aarch64)、macOS Intel (x86_64)、Linux x64 (deb/AppImage) 全平台安装包并上传至 GitHub Releases。
+
+
 
 
 

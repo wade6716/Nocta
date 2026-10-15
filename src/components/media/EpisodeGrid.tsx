@@ -22,7 +22,7 @@ export const EpisodeGrid: React.FC<EpisodeGridProps> = ({
   onSelectEpisode,
 }) => {
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 select-none">
       {episodes.map((ep) => {
         const isCurrent = ep.Id === currentEpisodeId;
         const imageUrl = buildItemImageUrl(
@@ -37,18 +37,23 @@ export const EpisodeGrid: React.FC<EpisodeGridProps> = ({
         const progressPercent =
           totalTicks > 0 ? Math.min(100, Math.round((positionTicks / totalTicks) * 100)) : 0;
 
+        const epNum =
+          ep.IndexNumber !== undefined
+            ? `E${String(ep.IndexNumber).padStart(2, '0')}`
+            : 'EP';
+
         return (
           <div
             key={ep.Id}
             onClick={() => onSelectEpisode(ep)}
-            className={`group relative flex flex-col bg-surface rounded-xl overflow-hidden border cursor-pointer transition-all ${
+            className={`group relative flex items-center p-2.5 bg-[#131826]/80 hover:bg-[#131826] rounded-xl overflow-hidden border cursor-pointer transition-all duration-200 ${
               isCurrent
-                ? 'border-primary ring-1 ring-primary'
-                : 'border-white/5 hover:border-white/20 hover:-translate-y-0.5'
+                ? 'border-[#38BDF8] ring-1 ring-[#38BDF8]/40 shadow-lg shadow-sky-500/10'
+                : 'border-white/[0.08] hover:border-[#38BDF8]/45 hover:-translate-y-0.5 shadow-md shadow-black/30'
             }`}
           >
-            {/* Thumbnail */}
-            <div className="relative aspect-video w-full bg-black/40 overflow-hidden">
+            {/* Left Thumbnail (w-36 aspect-video) */}
+            <div className="relative w-36 aspect-video bg-black/60 rounded-lg overflow-hidden flex-shrink-0">
               <img
                 src={imageUrl}
                 alt={ep.Name}
@@ -56,50 +61,57 @@ export const EpisodeGrid: React.FC<EpisodeGridProps> = ({
                 className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
                 onError={(e) => {
                   (e.target as HTMLImageElement).src =
-                    'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="300" height="170" viewBox="0 0 300 170"><rect width="100%" height="100%" fill="%23161922"/><text x="50%" y="50%" fill="%23666" font-family="sans-serif" font-size="14" text-anchor="middle" dominant-baseline="middle">暂无分集缩略图</text></svg>';
+                    'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="300" height="170" viewBox="0 0 300 170"><rect width="100%" height="100%" fill="%23131826"/><text x="50%" y="50%" fill="%2364748B" font-family="sans-serif" font-size="12" text-anchor="middle" dominant-baseline="middle">暂无剧照</text></svg>';
                 }}
               />
 
-              {/* Episode index pill */}
-              <div className="absolute top-2 left-2 px-2 py-0.5 rounded bg-black/70 backdrop-blur text-xs font-mono font-semibold text-white">
-                第 {ep.IndexNumber ?? '-'} 集
-              </div>
-
               {/* Hover play icon */}
-              <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                <div className="w-10 h-10 rounded-full bg-primary text-white flex items-center justify-center shadow-lg">
-                  <Play className="w-5 h-5 fill-white ml-0.5" />
+              <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
+                <div className="w-8 h-8 rounded-full bg-[#38BDF8] text-slate-950 flex items-center justify-center shadow-lg shadow-sky-500/30 transform scale-75 group-hover:scale-100 transition-transform">
+                  <Play className="w-4 h-4 fill-current ml-0.5" />
                 </div>
               </div>
 
-              {/* Progress Bar */}
+              {/* Duration badge */}
+              {ep.RunTimeTicks && (
+                <div className="absolute bottom-1.5 right-1.5 px-1.5 py-0.2 rounded bg-black/80 backdrop-blur text-[10px] font-mono text-slate-300 tabular-nums">
+                  {formatMinutes(ep.RunTimeTicks)}
+                </div>
+              )}
+
+              {/* Progress Bar (规范: h-1 bg-white/20, 已看进度 bg-[#38BDF8]) */}
               {progressPercent > 0 && (
-                <div className="absolute bottom-0 inset-x-0 h-1 bg-black/60">
-                  <div className="h-full bg-primary" style={{ width: `${progressPercent}%` }} />
+                <div className="absolute bottom-0 inset-x-0 h-1 bg-white/20">
+                  <div className="h-full bg-[#38BDF8]" style={{ width: `${progressPercent}%` }} />
                 </div>
               )}
             </div>
 
-            {/* Info */}
-            <div className="p-3 flex-1 flex flex-col justify-between">
-              <div>
-                <h4
-                  className={`text-sm font-semibold truncate ${
-                    isCurrent ? 'text-primary' : 'text-gray-200 group-hover:text-primary transition-colors'
-                  }`}
-                >
+            {/* Right Info Details */}
+            <div className="ml-3 min-w-0 flex-1 flex flex-col justify-center">
+              <div className="flex items-center space-x-1.5 text-xs font-semibold">
+                <span className="font-mono text-[#38BDF8] tabular-nums tracking-wide">
+                  {epNum}
+                </span>
+                <span className="text-slate-500">·</span>
+                <span className="text-slate-100 truncate group-hover:text-[#38BDF8] transition-colors">
                   {ep.Name}
-                </h4>
-                {ep.Overview && (
-                  <p className="text-xs text-gray-400 mt-1 line-clamp-2 leading-relaxed">
-                    {ep.Overview}
-                  </p>
-                )}
+                </span>
               </div>
-              <div className="mt-2 flex items-center justify-between text-xs text-gray-400 font-mono">
-                <span>{formatMinutes(ep.RunTimeTicks)}</span>
-                {ep.UserData?.Played && <span className="text-green-400">已看完</span>}
-              </div>
+
+              {ep.Overview ? (
+                <p className="text-[11px] text-slate-400 mt-1 line-clamp-2 leading-relaxed">
+                  {ep.Overview}
+                </p>
+              ) : (
+                <p className="text-[11px] text-slate-500 italic mt-1">暂无单集介绍</p>
+              )}
+
+              {ep.UserData?.Played && (
+                <span className="text-[10px] text-emerald-400 font-medium mt-1 inline-block">
+                  ✓ 已看完
+                </span>
+              )}
             </div>
           </div>
         );

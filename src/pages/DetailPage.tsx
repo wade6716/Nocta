@@ -195,99 +195,122 @@ export const DetailPage: React.FC = () => {
   });
 
   return (
-    <div className="w-full text-gray-100 select-none pb-20">
-      {/* Backdrop Hero Header */}
-      <div className="relative w-full h-[480px]">
-        <img
-          src={backdropUrl}
-          alt={item.Name}
-          className="w-full h-full object-cover object-top filter brightness-50"
-        />
-        <div className="absolute inset-0 bg-gradient-to-t from-background via-background/60 to-transparent" />
-        <div className="absolute inset-0 bg-gradient-to-r from-background via-background/40 to-transparent" />
+    <div className="w-full text-slate-100 select-none pb-24 relative min-h-full">
+      {/* 1. 全屏氛围背景 (Ambient Backdrop - 3xl blur, scale-110, pointer-events-none) */}
+      <img
+        src={backdropUrl}
+        alt=""
+        aria-hidden="true"
+        className="fixed inset-0 -z-10 w-full h-full object-cover opacity-20 blur-3xl scale-110 pointer-events-none"
+      />
 
-        {/* Back Button */}
+      {/* 2. 上半部信息头 (Header Split with Ambient Backing) */}
+      <div className="relative w-full pt-8 px-8 max-w-7xl mx-auto">
+        {/* 返回按钮 */}
         <button
-          onClick={() => navigate('/')}
-          className="absolute top-6 left-8 p-2.5 rounded-full bg-black/50 hover:bg-black/80 backdrop-blur text-white transition z-10 cursor-pointer"
+          onClick={() => navigate(-1)}
+          className="mb-6 p-2.5 rounded-full bg-white/[0.06] hover:bg-white/[0.12] backdrop-blur-xl border border-white/[0.08] text-slate-200 hover:text-white transition cursor-pointer flex items-center space-x-1.5 text-xs font-medium group"
+          title="返回上一页"
         >
-          <ArrowLeft className="w-5 h-5" />
+          <ArrowLeft className="w-4 h-4 group-hover:-translate-x-0.5 transition-transform" />
+          <span>返回</span>
         </button>
 
-        {/* Hero Information */}
-        <div className="absolute bottom-6 left-8 right-8 flex items-end space-x-8">
-          {/* Poster */}
-          <div className="hidden sm:block w-44 aspect-[2/3] rounded-2xl overflow-hidden shadow-2xl border border-white/10 flex-shrink-0">
+        <div className="flex flex-col md:flex-row items-start gap-8">
+          {/* 左侧：高清竖版海报 (w-52 aspect-[2/3] rounded-2xl) */}
+          <div className="w-48 sm:w-56 aspect-[2/3] rounded-2xl overflow-hidden shadow-2xl shadow-black/60 border border-white/[0.12] shrink-0 bg-[#131826]">
             <img src={posterUrl} alt={item.Name} className="w-full h-full object-cover" />
           </div>
 
-          {/* Metadata */}
-          <div className="flex-1 space-y-3">
-            <h1 className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight">
+          {/* 右侧：标题、规格标签组与行动栏 */}
+          <div className="flex-1 space-y-4">
+            <h1 className="text-3xl sm:text-4xl font-extrabold text-slate-50 tracking-tight drop-shadow-md">
               {item.Name}
             </h1>
 
-            <div className="flex flex-wrap items-center gap-3 text-xs text-gray-300 font-medium">
+            {/* 流媒体规格标签组 */}
+            <div className="flex flex-wrap items-center gap-2 text-xs font-mono font-medium">
               {(item.ProductionYear || item.PremiereDate) && (
-                <div className="flex items-center space-x-1">
-                  <Calendar className="w-3.5 h-3.5 text-primary" />
-                  <span>{item.ProductionYear || item.PremiereDate?.slice(0, 4)}</span>
-                </div>
+                <span className="px-2.5 py-1 rounded-md bg-white/[0.06] border border-white/[0.08] text-slate-300">
+                  {item.ProductionYear || item.PremiereDate?.slice(0, 4)}
+                </span>
               )}
               {item.RunTimeTicks && (
-                <div className="flex items-center space-x-1">
-                  <Clock className="w-3.5 h-3.5 text-primary" />
-                  <span>{Math.round(ticksToSeconds(item.RunTimeTicks) / 60)} 分钟</span>
-                </div>
+                <span className="px-2.5 py-1 rounded-md bg-white/[0.06] border border-white/[0.08] text-slate-300 tabular-nums">
+                  {Math.round(ticksToSeconds(item.RunTimeTicks) / 60)} 分钟
+                </span>
               )}
-              <span className="px-2 py-0.5 rounded bg-white/10 text-white font-mono uppercase">
-                {item.Type}
+              <span className="px-2.5 py-1 rounded-md bg-[#38BDF8]/15 border border-[#38BDF8]/30 text-[#38BDF8] font-bold">
+                4K HDR
+              </span>
+              <span className="px-2.5 py-1 rounded-md bg-white/[0.06] border border-white/[0.08] text-slate-300">
+                10-bit HEVC
+              </span>
+              <span className="px-2.5 py-1 rounded-md bg-white/[0.06] border border-white/[0.08] text-slate-300">
+                多音轨 / 封装字幕
               </span>
             </div>
 
+            {/* 弹幕预检状态条 */}
+            <div className="p-3 rounded-xl bg-white/[0.04] border border-white/[0.06] flex items-center space-x-2.5 max-w-2xl">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse flex-shrink-0" />
+              <span className="text-xs text-slate-300">
+                全网弹幕引擎已就绪 · 支持 Bilibili / 优爱腾全域弹幕自动匹配与时间轴微调
+              </span>
+            </div>
+
+            {/* 剧情简介 */}
             {item.Overview && (
-              <p className="text-sm text-gray-300 line-clamp-3 leading-relaxed max-w-3xl">
+              <p className="text-sm text-slate-300 leading-relaxed max-w-3xl line-clamp-4">
                 {item.Overview}
               </p>
             )}
 
+            {/* 电影直接起播按钮 */}
             {!isSeries && (
-              <button
-                onClick={() => startPlayback(item)}
-                disabled={startingPlay}
-                className="inline-flex items-center space-x-2 px-6 py-3 rounded-xl bg-primary hover:bg-primary-hover text-white font-bold text-sm shadow-xl shadow-primary/25 transition cursor-pointer disabled:opacity-50"
-              >
-                <Play className="w-5 h-5 fill-white" />
-                <span>{startingPlay ? '正在获取直连流...' : '立即播放'}</span>
-              </button>
+              <div className="pt-2">
+                <button
+                  onClick={() => startPlayback(item)}
+                  disabled={startingPlay}
+                  className="px-8 py-3 rounded-full bg-[#38BDF8] hover:bg-[#0ea5e9] text-slate-950 font-bold text-sm shadow-xl shadow-sky-500/25 transition cursor-pointer flex items-center space-x-2 disabled:opacity-50"
+                >
+                  <Play className="w-4 h-4 fill-current" />
+                  <span>{startingPlay ? '正在获取直连流...' : '立即播放'}</span>
+                </button>
+              </div>
             )}
           </div>
         </div>
       </div>
 
-      {/* Series Seasons and Episodes */}
+      {/* 3. 下半部季与集选择器 (Season & Episode Grid) */}
       {(isSeries || (item.Type === 'Episode' && !!item.SeriesId)) && (
-        <div className="px-8 mt-8 space-y-6">
-          {/* Seasons Tab */}
-          <div className="flex items-center space-x-2 border-b border-white/10 pb-2 overflow-x-auto">
-            {seasons.map((s) => (
-              <button
-                key={s.Id}
-                onClick={() => handleSeasonChange(s.Id)}
-                className={`px-4 py-2 rounded-xl text-sm font-semibold transition cursor-pointer whitespace-nowrap ${
-                  selectedSeasonId === s.Id
-                    ? 'bg-primary text-white shadow-lg shadow-primary/20'
-                    : 'bg-surface hover:bg-white/10 text-gray-300'
-                }`}
-              >
-                {s.Name}
-              </button>
-            ))}
-          </div>
+        <div className="px-8 mt-12 max-w-7xl mx-auto space-y-6">
+          {/* 横向季胶囊 Tab 栏 */}
+          {seasons.length > 0 && (
+            <div className="flex items-center space-x-2 border-b border-white/[0.06] pb-3 overflow-x-auto custom-scrollbar">
+              {seasons.map((s) => {
+                const isActive = selectedSeasonId === s.Id;
+                return (
+                  <button
+                    key={s.Id}
+                    onClick={() => handleSeasonChange(s.Id)}
+                    className={`px-4 py-1.5 rounded-full text-xs font-semibold transition cursor-pointer whitespace-nowrap border ${
+                      isActive
+                        ? 'bg-[#38BDF8]/15 border-[#38BDF8] text-[#38BDF8] shadow-md shadow-sky-500/10'
+                        : 'bg-white/[0.04] border-white/[0.08] text-slate-400 hover:text-slate-200 hover:bg-white/[0.08]'
+                    }`}
+                  >
+                    {s.Name}
+                  </button>
+                );
+              })}
+            </div>
+          )}
 
           {/* Episode Grid */}
           {episodesLoading ? (
-            <div className="py-20 text-center text-xs text-gray-400">正在加载分集列表...</div>
+            <div className="py-24 text-center text-xs text-slate-400">正在同步分集列表...</div>
           ) : (
             <EpisodeGrid
               episodes={episodes}
@@ -302,3 +325,4 @@ export const DetailPage: React.FC = () => {
 };
 
 export default DetailPage;
+

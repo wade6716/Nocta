@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { DanmuConfig } from '../api/danmuClient';
-import { ProxyConfig, httpClient } from '../api/http';
+import { ProxyConfig, httpClient, registerProxyGetter } from '../api/http';
 
 export interface SavedServer {
   id: string;
@@ -248,15 +248,25 @@ export const useAuthStore = create<AuthState>((set, get) => {
     testProxyConnection: async (proxy, targetUrl) => {
       const startTime = performance.now();
       try {
-        const cleanUrl = targetUrl.replace(/\/+$/, '');
-        const testEndpoint = `${cleanUrl}/emby/System/Info/Public`;
+        let cleanUrl = targetUrl.trim();
+        if (!cleanUrl.startsWith('http://') && !cleanUrl.startsWith('https://')) {
+          cleanUrl = `https://${cleanUrl}`;
+        }
+        cleanUrl = cleanUrl.replace(/\/+$/, '');
+
+        // 如果是 Emby 服务器根地址，自动测试 /emby/System/Info/Public
+        let testEndpoint = cleanUrl;
+        if (!cleanUrl.includes('google.com') && !cleanUrl.includes('/generate_204') && !cleanUrl.includes('/emby/')) {
+          testEndpoint = `${cleanUrl}/emby/System/Info/Public`;
+        }
+
         const res = await httpClient(testEndpoint, {
           method: 'GET',
-          headers: { Accept: 'application/json' },
+          headers: { Accept: '*/*' },
           proxy,
         });
         const latency = Math.round(performance.now() - startTime);
-        if (res.ok) {
+        if (res.ok || res.status === 204 || (res.status >= 200 && res.status < 400)) {
           return { ok: true, latency };
         } else {
           return { ok: false, latency, error: `HTTP ${res.status} ${res.statusText}` };
@@ -266,4 +276,11 @@ export const useAuthStore = create<AuthState>((set, get) => {
       }
     },
   };
+});
+
+// 全局注册活动代理配置解析器，供 httpClient 和视频播放引擎自动提取
+registerProxyGetter(() => {
+  const state = useAuthStore.getState();
+  const current = state.getCurrentServer();
+  return current?.proxyConfig || state.globalProxyConfig;
 });

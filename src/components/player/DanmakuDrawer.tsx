@@ -18,6 +18,7 @@ import {
   BookmarkCheck,
   AlertTriangle,
   ArrowDownToLine,
+  Globe,
 } from 'lucide-react';
 import {
   DanmuAnimeSearchResult,
@@ -31,6 +32,7 @@ import { MpvDanmakuBridge } from './MpvDanmakuBridge';
 import { usePlayerStore, DanmakuColorMode } from '../../stores/usePlayerStore';
 import { useDanmuStore } from '../../stores/useDanmuStore';
 import { DanmuServerModal } from '../danmu/DanmuServerModal';
+import { NetworkProxyModal } from '../settings/NetworkProxyModal';
 
 interface DanmakuDrawerProps {
   isOpen: boolean;
@@ -75,6 +77,7 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'match' | 'time' | 'style'>('match');
   const [isServerModalOpen, setIsServerModalOpen] = useState(false);
+  const [isProxyModalOpen, setIsProxyModalOpen] = useState(false);
 
   // Danmu servers store
   const { servers, activeServerId, getActiveServer } = useDanmuStore();
@@ -984,6 +987,16 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
                 <p className="text-[10px] text-gray-400 leading-relaxed">
                   原生硬解支持 MKV 原盘直接播放与 DTS/TrueHD 音轨本地直解，Emby 服务端 0% 转码与重封装。
                 </p>
+
+                <div className="pt-2">
+                  <button
+                    onClick={() => setIsProxyModalOpen(true)}
+                    className="w-full py-2 bg-white/5 hover:bg-white/10 text-gray-300 hover:text-white rounded-lg text-xs font-medium transition flex items-center justify-center space-x-1.5 cursor-pointer"
+                  >
+                    <Globe className="w-3.5 h-3.5 text-primary" />
+                    <span>网络与代理设置 (系统代理 / 手动代理)</span>
+                  </button>
+                </div>
               </div>
             </div>
           )}
@@ -1046,6 +1059,12 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
       <DanmuServerModal
         isOpen={isServerModalOpen}
         onClose={() => setIsServerModalOpen(false)}
+      />
+
+      {/* Network Proxy Config Modal */}
+      <NetworkProxyModal
+        isOpen={isProxyModalOpen}
+        onClose={() => setIsProxyModalOpen(false)}
       />
     </>
   );

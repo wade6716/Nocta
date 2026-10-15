@@ -11,6 +11,7 @@ import {
 import { UnlistenFn } from '@tauri-apps/api/event';
 import { IPlayerEngine, PlayerLoadOptions, PlayerState } from './types';
 import { MappedTrack } from '../api/embyClient';
+import { resolveEffectiveProxy } from '../api/http';
 
 const OBSERVED_PROPERTIES = [
   ['pause', 'flag'],
@@ -67,19 +68,32 @@ export class MpvPlayerEngine implements IPlayerEngine {
   async init(_container: HTMLElement | null): Promise<void> {
     if (this.isInitialized) return;
 
+    let effectiveProxy: string | undefined;
+    try {
+      effectiveProxy = await resolveEffectiveProxy();
+    } catch (e) {
+      console.warn('[MpvEngine Resolve Proxy Warning]', e);
+    }
+
+    const initialOptions: Record<string, string | boolean | number> = {
+      vo: 'gpu-next,gpu',
+      hwdec: 'auto-safe',
+      'keep-open': 'yes',
+      'force-window': 'yes',
+      panscan: '0.0',
+      'autofit-larger': '100%x100%',
+      osc: 'no',
+      'osd-level': '0',
+      'input-default-bindings': 'no',
+      'input-vo-keyboard': 'no',
+    };
+
+    if (effectiveProxy) {
+      initialOptions['http-proxy'] = effectiveProxy;
+    }
+
     const mpvConfig: MpvConfig = {
-      initialOptions: {
-        vo: 'gpu-next,gpu',
-        hwdec: 'auto-safe',
-        'keep-open': 'yes',
-        'force-window': 'yes',
-        panscan: '0.0',
-        'autofit-larger': '100%x100%',
-        osc: 'no',
-        'osd-level': '0',
-        'input-default-bindings': 'no',
-        'input-vo-keyboard': 'no',
-      },
+      initialOptions,
       observedProperties: OBSERVED_PROPERTIES,
     };
 
@@ -229,6 +243,14 @@ export class MpvPlayerEngine implements IPlayerEngine {
   async load(options: PlayerLoadOptions): Promise<void> {
     if (!this.isInitialized) {
       await this.init(null);
+    } else {
+      // 每次加载新视频流时，动态同步最新的代理设置到原生内核
+      try {
+        const effectiveProxy = await resolveEffectiveProxy();
+        await setProperty('http-proxy', effectiveProxy || '');
+      } catch (e) {
+        console.warn('[MpvEngine Sync Proxy Warning]', e);
+      }
     }
 
     this.setState('loading');

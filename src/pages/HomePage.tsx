@@ -9,6 +9,7 @@ import {
   History,
   Server,
   MessagesSquare,
+  Globe,
   Pencil,
   TriangleAlert,
 } from 'lucide-react';
@@ -16,6 +17,7 @@ import { useAuthStore } from '../stores/useAuthStore';
 import { useMediaStore } from '../stores/useMediaStore';
 import { DanmuServerModal } from '../components/danmu/DanmuServerModal';
 import { EmbyServerModal } from '../components/settings/EmbyServerModal';
+import { NetworkProxyModal } from '../components/settings/NetworkProxyModal';
 import {
   EmbyItem,
   getUserViews,
@@ -73,6 +75,7 @@ export const HomePage: React.FC = () => {
   const [loading, setLoading] = useState(!isCached);
   const [isDanmuModalOpen, setIsDanmuModalOpen] = useState(false);
   const [isServerModalOpen, setIsServerModalOpen] = useState(false);
+  const [isProxyModalOpen, setIsProxyModalOpen] = useState(false);
 
   const loadData = useCallback(
     async (isManualRefresh = false) => {
@@ -277,6 +280,13 @@ export const HomePage: React.FC = () => {
             <MessagesSquare className="w-4 h-4" />
           </button>
           <button
+            onClick={() => setIsProxyModalOpen(true)}
+            className="p-2 rounded-xl bg-surface hover:bg-white/10 text-gray-300 hover:text-white transition cursor-pointer"
+            title="网络与代理设置 (系统代理 / 手动代理)"
+          >
+            <Globe className="w-4 h-4" />
+          </button>
+          <button
             onClick={() => loadData(true)}
             disabled={isRefreshing || loading}
             className="p-2 rounded-xl bg-surface hover:bg-white/10 text-gray-300 hover:text-white transition cursor-pointer"
@@ -417,6 +427,12 @@ export const HomePage: React.FC = () => {
       <DanmuServerModal
         isOpen={isDanmuModalOpen}
         onClose={() => setIsDanmuModalOpen(false)}
+      />
+
+      {/* 网络与代理设置弹窗 */}
+      <NetworkProxyModal
+        isOpen={isProxyModalOpen}
+        onClose={() => setIsProxyModalOpen(false)}
       />
     </div>
   );

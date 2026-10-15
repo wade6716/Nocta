@@ -228,3 +228,24 @@ pnpm tauri build
    - `core-idle` 在解复用、起播初始缓冲及跳进度时均为 `true`，极易导致播放器卡在 `buffering` 状态；
    - **规范**：必须监听 `paused-for-cache` 判断网络缓存下溢，且在 `time-pos` 推进时主动重置 `_isBuffering = false` 并解除上层 Loading 遮罩。
 
+---
+
+## 9. 网络代理架构 (Network & Proxy Architecture)
+
+### 9.1 原生播放器与系统代理脱节问题
+- **痛点**：默认情况下，Windows 下原生 `libmpv`（通过 FFmpeg 网络栈）仅在系统环境变量包含 `HTTP_PROXY` 时才会走代理，**绝不会自动读取 Windows 注册表中的系统代理 (WinINet)**（如 Clash / v2rayN 打开系统代理时写入的 `127.0.0.1:7890`）。导致用户即便开启了系统代理，原生视频播放仍然以直连方式访问，海外/代理服务器加载超时。
+- **解决**：打通 Rust 原生探测 -> 前端代理中枢 -> `libmpv` / `httpClient` 双向注入机制。
+
+### 9.2 跨平台系统代理自动探知 (`src-tauri/src/proxy.rs`)
+- 提供 `get_system_proxy` Tauri 命令：
+  - **Windows**：直接读取 `HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings` 中的 `ProxyEnable` 与 `ProxyServer`，支持 `127.0.0.1:7890`、复合分号格式与 socks 格式；
+  - **macOS**：通过 `sysproxy`（`networksetup`）读取当前活动接口的 HTTP/HTTPS/SOCKS 代理；
+  - **Linux**：通过 `sysproxy` 读取 GNOME `gsettings` 代理；
+  - **环境变量兜底**：若操作系统未启用，扫描 `ALL_PROXY`、`HTTPS_PROXY`、`HTTP_PROXY` 及其小写版本；
+  - 标准化输出完整 URL 格式（如 `http://127.0.0.1:7890` 或 `socks5://127.0.0.1:10808`）。
+
+### 9.3 统一代理中枢与播放器透传
+- **前端网络层**：[`src/api/http.ts`](file:///d:/wade/code/emby-tauri-player/src/api/http.ts) 提供 `resolveEffectiveProxy()` 与 `registerProxyGetter()`，为所有 `httpClient`（Emby API / 弹幕）请求动态附加 `{ proxy: { all: proxyUrl } }`。
+- **原生播放器内核**：[`MpvPlayerEngine.ts`](file:///d:/wade/code/emby-tauri-player/src/player/MpvPlayerEngine.ts) 在 `init()` 阶段注入 `initialOptions['http-proxy'] = proxyUrl`，并在每次 `load()` 新视频时动态同步 `setProperty('http-proxy', proxyUrl || '')`。
+- **UI 配置与多目标测速**：[`NetworkProxyModal.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/settings/NetworkProxyModal.tsx) 支持一键切换「跟随系统代理 (默认)」、「手动自定义 (HTTP/SOCKS5)」、「强制直连」，并提供 Google（`generate_204`）、当前 Emby 服务器与自定义网址的实时连通性与往返延迟诊断。
+

@@ -12,6 +12,7 @@ import {
   Eye,
   EyeOff,
   TriangleAlert,
+  Globe,
 } from 'lucide-react';
 import {
   testServerConnection,
@@ -20,6 +21,7 @@ import {
 } from '../api/embyClient';
 import { useAuthStore } from '../stores/useAuthStore';
 import { EmbyServerModal } from '../components/settings/EmbyServerModal';
+import { NetworkProxyModal } from '../components/settings/NetworkProxyModal';
 
 export const LoginPage: React.FC = () => {
   const navigate = useNavigate();
@@ -32,6 +34,7 @@ export const LoginPage: React.FC = () => {
   const [errorMsg, setErrorMsg] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isServerModalOpen, setIsServerModalOpen] = useState(false);
+  const [isProxyModalOpen, setIsProxyModalOpen] = useState(false);
   const [editingServerId, setEditingServerId] = useState<string | null>(null);
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -103,17 +106,29 @@ export const LoginPage: React.FC = () => {
               <span className="text-xs font-semibold uppercase tracking-wider text-gray-400">
                 已保存的服务器
               </span>
-              <button
-                onClick={() => {
-                  setEditingServerId(null);
-                  setIsServerModalOpen(true);
-                }}
-                className="text-xs text-primary hover:text-primary-hover transition flex items-center space-x-1 cursor-pointer"
-                title="服务器管理"
-              >
-                <Settings2 className="w-3.5 h-3.5" />
-                <span>管理</span>
-              </button>
+              <div className="flex items-center space-x-3">
+                <button
+                  type="button"
+                  onClick={() => setIsProxyModalOpen(true)}
+                  className="text-xs text-gray-400 hover:text-white transition flex items-center space-x-1 cursor-pointer"
+                  title="网络与代理设置"
+                >
+                  <Globe className="w-3.5 h-3.5 text-primary" />
+                  <span>网络代理</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingServerId(null);
+                    setIsServerModalOpen(true);
+                  }}
+                  className="text-xs text-primary hover:text-primary-hover transition flex items-center space-x-1 cursor-pointer"
+                  title="服务器管理"
+                >
+                  <Settings2 className="w-3.5 h-3.5" />
+                  <span>管理</span>
+                </button>
+              </div>
             </div>
             <div className="space-y-2 max-h-48 overflow-y-auto">
               {servers.map((srv) => (
@@ -174,9 +189,22 @@ export const LoginPage: React.FC = () => {
           onSubmit={handleLogin}
           className="bg-surface/80 border border-white/5 rounded-2xl p-6 shadow-xl space-y-4"
         >
-          <span className="text-xs font-semibold uppercase tracking-wider text-gray-400 block">
-            添加新连接
-          </span>
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold uppercase tracking-wider text-gray-400">
+              添加新连接
+            </span>
+            {servers.length === 0 && (
+              <button
+                type="button"
+                onClick={() => setIsProxyModalOpen(true)}
+                className="text-xs text-gray-400 hover:text-white transition flex items-center space-x-1 cursor-pointer"
+                title="网络与代理设置"
+              >
+                <Globe className="w-3.5 h-3.5 text-primary" />
+                <span>配置网络代理</span>
+              </button>
+            )}
+          </div>
 
           {errorMsg && (
             <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl text-xs leading-relaxed">
@@ -249,6 +277,12 @@ export const LoginPage: React.FC = () => {
         isOpen={isServerModalOpen}
         onClose={() => setIsServerModalOpen(false)}
         initialEditId={editingServerId}
+      />
+
+      {/* 网络与代理设置弹窗 */}
+      <NetworkProxyModal
+        isOpen={isProxyModalOpen}
+        onClose={() => setIsProxyModalOpen(false)}
       />
     </div>
   );

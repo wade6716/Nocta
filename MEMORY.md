@@ -247,5 +247,5 @@ pnpm tauri build
 ### 9.3 统一代理中枢与播放器透传
 - **前端网络层**：[`src/api/http.ts`](file:///d:/wade/code/emby-tauri-player/src/api/http.ts) 提供 `resolveEffectiveProxy()` 与 `registerProxyGetter()`，为所有 `httpClient`（Emby API / 弹幕）请求动态附加 `{ proxy: { all: proxyUrl } }`。
 - **原生播放器内核**：[`MpvPlayerEngine.ts`](file:///d:/wade/code/emby-tauri-player/src/player/MpvPlayerEngine.ts) 在 `init()` 阶段注入 `initialOptions['http-proxy'] = proxyUrl`，并在每次 `load()` 新视频时动态同步 `setProperty('http-proxy', proxyUrl || '')`。
-- **UI 配置与多目标测速**：[`NetworkProxyModal.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/settings/NetworkProxyModal.tsx) 支持一键切换「跟随系统代理 (默认)」、「手动自定义 (HTTP/SOCKS5)」、「强制直连」，并提供 Google（`generate_204`）、当前 Emby 服务器与自定义网址的实时连通性与往返延迟诊断。
+- **UI 配置与多目标测速**：系统设置页 [`SettingsPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/SettingsPage.tsx) 与弹窗 [`NetworkProxyModal.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/settings/NetworkProxyModal.tsx) 均支持一键切换「跟随系统代理 (默认)」、「手动自定义 (HTTP/SOCKS5)」、「强制直连」，并提供测试目标下拉选择框（1. Google 全球连通性 / 2. 当前 Emby 服务器 / 3. 自定义网址输入），探测往返延迟与链路健康状态。
 

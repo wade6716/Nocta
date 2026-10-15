@@ -766,3 +766,62 @@ export async function reportPlaybackStopped(
     }),
   });
 }
+
+export interface ViewCounts {
+  movieCount?: number;
+  seriesCount?: number;
+  episodeCount?: number;
+}
+
+/**
+ * 获取指定媒体库分类下的电影与剧集统计数量 (Limit=0 仅查询 TotalRecordCount，极低开销)
+ */
+export async function getViewItemCounts(
+  serverUrl: string,
+  userId: string,
+  parentId: string,
+  collectionType: string | undefined,
+  accessToken: string
+): Promise<ViewCounts> {
+  const base = normalizeServerUrl(serverUrl);
+  const counts: ViewCounts = {};
+
+  const fetchCount = async (type: string): Promise<number> => {
+    try {
+      const url = `${base}/emby/Users/${userId}/Items?ParentId=${parentId}&Recursive=true&IncludeItemTypes=${type}&Limit=0`;
+      const res = await httpClient(url, {
+        method: 'GET',
+        headers: buildEmbyHeaders(userId, accessToken),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        return typeof data.TotalRecordCount === 'number' ? data.TotalRecordCount : 0;
+      }
+    } catch (e) {
+      console.warn(`[getViewItemCounts error for ${type}]`, e);
+    }
+    return 0;
+  };
+
+  if (collectionType === 'movies') {
+    counts.movieCount = await fetchCount('Movie');
+  } else if (collectionType === 'tvshows') {
+    const [series, episodes] = await Promise.all([
+      fetchCount('Series'),
+      fetchCount('Episode'),
+    ]);
+    counts.seriesCount = series;
+    counts.episodeCount = episodes;
+  } else {
+    // 混合库或自定义库
+    const [movies, series] = await Promise.all([
+      fetchCount('Movie'),
+      fetchCount('Series'),
+    ]);
+    if (movies > 0) counts.movieCount = movies;
+    if (series > 0) counts.seriesCount = series;
+  }
+
+  return counts;
+}
+

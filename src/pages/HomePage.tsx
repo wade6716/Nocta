@@ -25,6 +25,8 @@ import {
   getRecentlyPlayedItems,
   getNextUpEpisodes,
   getLatestItems,
+  getViewItemCounts,
+  ViewCounts,
   mergeMediaBySeries,
   isVideoMedia,
 } from '../api/embyClient';
@@ -50,6 +52,28 @@ function formatRelativeTime(dateStr?: string): string {
   }
 }
 
+function renderViewCountBadge(counts?: ViewCounts) {
+  if (!counts) return null;
+  const parts: string[] = [];
+  if (typeof counts.movieCount === 'number' && counts.movieCount > 0) {
+    parts.push(`${counts.movieCount.toLocaleString()} 部电影`);
+  }
+  if (typeof counts.seriesCount === 'number' && counts.seriesCount > 0) {
+    if (typeof counts.episodeCount === 'number' && counts.episodeCount > 0) {
+      parts.push(`${counts.seriesCount.toLocaleString()} 部剧集 · ${counts.episodeCount.toLocaleString()} 集`);
+    } else {
+      parts.push(`${counts.seriesCount.toLocaleString()} 部剧集`);
+    }
+  }
+  if (parts.length === 0) return null;
+
+  return (
+    <span className="text-[11px] px-2 py-0.5 rounded-full bg-white/5 border border-white/10 text-gray-400 font-normal tracking-normal select-none">
+      {parts.join(' · ')}
+    </span>
+  );
+}
+
 export const HomePage: React.FC = () => {
   const navigate = useNavigate();
   const currentServer = useAuthStore((s) => s.getCurrentServer());
@@ -61,11 +85,13 @@ export const HomePage: React.FC = () => {
     recentlyPlayedItems,
     views,
     latestMap,
+    viewCounts,
     isLoaded,
     isRefreshing,
     homeScrollY,
     setMediaData,
     updateResumeAndRecent,
+    updateViewCount,
     setRefreshing,
     setHomeScrollY,
     clearMediaCache,
@@ -76,6 +102,28 @@ export const HomePage: React.FC = () => {
   const [isDanmuModalOpen, setIsDanmuModalOpen] = useState(false);
   const [isServerModalOpen, setIsServerModalOpen] = useState(false);
   const [isProxyModalOpen, setIsProxyModalOpen] = useState(false);
+
+  const fetchCountsForViews = useCallback(
+    (currentViews: EmbyItem[]) => {
+      if (!currentServer) return;
+      currentViews.forEach((v) => {
+        getViewItemCounts(
+          currentServer.url,
+          currentServer.userId,
+          v.Id,
+          v.CollectionType,
+          currentServer.accessToken
+        )
+          .then((counts) => {
+            updateViewCount(v.Id, counts);
+          })
+          .catch((e) => {
+            console.warn(`[fetchCountsForViews error for ${v.Name}]`, e);
+          });
+      });
+    },
+    [currentServer, updateViewCount]
+  );
 
   const loadData = useCallback(
     async (isManualRefresh = false) => {
@@ -100,6 +148,11 @@ export const HomePage: React.FC = () => {
             nextUpItems: resNextUp || [],
             recentlyPlayedItems: resRecent || [],
           });
+
+          // 缓存模式下也在后台轻量同步各分类统计数
+          if (views.length > 0) {
+            fetchCountsForViews(views);
+          }
           return;
         }
 
@@ -139,6 +192,9 @@ export const HomePage: React.FC = () => {
           views: userViews,
           latestMap: latestEntries,
         });
+
+        // 异步并发拉取每个媒体库的剧集和电影数量
+        fetchCountsForViews(userViews);
       } catch (err: any) {
         console.error('加载媒体库失败', err);
       } finally {
@@ -146,7 +202,7 @@ export const HomePage: React.FC = () => {
         setRefreshing(false);
       }
     },
-    [currentServer, isCached, setMediaData, updateResumeAndRecent, setRefreshing]
+    [currentServer, isCached, views, setMediaData, updateResumeAndRecent, setRefreshing, fetchCountsForViews]
   );
 
   useEffect(() => {
@@ -389,13 +445,14 @@ export const HomePage: React.FC = () => {
             return (
               <div key={v.Id} className="space-y-4">
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-2">
+                  <div className="flex items-center space-x-2.5">
                     {v.CollectionType === 'tvshows' ? (
                       <Tv className="w-4 h-4 text-primary" />
                     ) : (
                       <Film className="w-4 h-4 text-primary" />
                     )}
                     <h2 className="text-lg font-bold text-white tracking-wide">{v.Name}</h2>
+                    {renderViewCountBadge(viewCounts[v.Id])}
                   </div>
                   <span className="text-xs text-gray-400 font-mono">最新入库</span>
                 </div>

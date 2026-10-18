@@ -2,10 +2,10 @@
 
 | 操作系统 | 适用架构 / 芯片类型 | 推荐下载文件 | 说明 |
 | :--- | :--- | :--- | :--- |
-| **Windows** | 64 位 Intel / AMD (`x64`) | `Nocta_*_windows_x64-setup.exe` | 推荐使用一键安装包，亦提供 `.msi` 企业部署包 |
+| **Windows** | 64 位 Intel / AMD (`x64`) | `Nocta_*_windows_x64-setup.exe` | 推荐使用 NSIS 一键安装包 |
 | **macOS (Apple Silicon)** | 苹果 M 系列芯片 (`M1` ~ `M4`) | `Nocta_*_macos_aarch64.dmg` | 针对 Apple Silicon 原生优化，运行极速省电 |
 | **macOS (Intel)** | 苹果老款 Intel 芯片 (`x64`) | `Nocta_*_macos_x64.dmg` | 原生适配 Intel 处理器 Mac |
-| **Linux** | 64 位 (`x64` / `amd64`) | `Nocta_*_linux_x64.AppImage` | 推荐免安装便携版（赋予执行权限直接运行），亦提供 `.deb` |
+| **Linux** | 64 位 (`x64` / `amd64`) | `Nocta_*_linux_*.deb` | Debian / Ubuntu 体系系统安装包 (`.deb`) |
 
 ---
 

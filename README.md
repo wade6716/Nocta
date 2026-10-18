@@ -81,10 +81,10 @@
 ### 📦 安装包直接下载 (Pre-built Binaries)
 
 可前往 [GitHub Releases](https://github.com/wade6716/Nocta/releases) 获取全平台各架构最新预编译安装包：
-- **Windows**: 下载 `Nocta_*_windows_x64-setup.exe` (一键安装版) 或 `Nocta_*_windows_x64.msi`
+- **Windows**: 下载 `Nocta_*_windows_x64-setup.exe` (NSIS 一键安装包)
 - **macOS (Apple Silicon)**: 苹果 M 系列芯片（M1/M2/M3/M4 等）请下载 `Nocta_*_macos_aarch64.dmg`
 - **macOS (Intel)**: 苹果 Intel 处理器请下载 `Nocta_*_macos_x64.dmg`
-- **Linux**: 下载 `Nocta_*_linux_x64.AppImage` (免安装便携版) 或 `Nocta_*_linux_x64.deb`
+- **Linux**: 下载 `Nocta_*_linux_*.deb` (Debian / Ubuntu 安装包)
 
 > [!TIP]
 > **🍎 macOS 首次打开提示“已损坏，无法打开”或“无法验证开发者”？**
@@ -118,7 +118,7 @@ pnpm tauri dev
 # 仅构建前端静态资源 (检查类型与 Vite 打包)
 pnpm build
 
-# 构建桌面可执行文件与全平台安装包 (Windows .msi / .exe, macOS .dmg / .app, Linux .deb)
+# 构建桌面可执行文件与全平台安装包 (Windows .exe, macOS .dmg, Linux .deb)
 pnpm tauri build
 ```
 

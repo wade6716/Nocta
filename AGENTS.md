@@ -125,7 +125,11 @@
   2. 运行 `pnpm build` 与 `cargo check` 确保零错误；
   3. 提交版本变更并打带注释的标签：`git tag -a v0.1.0-alpha.2 -m "Release v0.1.0-alpha.2: ..."`；
   4. 推送主分支与标签：`git push origin main && git push origin v0.1.0-alpha.2`；
-  5. GitHub Actions 自动矩阵构建 Windows x64、macOS Apple Silicon (aarch64)、macOS Intel (x86_64)、Linux x64 (deb/AppImage) 全平台安装包并上传至 GitHub Releases。
+  5. GitHub Actions 自动矩阵构建 Windows x64 (NSIS)、macOS Apple Silicon (aarch64)、macOS Intel (x86_64)、Linux x64 (deb) 全平台安装包并上传至 GitHub Releases。
+- **打包目标精简与多平台构建性能优化规范**：
+  - Windows 仅构建 NSIS (`.exe`) 一键安装包，彻底移除 WiX MSI 生成，避免对 100MB `libmpv` 进行二次高强度重复压缩（节省 4~5 分钟）；同时在 Windows 构建前置将工程目录与 `cargo.exe`/`rustc.exe`/`link.exe` 加入 Windows Defender 排除项，消除磁盘实时查杀锁盘延迟；
+  - Linux 仅保留 `.deb` 安装包，彻底移除 AppImage 打包，消除 `mksquashfs` 的重度 CPU 压缩开销（节省约 3 分钟）；依赖安装启用 `--no-install-recommends` 减少非必要包下载；
+  - macOS 维持单一 `.dmg` 极速打包。
 - **CI 流水线按需手动触发规范**：
   - `.github/workflows/ci.yml` 仅保留 `workflow_dispatch` 手动触发，已关闭 `push` 与 `pull_request` 自动触发，避免日常提交频繁占用 GitHub Actions 运行配额及产生等待延迟；需要云端多平台全量校验时可在 Actions 页面手动触发。
 

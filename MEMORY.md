@@ -186,10 +186,10 @@ pnpm tauri build
   - **标签触发**：推送 `v*` 格式版本标签（例如 `git tag v0.1.0 && git push origin v0.1.0`）；
   - **手动触发**：GitHub Actions 界面手动 `workflow_dispatch`，可选择草稿（Draft）或预发版（Pre-release）。
 - **多平台多架构编译矩阵与产物命名**：
-  - **Windows x64** (`windows-latest`)：输出带平台标识的 `Nocta_*_windows_x64-setup.exe` (NSIS) 与 `Nocta_*_windows_x64.msi` (WiX)；
+  - **Windows x64** (`windows-latest`)：输出带平台标识的 `Nocta_*_windows_x64-setup.exe` (NSIS 一键安装包，已移除 WiX MSI 冗余打包并排除 Defender 扫描)；
   - **macOS Apple Silicon** (`macos-latest`, `--target aarch64-apple-darwin`)：输出原生适配 M 系列芯片的 `Nocta_*_macos_aarch64.dmg`；
   - **macOS Intel** (`macos-latest`, `--target x86_64-apple-darwin`)：输出适配 Intel 处理器的 `Nocta_*_macos_x64.dmg`；
-  - **Linux x64** (`ubuntu-22.04`)：输出 `Nocta_*_linux_x64.AppImage` 与 `Nocta_*_linux_x64.deb`。
+  - **Linux x64** (`ubuntu-22.04`)：输出 `Nocta_*_linux_*.deb`（已精简移除 AppImage，彻底消除 mksquashfs 重度压缩开销）。
 - **发布产物与自动更新日志机制**：
   - 矩阵编译完成后，通过专属 `finalize-release` 任务调用 GitHub API 强制刷新已有 Release 的正文与更新日志（使用 `.github/release-template.md` 模板与 `.github/release.yml` 规则分类），彻底解决重新发版时 GitHub 不刷新旧 Release Body 的问题；
   - 自动检测并清理历史遗留的不含平台标识的前代产物（如 `Nocta_0.1.0_x64-setup.exe`）；

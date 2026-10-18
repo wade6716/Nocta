@@ -35,30 +35,30 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # 1. Windows x64
+          # 1. Windows x64 (仅构建 NSIS .exe 安装包，去除 WiX MSI 重复压缩)
           - platform: windows-latest
-            args: ''
+            args: '--bundles nsis'
             rust_targets: ''
             name_suffix: 'Windows x64'
             asset_name_pattern: '[name]_[version]_windows_[arch][setup][ext]'
 
           # 2. macOS Apple Silicon (M1/M2/M3/M4 系列芯片)
           - platform: macos-latest
-            args: '--target aarch64-apple-darwin'
+            args: '--target aarch64-apple-darwin --bundles dmg'
             rust_targets: 'aarch64-apple-darwin'
             name_suffix: 'macOS Apple Silicon'
             asset_name_pattern: '[name]_[version]_macos_aarch64[ext]'
 
           # 3. macOS Intel (x86_64 系列芯片)
           - platform: macos-latest
-            args: '--target x86_64-apple-darwin'
+            args: '--target x86_64-apple-darwin --bundles dmg'
             rust_targets: 'x86_64-apple-darwin'
             name_suffix: 'macOS Intel'
             asset_name_pattern: '[name]_[version]_macos_x64[ext]'
 
-          # 4. Linux x64 (deb & AppImage)
+          # 4. Linux x64 (仅构建 .deb 安装包，去除 AppImage 重度压缩)
           - platform: ubuntu-22.04
-            args: ''
+            args: '--bundles deb'
             rust_targets: ''
             name_suffix: 'Linux x64'
             asset_name_pattern: '[name]_[version]_linux_[arch][ext]'
@@ -67,6 +67,13 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+
+      - name: Disable Windows Defender for Build Performance
+        if: matrix.platform == 'windows-latest'
+        run: |
+          Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionPath "${{ github.workspace }}" -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionProcess "cargo.exe", "rustc.exe", "link.exe" -ErrorAction SilentlyContinue
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -86,7 +93,7 @@ jobs:
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
+          sudo apt-get install -y --no-install-recommends \
             libwebkit2gtk-4.1-dev \
             libappindicator3-dev \
             librsvg2-dev \

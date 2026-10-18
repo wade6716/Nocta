@@ -126,6 +126,8 @@
   3. 提交版本变更并打带注释的标签：`git tag -a v0.1.0-alpha.2 -m "Release v0.1.0-alpha.2: ..."`；
   4. 推送主分支与标签：`git push origin main && git push origin v0.1.0-alpha.2`；
   5. GitHub Actions 自动矩阵构建 Windows x64、macOS Apple Silicon (aarch64)、macOS Intel (x86_64)、Linux x64 (deb/AppImage) 全平台安装包并上传至 GitHub Releases。
+- **CI 流水线按需手动触发规范**：
+  - `.github/workflows/ci.yml` 仅保留 `workflow_dispatch` 手动触发，已关闭 `push` 与 `pull_request` 自动触发，避免日常提交频繁占用 GitHub Actions 运行配额及产生等待延迟；需要云端多平台全量校验时可在 Actions 页面手动触发。
 
 ### 9. 桌面端本地文件导出与系统文件管理器/访达联动规范 (Native File Reveal & Local Backup)
 - **WebView 下载局限与原生桥接**：

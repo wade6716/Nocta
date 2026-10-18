@@ -176,7 +176,7 @@ pnpm tauri build
 ## 7. GitHub Actions 自动化 CI/CD 与发版流程
 
 ### 7.1 CI 流水线 (`.github/workflows/ci.yml`)
-- **触发条件**：向 `main` 分支提交代码或发起 Pull Request 时自动触发；
+- **触发条件**：手动触发（`workflow_dispatch`），已关闭 `push` 和 `pull_request` 自动触发以节约构建配额并避免每次推送自动触发耗时检查；
 - **任务内容**：
   - `frontend-check`：验证前端 TypeScript 类型检查与 Vite 打包（`pnpm build`）；
   - `rust-check`：在 Ubuntu 与 Windows 矩阵运行 `cargo check`，确保 Rust 后端语法与依赖无冲突。

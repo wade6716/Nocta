@@ -1442,16 +1442,16 @@ export const SettingsPage: React.FC = () => {
                         )}
                         <div className="pt-1.5 flex items-center justify-between border-t border-emerald-500/20 text-[11px]">
                           <span className="text-emerald-300/90 text-[10px]">
-                            {downloadResult.openedFolder ? '已自动打开文件管理器/访达' : '文件已保存至下载目录'}
+                            {downloadResult.openedFolder ? '已自动打开下载文件夹' : '文件已保存至下载目录'}
                           </span>
                           {downloadResult.filePath && (
                             <button
-                              onClick={() => revealBackupInFileManager(downloadResult.filePath!)}
+                              onClick={() => revealBackupInFileManager(downloadResult.directory || downloadResult.filePath!)}
                               className="px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 font-medium transition flex items-center space-x-1 cursor-pointer"
-                              title="再次打开文件管理器并高亮选中"
+                              title="打开下载目录"
                             >
                               <FolderOpen className="w-3 h-3" />
-                              <span>在文件夹/访达中显示</span>
+                              <span>打开下载目录</span>
                             </button>
                           )}
                         </div>
@@ -2176,18 +2176,18 @@ export const SettingsPage: React.FC = () => {
             </div>
             <p className="text-gray-400 text-[10px] mt-1 leading-snug">
               {downloadResult.openedFolder
-                ? '已自动打开文件管理器/访达并高亮选中'
+                ? '已自动在系统文件管理器中打开下载目录'
                 : '文件已保存至系统默认下载目录'}
             </p>
             {downloadResult.filePath && (
               <div className="mt-2.5 flex items-center space-x-2">
                 <button
-                  onClick={() => revealBackupInFileManager(downloadResult.filePath!)}
+                  onClick={() => revealBackupInFileManager(downloadResult.directory || downloadResult.filePath!)}
                   className="px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 text-[10px] font-medium transition flex items-center space-x-1 cursor-pointer border border-emerald-500/30"
-                  title="再次打开文件管理器/访达"
+                  title="打开下载目录"
                 >
                   <FolderOpen className="w-3 h-3" />
-                  <span>在文件夹/访达中查看</span>
+                  <span>打开下载目录</span>
                 </button>
               </div>
             )}

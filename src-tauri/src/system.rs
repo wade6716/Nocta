@@ -14,19 +14,18 @@ pub struct BackupSaveResult {
     pub directory: String,
 }
 
-/// 唤起系统文件管理器（Windows 资源管理器 / macOS 访达 / Linux 文件管理器）
-/// 并尽可能高亮选中目标文件；若目标是目录或高亮不可用，则打开所在目录。
-pub fn reveal_in_file_manager(path: &Path) -> Result<(), String> {
-    if !path.exists() {
-        return Err(format!("目标路径不存在: {}", path.display()));
+/// 跨平台在系统文件管理器中直接打开指定目录（下载目录 / 文件夹）
+/// 彻底规避 Windows explorer.exe /select, 传参时的引号错误导致意外回退到"文档"的缺陷。
+pub fn open_directory_in_file_manager(dir: &Path) -> Result<(), String> {
+    if !dir.exists() {
+        return Err(format!("目录不存在: {}", dir.display()));
     }
 
     #[cfg(target_os = "windows")]
     {
-        let path_str = path.to_string_lossy().replace('/', "\\");
-        let arg = format!("/select,{}", path_str);
+        let dir_str = dir.to_string_lossy().replace('/', "\\");
         Command::new("explorer")
-            .arg(arg)
+            .arg(&dir_str)
             .spawn()
             .map_err(|e| format!("启动 Windows 资源管理器失败: {}", e))?;
         Ok(())
@@ -35,8 +34,7 @@ pub fn reveal_in_file_manager(path: &Path) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         Command::new("open")
-            .arg("-R")
-            .arg(path)
+            .arg(dir)
             .spawn()
             .map_err(|e| format!("启动 macOS 访达 (Finder) 失败: {}", e))?;
         Ok(())
@@ -44,13 +42,8 @@ pub fn reveal_in_file_manager(path: &Path) -> Result<(), String> {
 
     #[cfg(target_os = "linux")]
     {
-        let target_dir = if path.is_dir() {
-            path
-        } else {
-            path.parent().unwrap_or(path)
-        };
         Command::new("xdg-open")
-            .arg(target_dir)
+            .arg(dir)
             .spawn()
             .map_err(|e| format!("启动 Linux 文件管理器失败: {}", e))?;
         Ok(())
@@ -63,7 +56,7 @@ pub fn reveal_in_file_manager(path: &Path) -> Result<(), String> {
 }
 
 /// 将备份数据内容保存到系统下载文件夹（Downloads）或备用用户目录，
-/// 并自动避免文件名冲突，默认自动在文件管理器/访达中高亮显示。
+/// 并自动避免同名文件覆盖，默认直接自动打开下载目录。
 #[tauri::command]
 pub async fn save_backup_file(
     app: tauri::AppHandle,
@@ -101,14 +94,14 @@ pub async fn save_backup_file(
         counter += 1;
     }
 
-    // 写入备份内容
+    // 写入备份内容到下载目录
     fs::write(&candidate_path, content.as_bytes())
         .map_err(|e| format!("写入备份文件失败: {}", e))?;
 
-    // 默认高亮打开所在文件管理器
+    // 默认直接自动打开下载目录
     let should_reveal = reveal.unwrap_or(true);
     if should_reveal {
-        let _ = reveal_in_file_manager(&candidate_path);
+        let _ = open_directory_in_file_manager(&download_dir);
     }
 
     Ok(BackupSaveResult {
@@ -119,9 +112,14 @@ pub async fn save_backup_file(
     })
 }
 
-/// 主动在文件管理器/访达中显示文件
+/// 直接打开目标路径所在目录（自动提取父目录）
 #[tauri::command]
 pub fn show_in_file_manager(path: String) -> Result<(), String> {
-    let p = PathBuf::from(path);
-    reveal_in_file_manager(&p)
+    let p = PathBuf::from(&path);
+    let target_dir = if p.is_dir() {
+        p
+    } else {
+        p.parent().map(|d| d.to_path_buf()).unwrap_or(p)
+    };
+    open_directory_in_file_manager(&target_dir)
 }

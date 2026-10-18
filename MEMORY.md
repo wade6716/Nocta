@@ -335,13 +335,13 @@ pnpm tauri build
 1. **自动定位与防覆盖存储 (`save_backup_file`)**：
    - 使用 `app.path().download_dir()` 定位系统下载目录（回退至桌面/文档目录）；
    - 若遇到同名文件，自动按 `nocta-backup-YYYY-MM-DD (1).json` 自增序号，杜绝文件被静默覆盖；
-2. **跨平台原生文件定位与高亮 (`reveal_in_file_manager`)**：
-   - **Windows**：调用 `explorer.exe /select,"<Path>"` 唤起资源管理器并选中该备份文件；
-   - **macOS**：调用 `open -R "<Path>"` 唤起访达 (Finder) 并精准高亮定位；
-   - **Linux**：调用 `xdg-open "<Dir>"` 打开目标所在目录；
+2. **跨平台原生文件定位与直接打开下载目录 (`open_directory_in_file_manager`)**：
+   - **Windows 避坑**：若调用 `explorer.exe /select,"<Path>"`，当参数带引号传递时，Windows 资源管理器会因参数解析失败**意外降级回退打开“文档”目录**。改造为直接传入规范化下载目录 `Command::new("explorer").arg(&dir_str)`，保证 100% 精准打开真实的系统“下载”目录；
+   - **macOS**：调用 `Command::new("open").arg(dir)` 直接打开访达“下载”目录；
+   - **Linux**：调用 `Command::new("xdg-open").arg(dir)` 打开下载目录；
 3. **UI 双重反馈与长效操作**：
-   - 导出卡片内部：呈现绿色成功详情面板，展示已保存文件名、物理路径与「在文件夹/访达中显示」按钮；
-   - 全局视窗：在页面右上角同步弹出带毛玻璃质感的浮动 Toast，方便用户在任何滚动位置即时点击进入文件管理器。
+   - 导出卡片内部：呈现绿色成功详情面板，展示已保存文件名、物理路径与「打开下载目录」按钮；
+   - 全局视窗：在页面右上角同步弹出带毛玻璃质感的浮动 Toast，方便用户随时一键直达“下载”目录。
 
 ---
 

@@ -127,6 +127,19 @@
   4. 推送主分支与标签：`git push origin main && git push origin v0.1.0-alpha.2`；
   5. GitHub Actions 自动矩阵构建 Windows x64、macOS Apple Silicon (aarch64)、macOS Intel (x86_64)、Linux x64 (deb/AppImage) 全平台安装包并上传至 GitHub Releases。
 
+### 9. 桌面端本地文件导出与系统文件管理器/访达联动规范 (Native File Reveal & Local Backup)
+- **WebView 下载局限与原生桥接**：
+  - 在 Tauri 桌面客户端中，纯前端 `a.click()` 触发 Blob 下载无法准确捕获最终保存物理路径，且无法唤起文件管理器高亮选中目标文件。
+  - **解决方案**：通过 Tauri 原生命令 `save_backup_file`，优先调用 `app.path().download_dir()` 定位系统下载目录并安全写入；若遇到同名文件，自动采用 `stem (1).ext` 自增序号避免文件覆盖。
+- **跨平台文件管理器唤起与高亮定位 (`reveal_in_file_manager`)**：
+  - **Windows**：调用 `Command::new("explorer").arg(format!("/select,{}", path_str))`，直接打开 Windows 资源管理器并高亮选中该文件；
+  - **macOS**：调用 `Command::new("open").arg("-R").arg(path)`，在访达 (Finder) 中高亮定位；
+  - **Linux**：回退至 `Command::new("xdg-open").arg(parent_dir)` 打开文件所在目录。
+- **UI 反馈与双重操作通道**：
+  - 导出成功后提供双层反馈：卡片内呈现带文件名与保存目录的绿色状态面板，页面右上角弹出毛玻璃浮动 Toast；
+  - 两处均提供常驻的「在文件夹/访达中显示」按钮，允许用户随时再次唤起系统文件管理器进行管理或传输。
+
+
 
 
 

@@ -9,7 +9,8 @@ import {
   VideoLayoutConfig,
 } from '../stores/usePlayerStore';
 import { useMediaStore } from '../stores/useMediaStore';
-import { ProxyConfig } from '../api/http';
+import { ProxyConfig, isTauriEnvironment } from '../api/http';
+import { invoke } from '@tauri-apps/api/core';
 import { encryptData, decryptData } from '../utils/crypto';
 
 export interface NoctaConfigData {
@@ -315,22 +316,80 @@ export function applyConfigToStores(data: NoctaConfigData, mode: 'merge' | 'repl
   };
 }
 
+export interface BackupFileDownloadResult {
+  success: boolean;
+  filePath?: string;
+  fileName: string;
+  directory?: string;
+  openedFolder: boolean;
+}
+
 /**
- * 触发浏览器 / WebView 下载 JSON 备份文件
+ * 触发备份文件保存：
+ * - 在桌面端（Tauri 环境）：直接保存至系统下载目录（Downloads），并自动在文件管理器/访达中高亮选中定位；
+ * - 在浏览器环境：降级触发标准 Blob 文件下载。
  */
-export function downloadBackupFile(payload: NoctaBackupPayload, filename?: string) {
+export async function downloadBackupFile(
+  payload: NoctaBackupPayload,
+  filename?: string
+): Promise<BackupFileDownloadResult> {
   const jsonStr = JSON.stringify(payload, null, 2);
+  const defaultName = filename || `nocta-backup-${new Date().toISOString().slice(0, 10)}.json`;
+
+  if (isTauriEnvironment()) {
+    try {
+      const res = await invoke<{
+        success: boolean;
+        file_path: string;
+        file_name: string;
+        directory: string;
+      }>('save_backup_file', {
+        content: jsonStr,
+        filename: defaultName,
+        reveal: true,
+      });
+
+      return {
+        success: true,
+        filePath: res.file_path,
+        fileName: res.file_name,
+        directory: res.directory,
+        openedFolder: true,
+      };
+    } catch (err) {
+      console.warn('[downloadBackupFile] Tauri native save failed, falling back to blob:', err);
+    }
+  }
+
+  // 纯浏览器环境或 Tauri 异常降级 fallback
   const blob = new Blob([jsonStr], { type: 'application/json;charset=utf-8' });
   const url = URL.createObjectURL(blob);
-
-  const defaultName = `nocta-backup-${new Date().toISOString().slice(0, 10)}.json`;
   const a = document.createElement('a');
   a.href = url;
-  a.download = filename || defaultName;
+  a.download = defaultName;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+
+  return {
+    success: true,
+    fileName: defaultName,
+    openedFolder: false,
+  };
+}
+
+/**
+ * 在系统文件管理器或访达中高亮显示文件
+ */
+export async function revealBackupInFileManager(filePath: string): Promise<void> {
+  if (isTauriEnvironment() && filePath) {
+    try {
+      await invoke('show_in_file_manager', { path: filePath });
+    } catch (err) {
+      console.warn('[revealBackupInFileManager] failed:', err);
+    }
+  }
 }
 
 /**

@@ -1,5 +1,6 @@
 mod proxy;
 mod sync;
+mod system;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -12,6 +13,8 @@ pub fn run() {
             sync::sync_smb_test,
             sync::sync_smb_read,
             sync::sync_smb_write,
+            system::save_backup_file,
+            system::show_in_file_manager,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

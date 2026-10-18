@@ -37,6 +37,8 @@ import {
   Network,
   ShieldCheck,
   ArrowUpDown,
+  FolderOpen,
+  X,
 } from 'lucide-react';
 import { useAuthStore, SavedServer } from '../stores/useAuthStore';
 import { useDanmuStore, DanmuServerEntry } from '../stores/useDanmuStore';
@@ -48,8 +50,10 @@ import {
   parseBackupPayload,
   applyConfigToStores,
   downloadBackupFile,
+  revealBackupInFileManager,
   copyBackupToClipboard,
   NoctaBackupPayload,
+  BackupFileDownloadResult,
   ConfigStats,
 } from '../services/configBackupService';
 import {
@@ -333,6 +337,16 @@ export const SettingsPage: React.FC = () => {
   const [showSmbPassword, setShowSmbPassword] = useState(false);
   const [showWebDavPassword, setShowWebDavPassword] = useState(false);
   const [showS3Secret, setShowS3Secret] = useState(false);
+  const [downloadResult, setDownloadResult] = useState<BackupFileDownloadResult | null>(null);
+  const downloadToastTimerRef = React.useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (downloadToastTimerRef.current) {
+        clearTimeout(downloadToastTimerRef.current);
+      }
+    };
+  }, []);
 
   const handleDownloadExport = async () => {
     try {
@@ -341,7 +355,15 @@ export const SettingsPage: React.FC = () => {
         includeSecrets: exportIncludeSecrets,
         passphrase: exportPassphrase.trim() || undefined,
       });
-      downloadBackupFile(payload);
+      const result = await downloadBackupFile(payload);
+      setDownloadResult(result);
+
+      if (downloadToastTimerRef.current) {
+        clearTimeout(downloadToastTimerRef.current);
+      }
+      downloadToastTimerRef.current = window.setTimeout(() => {
+        setDownloadResult(null);
+      }, 7000);
     } catch (e: any) {
       alert(`导出备份文件失败: ${e.message}`);
     } finally {
@@ -1340,10 +1362,23 @@ export const SettingsPage: React.FC = () => {
                       <button
                         onClick={handleDownloadExport}
                         disabled={exporting}
-                        className="flex-1 flex items-center justify-center space-x-1.5 px-3 py-2 rounded-lg bg-primary hover:bg-primary/90 text-white text-xs font-medium transition cursor-pointer"
+                        className={`flex-1 flex items-center justify-center space-x-1.5 px-3 py-2 rounded-lg text-white text-xs font-medium transition cursor-pointer ${
+                          downloadResult
+                            ? 'bg-emerald-600 hover:bg-emerald-500'
+                            : 'bg-primary hover:bg-primary/90'
+                        }`}
                       >
-                        <Download className="w-3.5 h-3.5" />
-                        <span>下载备份文件</span>
+                        {downloadResult ? (
+                          <>
+                            <Check className="w-3.5 h-3.5 text-white" />
+                            <span>下载完成并已打开</span>
+                          </>
+                        ) : (
+                          <>
+                            <Download className="w-3.5 h-3.5" />
+                            <span>下载备份文件</span>
+                          </>
+                        )}
                       </button>
                       <button
                         onClick={handleCopyExport}
@@ -1364,6 +1399,50 @@ export const SettingsPage: React.FC = () => {
                         )}
                       </button>
                     </div>
+
+                    {downloadResult && (
+                      <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl space-y-2 text-xs animate-in fade-in slide-in-from-top-1">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-1.5 text-emerald-400 font-semibold">
+                            <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+                            <span>备份文件下载成功</span>
+                          </div>
+                          <button
+                            onClick={() => setDownloadResult(null)}
+                            className="text-gray-400 hover:text-white transition p-0.5 cursor-pointer"
+                            title="关闭提示"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                        <div
+                          className="text-gray-200 font-mono text-[11px] truncate bg-black/30 px-2 py-1 rounded"
+                          title={downloadResult.filePath || downloadResult.fileName}
+                        >
+                          {downloadResult.fileName}
+                        </div>
+                        {downloadResult.directory && (
+                          <div className="text-gray-400 text-[10px] truncate" title={downloadResult.directory}>
+                            保存目录: {downloadResult.directory}
+                          </div>
+                        )}
+                        <div className="pt-1.5 flex items-center justify-between border-t border-emerald-500/20 text-[11px]">
+                          <span className="text-emerald-300/90 text-[10px]">
+                            {downloadResult.openedFolder ? '已自动打开文件管理器/访达' : '文件已保存至下载目录'}
+                          </span>
+                          {downloadResult.filePath && (
+                            <button
+                              onClick={() => revealBackupInFileManager(downloadResult.filePath!)}
+                              className="px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 font-medium transition flex items-center space-x-1 cursor-pointer"
+                              title="再次打开文件管理器并高亮选中"
+                            >
+                              <FolderOpen className="w-3 h-3" />
+                              <span>在文件夹/访达中显示</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   {/* 导入卡片 */}
@@ -2057,6 +2136,50 @@ export const SettingsPage: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* 备份下载成功浮动 Toast (右上角常驻反馈，即使滚动也能清晰看到) */}
+      {downloadResult && (
+        <div className="fixed top-8 right-8 z-50 max-w-sm bg-[#12151d]/95 backdrop-blur-xl border border-emerald-500/40 text-white text-xs p-3.5 rounded-2xl shadow-2xl flex items-start space-x-3 animate-in fade-in slide-in-from-top-3">
+          <div className="w-8 h-8 rounded-xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center flex-shrink-0 mt-0.5">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center justify-between">
+              <span className="font-semibold text-white">备份文件导出成功</span>
+              <button
+                onClick={() => setDownloadResult(null)}
+                className="text-gray-400 hover:text-white transition p-0.5 ml-2 cursor-pointer"
+                title="关闭提示"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+            <div
+              className="text-gray-300 font-mono text-[11px] truncate mt-1 bg-black/40 px-2 py-0.5 rounded"
+              title={downloadResult.filePath || downloadResult.fileName}
+            >
+              {downloadResult.fileName}
+            </div>
+            <p className="text-gray-400 text-[10px] mt-1 leading-snug">
+              {downloadResult.openedFolder
+                ? '已自动打开文件管理器/访达并高亮选中'
+                : '文件已保存至系统默认下载目录'}
+            </p>
+            {downloadResult.filePath && (
+              <div className="mt-2.5 flex items-center space-x-2">
+                <button
+                  onClick={() => revealBackupInFileManager(downloadResult.filePath!)}
+                  className="px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 text-[10px] font-medium transition flex items-center space-x-1 cursor-pointer border border-emerald-500/30"
+                  title="再次打开文件管理器/访达"
+                >
+                  <FolderOpen className="w-3 h-3" />
+                  <span>在文件夹/访达中查看</span>
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

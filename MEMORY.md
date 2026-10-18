@@ -358,6 +358,37 @@ pnpm tauri build
 4. **自适应侧边栏 (Sidebar)**：当未连接服务器时，底部展示「未连接 · 导入配置」警示胶囊，点击直达 `/settings?tab=sync`；
 5. **URL 路由参数深度寻址**：`SettingsPage` 原生监听 `?tab=sync` 等参数并自动激活对应标签页；配置导入完成后，提供一键直达首页媒体库按钮。
 
+---
+
+## 14. Tauri v2 HTTP 插件 URL 作用域端口与通配规范 (WHATWG URLPattern Port Whitelisting)
+
+### 14.1 默认端口拦截陷阱
+- Tauri v2 底层采用 WHATWG URLPattern 解析 HTTP 作用域。当在 `capabilities/default.json` 配置 `{ "url": "http://**" }` 时，其协议默认端口被固定为 80（HTTPS 为 443）；
+- 当应用向非 80/443 的端口请求时（例如本地 danmu_api `http://127.0.0.1:9321/...`、自建 Emby `http://ip:8096/...`），URLPattern 判定端口不匹配直接阻断，抛出 `[Tauri HTTP Error] url not allowed on the configured scope` 且弹幕匹配与图片请求失败。
+
+### 14.2 统一通配策略
+- 在 `src-tauri/capabilities/default.json` 中配置显式端口通配规则：
+  - `http://*`, `http://*/*`, `http://*/**`, `http://*:*`, `http://*:*/*`, `http://*:*/**`, `http://**`
+  - `https://*`, `https://*/*`, `https://*/**`, `https://*:*`, `https://*:*/*`, `https://*:*/**`, `https://**`
+- 彻底解决所有带端口的内网/公网 IP 及域名的网络穿透与跨源请求。
+
+---
+
+## 15. libmpv / libmpv-wrapper 打包与 Windows DLL 依赖链加载规范 (Dynamic Library Bundling & Windows DLL Search Path)
+
+### 15.1 CI/CD 打包动态库注入
+- 由于体积巨大，`src-tauri/lib/*.dll`, `*.dylib`, `*.so` 被纳入 `.gitignore`；
+- 在 GitHub Actions 矩阵构建中，打包前必须运行 `node scripts/setup-mpv.mjs --platform <platform> --arch <arch>`：
+  - 自动根据目标平台与架构下载对应版本的 `libmpv-wrapper`（Windows/macOS/Linux）；
+  - Windows 环境下自动下载解压 `libmpv-2.dll` 并写入 `src-tauri/lib/`；
+  - 确保 Tauri 打包时 `resources: ["lib/**/*"]` 能够准确将内核打包入最终安装包。
+
+### 15.2 Windows 下 DLL 依赖解析链修复（解决 126 错误码）
+- `tauri-plugin-libmpv` 通过 `LoadLibraryExW` 加载 `libmpv-wrapper.dll`；
+- `libmpv-wrapper.dll` 强依赖同目录的 `libmpv-2.dll`。然而 Windows 的默认依赖检索机制仅查找进程可执行文件主目录，不会自动将子目录 `lib/` 纳入从属依赖链，导致抛出 `LoadLibraryExW code 126 ("找不到指定的模块。")`；
+- **原生层动态挂载**：在 `src-tauri/src/lib.rs` 的 `run()` 和 `app.setup` 中，通过 Win32 API `SetDllDirectoryW` 动态将当前程序的 `lib/` 及 `resources/lib/` 注册为进程级 DLL 优先搜索路径，并同步注入进程环境变量 `PATH`，从根本上解决 DLL 依赖装载失败问题。
+
+
 
 
 

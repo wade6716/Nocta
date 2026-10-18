@@ -154,6 +154,23 @@
   3. **标题栏与侧边栏兜底**：当 `!currentServer` 时，`TitleBar` 中部展示「设置 & 导入」胶囊按钮；`Sidebar` 底部展示「未连接 · 导入配置」警示卡片，点击自动切至同步 Tab；
   4. **URL 参数深度寻址**：`SettingsPage` 必须支持 `useSearchParams()` 读取 `?tab=sync` 等参数并自动激活对应选项卡；导入完成后直接提供「前往首页进入媒体库」一键直达按钮。
 
+### 11. Tauri v2 HTTP 插件 URL 作用域端口与通配规范 (WHATWG URLPattern Port Whitelisting)
+- **默认端口陷阱**：
+  - Tauri v2 底层采用 WHATWG URLPattern 解析 HTTP 作用域。当配置为 `http://**` 或 `https://**` 时，仅匹配默认端口（HTTP 80 / HTTPS 443）；
+  - 当请求带有任何显式端口号（如弹幕服务 `http://127.0.0.1:9321/...`、Emby 服务 `http://x.x.x.x:8096/...` 或局域网自定义端口）时，会被严格拦截并抛出：`[Tauri HTTP Error] url not allowed on the configured scope`；
+- **通配配置要求**：
+  - 在 `src-tauri/capabilities/default.json` 的 `http:allow-fetch` 中，必须同时声明不带端口与通配端口的完整 URLPattern：
+    `http://*`, `http://*/*`, `http://*/**`, `http://*:*`, `http://*:*/*`, `http://*:*/**`, `http://**`，以及对应完整的 `https://...` 规则。
+
+### 12. libmpv / libmpv-wrapper 打包与 Windows DLL 依赖链加载规范 (Dynamic Library Bundling & Windows DLL Search Path)
+- **CI/CD 打包前置依赖注入**：
+  - Git 仓库基于体积考虑排除了 `src-tauri/lib/*.dll`, `*.so`, `*.dylib`；因此在 GitHub Actions CI 流水线中，打包动作前必须运行 `scripts/setup-mpv.mjs --platform <platform> --arch <arch>` 自动拉取与目标平台架构严格匹配的 `libmpv-wrapper`（以及 Windows 专属的 `libmpv-2.dll`），避免安装包遗漏内核导致冷启动崩溃；
+- **Windows 下 DLL 依赖链加载与 126 错误码修复**：
+  - 在 Windows 下，`tauri-plugin-libmpv` 会调用 `LoadLibraryExW` 加载 `libmpv-wrapper.dll`，而该 DLL 的导入表强依赖同目录下的 `libmpv-2.dll`；
+  - Windows 系统加载器在解析二级依赖 DLL 时，默认仅检索主程序 `.exe` 所在目录和系统目录，不会自动将子目录 `lib/` 纳入解析链，从而抛出 `LoadLibraryExW code 126 ("找不到指定的模块。")`；
+  - **解决方案**：在 Rust 程序入口（`pub fn run()` 及 `app.setup`）中，调用 Win32 API `SetDllDirectoryW` 动态将当前程序的 `lib/`、`resources/lib/` 目录注入为进程级 DLL 优先搜索路径，并同步将其追加到进程环境变量 `PATH` 前端，100% 确保内核与所有二级从属动态库均能顺利装载。
+
+
 
 
 

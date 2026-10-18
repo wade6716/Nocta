@@ -41,6 +41,8 @@ jobs:
             rust_targets: ''
             name_suffix: 'Windows x64'
             asset_name_pattern: '[name]_[version]_windows_[arch][setup][ext]'
+            mpv_platform: 'windows'
+            mpv_arch: 'x86_64'
 
           # 2. macOS Apple Silicon (M1/M2/M3/M4 系列芯片)
           - platform: macos-latest
@@ -48,6 +50,8 @@ jobs:
             rust_targets: 'aarch64-apple-darwin'
             name_suffix: 'macOS Apple Silicon'
             asset_name_pattern: '[name]_[version]_macos_aarch64[ext]'
+            mpv_platform: 'macos'
+            mpv_arch: 'aarch64'
 
           # 3. macOS Intel (x86_64 系列芯片)
           - platform: macos-latest
@@ -55,6 +59,8 @@ jobs:
             rust_targets: 'x86_64-apple-darwin'
             name_suffix: 'macOS Intel'
             asset_name_pattern: '[name]_[version]_macos_x64[ext]'
+            mpv_platform: 'macos'
+            mpv_arch: 'x86_64'
 
           # 4. Linux x64 (仅构建 .deb 安装包，去除 AppImage 重度压缩)
           - platform: ubuntu-22.04
@@ -62,6 +68,8 @@ jobs:
             rust_targets: ''
             name_suffix: 'Linux x64'
             asset_name_pattern: '[name]_[version]_linux_[arch][ext]'
+            mpv_platform: 'linux'
+            mpv_arch: 'x86_64'
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -97,8 +105,13 @@ jobs:
             libwebkit2gtk-4.1-dev \
             libappindicator3-dev \
             librsvg2-dev \
+            libmpv-dev \
             patchelf \
             xdg-utils
+
+      - name: Install macOS Dependencies
+        if: startsWith(matrix.platform, 'macos')
+        run: brew install mpv
 
       - name: Rust Cache
         uses: swatinem/rust-cache@v2
@@ -107,6 +120,9 @@ jobs:
 
       - name: Install Frontend Dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Setup libmpv and Wrapper Libraries
+        run: node scripts/setup-mpv.mjs --platform ${{ matrix.mpv_platform }} --arch ${{ matrix.mpv_arch }}
 
       - name: Build and Release via Tauri Action
         uses: tauri-apps/tauri-action@v0

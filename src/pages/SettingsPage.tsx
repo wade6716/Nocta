@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft,
   Server,
@@ -67,7 +67,21 @@ type TabKey = 'servers' | 'danmu' | 'danmaku_pref' | 'playback' | 'network' | 's
 
 export const SettingsPage: React.FC = () => {
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState<TabKey>('servers');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialTab = (searchParams.get('tab') as TabKey) || 'servers';
+  const [activeTab, setActiveTab] = useState<TabKey>(initialTab);
+
+  useEffect(() => {
+    const tabParam = searchParams.get('tab') as TabKey;
+    if (tabParam && ['servers', 'danmu', 'danmaku_pref', 'playback', 'network', 'sync', 'about'].includes(tabParam)) {
+      setActiveTab(tabParam);
+    }
+  }, [searchParams]);
+
+  const handleTabChange = (tab: TabKey) => {
+    setActiveTab(tab);
+    setSearchParams({ tab }, { replace: true });
+  };
 
   // Stores
   const {
@@ -498,7 +512,7 @@ export const SettingsPage: React.FC = () => {
             return (
               <button
                 key={item.id}
-                onClick={() => setActiveTab(item.id as TabKey)}
+                onClick={() => handleTabChange(item.id as TabKey)}
                 className={`w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-xs font-medium transition cursor-pointer text-left ${
                   isActive
                     ? 'bg-primary text-white shadow-lg shadow-primary/20'

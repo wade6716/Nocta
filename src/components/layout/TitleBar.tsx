@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Minus, Square, Copy, X, Search } from 'lucide-react';
+import { Minus, Square, Copy, X, Search, Settings } from 'lucide-react';
 import { isTauriEnvironment } from '../../api/http';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { ServerSwitcherDropdown } from './ServerSwitcherDropdown';
@@ -98,11 +98,20 @@ export const TitleBar: React.FC<TitleBarProps> = ({
           </kbd>
         </button>
 
-        {currentServer && (
+        {currentServer ? (
           <ServerSwitcherDropdown
             onOpenManageModal={() => navigate('/settings')}
             onOpenAddModal={onOpenAddServerModal}
           />
+        ) : (
+          <button
+            onClick={() => navigate('/settings')}
+            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-full bg-white/[0.04] hover:bg-white/[0.08] text-slate-300 hover:text-white border border-white/[0.08] hover:border-white/[0.15] transition cursor-pointer text-xs"
+            title="系统设置与备份配置导入"
+          >
+            <Settings className="w-3.5 h-3.5 text-sky-400" />
+            <span>设置 & 导入</span>
+          </button>
         )}
       </div>
 

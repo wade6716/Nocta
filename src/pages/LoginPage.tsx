@@ -13,6 +13,9 @@ import {
   EyeOff,
   TriangleAlert,
   Globe,
+  Settings,
+  FolderSync,
+  Upload,
 } from 'lucide-react';
 import {
   testServerConnection,
@@ -97,6 +100,37 @@ export const LoginPage: React.FC = () => {
             </span>
           </h1>
           <p className="text-xs text-gray-400">暗色沉浸式私人影院 · 银幕与弹幕的双重盛宴</p>
+        </div>
+
+        {/* 顶部快捷操作栏：即使未添加任何服务器，也可直接进入设置或导入配置 */}
+        <div className="flex items-center justify-center space-x-2.5 text-xs text-gray-400">
+          <button
+            type="button"
+            onClick={() => navigate('/settings')}
+            className="px-3 py-1.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] hover:text-white border border-white/[0.06] transition flex items-center space-x-1.5 cursor-pointer"
+            title="进入系统设置"
+          >
+            <Settings className="w-3.5 h-3.5 text-sky-400" />
+            <span>系统设置</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate('/settings?tab=sync')}
+            className="px-3 py-1.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] hover:text-white border border-white/[0.06] transition flex items-center space-x-1.5 cursor-pointer"
+            title="导入现有配置文件或恢复备份"
+          >
+            <Upload className="w-3.5 h-3.5 text-emerald-400" />
+            <span>导入配置</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setIsProxyModalOpen(true)}
+            className="px-3 py-1.5 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] hover:text-white border border-white/[0.06] transition flex items-center space-x-1.5 cursor-pointer"
+            title="配置网络代理"
+          >
+            <Globe className="w-3.5 h-3.5 text-primary" />
+            <span>网络代理</span>
+          </button>
         </div>
 
         {/* Saved servers quick entry */}
@@ -270,6 +304,29 @@ export const LoginPage: React.FC = () => {
             {loading ? '正在验证连接...' : '连接并登录'}
           </button>
         </form>
+
+        {/* 导入配置与备份恢复引导卡片 */}
+        <div className="bg-white/[0.03] border border-white/5 hover:border-white/10 rounded-2xl p-4 transition flex items-center justify-between">
+          <div className="flex items-center space-x-3 min-w-0 pr-3">
+            <div className="w-9 h-9 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center text-primary flex-shrink-0">
+              <FolderSync className="w-4 h-4" />
+            </div>
+            <div className="min-w-0">
+              <div className="text-xs font-semibold text-white">已有备份或多端配置？</div>
+              <div className="text-[11px] text-gray-400 mt-0.5 truncate">
+                从本地 .json 备份或 WebDAV / S3 / SMB 云端一键恢复
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => navigate('/settings?tab=sync')}
+            className="flex-shrink-0 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-medium transition cursor-pointer flex items-center space-x-1"
+          >
+            <span>导入配置</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
       </div>
 
       {/* Emby 服务器管理 / 编辑弹窗 */}

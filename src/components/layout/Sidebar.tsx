@@ -54,6 +54,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
       }
       return;
     }
+    if (path === '/settings' && hash) {
+      navigate(`/settings?tab=${hash}`);
+      return;
+    }
     navigate(path);
   };
 
@@ -272,19 +276,34 @@ export const Sidebar: React.FC<SidebarProps> = ({
         )}
 
         {/* 服务器连接指示卡 */}
-        {!isCollapsed && currentServer && (
-          <div className="px-3 py-2 rounded-xl bg-white/[0.03] border border-white/[0.04] flex items-center space-x-2">
-            <span
-              className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                currentServer.lastTestOk === false ? 'bg-amber-400' : 'bg-emerald-400'
-              }`}
-            />
-            <div className="min-w-0 flex-1">
-              <span className="text-xs text-slate-300 font-medium truncate block">
-                {currentServer.name}
-              </span>
+        {!isCollapsed && (
+          currentServer ? (
+            <div className="px-3 py-2 rounded-xl bg-white/[0.03] border border-white/[0.04] flex items-center space-x-2">
+              <span
+                className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                  currentServer.lastTestOk === false ? 'bg-amber-400' : 'bg-emerald-400'
+                }`}
+              />
+              <div className="min-w-0 flex-1">
+                <span className="text-xs text-slate-300 font-medium truncate block">
+                  {currentServer.name}
+                </span>
+              </div>
             </div>
-          </div>
+          ) : (
+            <div
+              onClick={() => handleNavClick('/settings', 'sync')}
+              className="px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center space-x-2 cursor-pointer hover:bg-amber-500/20 transition group"
+              title="未连接服务器，点击导入配置或添加服务器"
+            >
+              <span className="w-2 h-2 rounded-full flex-shrink-0 bg-amber-400 animate-pulse" />
+              <div className="min-w-0 flex-1">
+                <span className="text-xs text-amber-300 font-medium truncate block group-hover:underline">
+                  未连接 · 导入配置
+                </span>
+              </div>
+            </div>
+          )
         )}
       </div>
     </aside>

@@ -156,13 +156,13 @@ export const PlayerPage: React.FC = () => {
 
     const unlistenTime = engine.onTimeUpdate((cur, dur) => {
       if (!active) return;
-      // 收到真实时间进度说明底层视频流已打开并解码，立即解除加载遮罩
-      setIsLoadingVideo(false);
       const targetInitSec = initialTimeRef.current;
+      // 记忆进度起播防护：首跳未完成且当前仍处于起播 0 秒时拦截，防止 0 秒冲刷全局进度并保持加载层
       if (!hasInitialSeekedRef.current && targetInitSec > 0 && cur < 1) {
         return;
       }
       hasInitialSeekedRef.current = true;
+      setIsLoadingVideo(false);
       updateTime(cur, dur);
       bridge.onMpvTimePos(cur);
     });
@@ -175,11 +175,22 @@ export const PlayerPage: React.FC = () => {
           setVideoError(null);
           break;
         case 'playing':
+          // 若有记忆起播进度且尚未收到真实起播秒数，保持加载中以避免黑屏穿透
+          if (!hasInitialSeekedRef.current && initialTimeRef.current > 0) {
+            setPaused(false);
+            bridge.onMpvPauseChange(false);
+            break;
+          }
           setIsLoadingVideo(false);
           setPaused(false);
           bridge.onMpvPauseChange(false);
           break;
         case 'paused':
+          if (!hasInitialSeekedRef.current && initialTimeRef.current > 0) {
+            setPaused(true);
+            bridge.onMpvPauseChange(true);
+            break;
+          }
           setIsLoadingVideo(false);
           setPaused(true);
           bridge.onMpvPauseChange(true);

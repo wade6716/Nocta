@@ -171,9 +171,19 @@
   - **解决方案**：在 Rust 程序入口（`pub fn run()` 及 `app.setup`）中，调用 Win32 API `SetDllDirectoryW` 动态将当前程序的 `lib/`、`resources/lib/` 目录注入为进程级 DLL 优先搜索路径，并同步将其追加到进程环境变量 `PATH` 前端，100% 确保内核与所有二级从属动态库均能顺利装载。
 
 ### 13. MPV 原生硬解起播生命周期、异步定点 Seek 与错误回退隔离规范 (MPV Load/Seek Lifecycle & Error Fallback)
+- **远端 HTTP / MKV 记忆播放跳转与范围请求强制穿透 (`force-seekable`)**：
+  - **全量顺序下载避坑**：当播放挂载在 CloudDrive/Alist/Google Drive 或反代上的 MKV 文件时，若服务端/代理未显式返回 `Accept-Ranges: bytes` 响应头，`mpv` 默认会将流标记为不可寻址（non-seekable）。当带有历史进度起播或定点 Seek 时，`mpv` 会放弃发送 HTTP Range 请求，转而在后台**以全网速（如 15MB/s）从第 0 字节开始顺序读取并丢弃整个前置文件**（例如 4GB 视频起播在第 8 分钟会强制顺序下载前 830MB），表现为「网卡疯狂走流量但播放器持续黑屏死锁」；
+  - **解决方案**：在 `MpvPlayerEngine` 初始化及 `load()` 时显式注入：
+    - `force-seekable: 'yes'`：强制开启 HTTP Range 范围切片跳转，跳过不可寻址检测直接向服务端请求目标 Cluster 字节区间；
+    - `cache: 'yes'` 与 `demuxer-seekable-cache: 'yes'`：激活解复用流级缓存与回退寻址；
+    - `demuxer-max-bytes: 419430400`（400MB）与 `demuxer-max-back-bytes: 157286400`（150MB）：保障 4K 60fps 10-bit HDR 高码率流充足预取；
+    - `hr-seek-framedrop: 'yes'`：高精跳转时丢弃中间非关键帧，避免 4K 60fps HEVC 解码器因解码大量中间帧造成显卡拥塞黑屏；
+    - `demuxer-mkv-subtitle-preroll: 'no'`：严禁 MKV 内嵌/外挂字幕（如 SUBRIP/ASS）跨网络流反向倒灌探测，彻底消除寻道拖垮。
 - **严禁在 `loadfile` 后同步调用 `command('seek')`**：
   - `libmpv` 的 `command('loadfile', [url])` 是异步入队指令，函数返回时网络流尚未打开（`file-loaded` 尚未触发）。若在 `initialTime > 0`（有历史观看进度）时紧接着调用 `await command('seek', [initialTime, 'absolute'])`，`libmpv` 会直接拒绝并抛出 `mpv command failed: error running command`；
-  - **正确做法**：在 `loadfile` 前通过 `await setProperty('start', '+' + Math.floor(initialTime))` 原生预设起播时间点，并在监听到 `file-loaded` 事件后重置 `start='none'` 及执行带独立 `try/catch` 的兜底 `seek`（绝不向 `errorListeners` 抛出异常导致误触发流回退）。
+  - **正确做法**：在 `loadfile` 前通过 `await setProperty('start', '+' + Math.floor(initialTime))` 预设起播时间点，且初始记录 `this._currentTime = 0`（严禁在起播前假赋值为 `initialTime` 导致兜底逻辑被短路）；在监听到 `file-loaded` 事件（文件头就绪）后安全执行带独立 `try/catch` 的 `command('seek', [targetSeek, 'absolute'])` 绝对寻址；在监听到 `playback-restart` 事件（解码真正就绪）后再重置 `start='none'`。
+- **加载遮罩与黑屏穿透防护**：
+  - 在 `PlayerPage` 中，若 `initialTimeRef.current > 0`，在 `hasInitialSeekedRef.current` 达成且收到首个有效解码秒数（`cur >= 1`）前，即使收到内核 `state='playing'` 也禁止过早解除 `isLoadingVideo`，彻底杜绝底层尚未出帧时的黑色底板穿透。
 - **全局串行生命周期队列 (`MpvPlayerEngine.lifecycleQueue`)**：
   - `tauri-plugin-libmpv` 按窗口标签 `'main'` 维护单例。跨页面快速进出播放页时，前一个引擎实例的异步 `destroy()` 与新实例的 `init()` 可能并发冲突。必须通过静态 Promise 队列串行化 `init` 与 `destroy`，并在实例内用 `initPromise` 合并并发的初始化请求。
 - **区分引擎的流回退策略与陈旧闭包防护**：

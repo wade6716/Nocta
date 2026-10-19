@@ -195,6 +195,17 @@ export class MpvPlayerEngine implements IPlayerEngine {
         await setProperty('http-proxy', effectiveProxy).catch(() => {});
       }
 
+      // 网络流与远端 MKV/MP4 高速 Seek 关键参数配置
+      await setProperty('force-seekable', 'yes').catch(() => {});
+      await setProperty('cache', 'yes').catch(() => {});
+      await setProperty('demuxer-seekable-cache', 'yes').catch(() => {});
+      await setProperty('demuxer-max-bytes', 419430400).catch(() => {}); // 400MB 解复用缓存
+      await setProperty('demuxer-max-back-bytes', 157286400).catch(() => {}); // 150MB 后退缓存
+      await setProperty('demuxer-readahead-secs', 60).catch(() => {});
+      await setProperty('hr-seek', 'default').catch(() => {});
+      await setProperty('hr-seek-framedrop', 'yes').catch(() => {}); // 4K 60fps HEVC HDR 跳转避免解码器拥塞黑屏
+      await setProperty('demuxer-mkv-subtitle-preroll', 'no').catch(() => {}); // 杜绝 MKV 内嵌字幕反向扫描拖垮网络流
+
       this.isInitialized = true;
       await this.bindMpvEvents();
 
@@ -336,27 +347,21 @@ export class MpvPlayerEngine implements IPlayerEngine {
         const evName = ev.event;
 
         if (evName === 'file-loaded') {
-          // 媒体文件头部已成功加载，重置 start 属性以免影响后续播放
-          setProperty('start', 'none').catch(() => {});
-          this._isBuffering = false;
-          this.updateCurrentState();
-
+          // 媒体文件头部已成功解析打开
           if (this.pendingSeekTime && this.pendingSeekTime > 0) {
             const targetSeek = this.pendingSeekTime;
             this.pendingSeekTime = null;
-            // 若 start 属性未生效或偏差超过 3 秒，在 file-loaded 后安全执行一次兜底 seek
-            if (Math.abs(this._currentTime - targetSeek) > 3) {
-              try {
-                await command('seek', [targetSeek, 'absolute']);
-                this._currentTime = targetSeek;
-                this.timeUpdateListeners.forEach((cb) => cb(targetSeek, this._duration));
-              } catch (seekErr) {
-                console.warn('[MpvEngine Deferred Seek Warning]', seekErr);
-              }
+            // 媒体文件头打开后执行明确的绝对定点 seek，确保通过 HTTP Range 直达目标片区，
+            // 且不会阻断后续播放或向上层抛错
+            try {
+              await command('seek', [targetSeek, 'absolute']);
+            } catch (seekErr) {
+              console.warn('[MpvEngine Deferred Seek Warning]', seekErr);
             }
           }
         } else if (evName === 'playback-restart') {
-          // 首帧或跳转后音视频解码恢复就绪
+          // 首帧或定点跳转后音视频解码恢复就绪，重置 start 属性以免影响后续切片
+          setProperty('start', 'none').catch(() => {});
           this._isBuffering = false;
           this.updateCurrentState();
           this.timeUpdateListeners.forEach((cb) => cb(this._currentTime, this._duration));
@@ -485,19 +490,23 @@ export class MpvPlayerEngine implements IPlayerEngine {
       console.warn('[MpvEngine Sync Proxy Warning]', e);
     }
 
+    // 每次加载媒体流时，显式保证流可定点 Seek、范围检索 (HTTP Range) 与解码器跳转丢帧保护
+    await setProperty('force-seekable', 'yes').catch(() => {});
+    await setProperty('hr-seek-framedrop', 'yes').catch(() => {});
+    await setProperty('demuxer-mkv-subtitle-preroll', 'no').catch(() => {});
+
     this.setState('loading');
     this.pendingSeekTime = options.initialTime && options.initialTime > 0 ? options.initialTime : null;
+    this._currentTime = 0;
 
     try {
       // 关键修复：切勿在 loadfile 后同步调用 command('seek')，因为文件尚未完成 demux 打开，
       // 同步调用 seek 会直接抛出 "mpv command failed: error running command" 导致误判流失败！
-      // 正确做法：通过 mpv 原生 start 属性预设起播秒数，并在 file-loaded 事件中做兜底校验。
+      // 正确做法：通过 mpv 原生 start 属性预设起播秒数，并在 file-loaded 事件中安全兜底定位。
       if (this.pendingSeekTime && this.pendingSeekTime > 0) {
-        await setProperty('start', `+${Math.floor(this.pendingSeekTime)}`);
-        this._currentTime = this.pendingSeekTime;
+        await setProperty('start', `+${Math.floor(this.pendingSeekTime)}`).catch(() => {});
       } else {
         await setProperty('start', 'none').catch(() => {});
-        this._currentTime = 0;
       }
 
       try {

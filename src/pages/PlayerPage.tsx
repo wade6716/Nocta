@@ -89,12 +89,19 @@ export const PlayerPage: React.FC = () => {
   // Video playback status and auto-recovery (0: Direct, 1: Remux MP4, 2: H264 Transcode)
   const [currentStreamUrl, setCurrentStreamUrl] = useState<string | null>(streamUrl);
   const [fallbackLevel, setFallbackLevel] = useState<0 | 1 | 2>(0);
+  const fallbackLevelRef = useRef<0 | 1 | 2>(0);
   const [isLoadingVideo, setIsLoadingVideo] = useState(true);
   const [videoError, setVideoError] = useState<string | null>(null);
   const [videoDimensions, setVideoDimensions] = useState<{ width: number; height: number } | null>(null);
 
-  // Initial resume seek flag
+  // Initial resume seek flag & live refs for engine callbacks
   const hasInitialSeekedRef = useRef(false);
+  const initialTimeRef = useRef<number>(initialTime);
+  const handleVideoErrorRef = useRef<(errMsg?: string) => void>(() => {});
+
+  useEffect(() => {
+    initialTimeRef.current = initialTime;
+  }, [initialTime]);
 
   // Player Engine and Container refs
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -135,6 +142,7 @@ export const PlayerPage: React.FC = () => {
       setIsLoadingVideo(true);
       setVideoError(null);
       setFallbackLevel(0);
+      fallbackLevelRef.current = 0;
       hasInitialSeekedRef.current = false;
     }
   }, [streamUrl]);
@@ -151,11 +159,13 @@ export const PlayerPage: React.FC = () => {
 
     const unlistenTime = engine.onTimeUpdate((cur, dur) => {
       if (!active) return;
-      if (!hasInitialSeekedRef.current && initialTime > 0 && cur < 1) {
+      // 收到真实时间进度说明底层视频流已打开并解码，立即解除加载遮罩
+      setIsLoadingVideo(false);
+      const targetInitSec = initialTimeRef.current;
+      if (!hasInitialSeekedRef.current && targetInitSec > 0 && cur < 1) {
         return;
       }
       hasInitialSeekedRef.current = true;
-      setIsLoadingVideo(false);
       updateTime(cur, dur);
       bridge.onMpvTimePos(cur);
     });
@@ -182,6 +192,7 @@ export const PlayerPage: React.FC = () => {
           bridge.onMpvPauseChange(true);
           break;
         case 'ended':
+          setIsLoadingVideo(false);
           setPaused(true);
           bridge.onMpvPauseChange(true);
           break;
@@ -191,7 +202,7 @@ export const PlayerPage: React.FC = () => {
     const unlistenError = engine.onError((errMsg) => {
       if (!active) return;
       console.warn('[Engine Playback Error]', errMsg);
-      handleVideoError();
+      handleVideoErrorRef.current(errMsg);
     });
 
     const unlistenDim = engine.onVideoDimensions((width, height) => {
@@ -215,7 +226,7 @@ export const PlayerPage: React.FC = () => {
     if (currentStreamUrl && engineRef.current) {
       engineRef.current.load({
         url: currentStreamUrl,
-        initialTime,
+        initialTime: initialTimeRef.current,
         title: item?.Name,
       });
     }
@@ -593,14 +604,24 @@ export const PlayerPage: React.FC = () => {
   const handleSelectAudioTrack = (trackId: string | null) => {
     selectAudioTrack(trackId);
     if (trackId && engineRef.current) {
-      engineRef.current.selectAudioTrack(trackId);
+      const track = audioTracks.find((t) => t.id === trackId);
+      const engineTrackId =
+        engineType === 'mpv' && track?.mpvId !== undefined ? String(track.mpvId) : trackId;
+      engineRef.current.selectAudioTrack(engineTrackId);
     }
   };
 
   const handleSelectSubtitleTrack = (trackId: string | null) => {
     selectSubtitleTrack(trackId);
     if (engineRef.current) {
-      engineRef.current.selectSubtitleTrack(trackId);
+      if (!trackId) {
+        engineRef.current.selectSubtitleTrack(null);
+        return;
+      }
+      const track = subtitleTracks.find((t) => t.id === trackId);
+      const engineTrackId =
+        engineType === 'mpv' && track?.mpvId !== undefined ? String(track.mpvId) : trackId;
+      engineRef.current.selectSubtitleTrack(engineTrackId);
     }
   };
 
@@ -773,58 +794,114 @@ export const PlayerPage: React.FC = () => {
     resetHideTimer,
   ]);
 
-  // Two-tier Video error auto-recovery
-  const handleVideoError = () => {
-    console.warn('[Video Error Event] current level:', fallbackLevel);
+  // Two-tier Video error auto-recovery (with live ref to avoid stale closures)
+  const handleVideoError = useCallback(
+    (errMsg?: string) => {
+      const currentLevel = fallbackLevelRef.current;
+      console.warn('[Video Error Event] engine:', engineType, 'current level:', currentLevel, 'err:', errMsg);
 
-    if (!currentServer || !item || !mediaSource || !playSessionId) {
+      if (!currentServer || !item || !mediaSource || !playSessionId) {
+        setIsLoadingVideo(false);
+        setVideoError('未获取到媒体播放会话信息');
+        return;
+      }
+
+      // 若是 libmpv 动态库初始化本身报错，不再无意义重试流地址
+      if (errMsg && (errMsg.includes('初始化 libmpv') || errMsg.includes('FFI error'))) {
+        setIsLoadingVideo(false);
+        setPaused(true);
+        setVideoError(errMsg);
+        return;
+      }
+
+      // HTML5 引擎：0 (直连) -> 1 (MP4 轻量重封装) -> 2 (H.264 转码)
+      if (engineType === 'html5' && currentLevel === 0) {
+        console.log('[Video Auto-Fallback 1] HTML5 尝试 MP4 Remux 直接流模式...');
+        fallbackLevelRef.current = 1;
+        setFallbackLevel(1);
+        const remuxUrl = buildDirectStreamUrl(
+          currentServer.url,
+          item.Id,
+          mediaSource,
+          playSessionId,
+          currentServer.accessToken,
+          true
+        );
+        setCurrentStreamUrl(remuxUrl);
+        setIsLoadingVideo(true);
+        setVideoError(null);
+        return;
+      }
+
+      // MPV 引擎在 Level 0 失败时跳过无意义的 MP4 Remux，或 HTML5 在 Level 1 失败时，尝试通用兼容流
+      if (currentLevel === 0 || currentLevel === 1) {
+        console.log('[Video Auto-Fallback 2] 尝试通用兼容 H.264 模式...');
+        fallbackLevelRef.current = 2;
+        setFallbackLevel(2);
+        const transcodeUrl = buildTranscodeStreamUrl(
+          currentServer.url,
+          item.Id,
+          mediaSource,
+          playSessionId,
+          currentServer.accessToken
+        );
+        setCurrentStreamUrl(transcodeUrl);
+        setIsLoadingVideo(true);
+        setVideoError(null);
+        return;
+      }
+
       setIsLoadingVideo(false);
-      setVideoError('未获取到媒体播放会话信息');
-      return;
-    }
-
-    if (fallbackLevel === 0) {
-      console.log('[Video Auto-Fallback 1] 尝试 MP4 Remux 直接流模式...');
-      setFallbackLevel(1);
-      const remuxUrl = buildDirectStreamUrl(
-        currentServer.url,
-        item.Id,
-        mediaSource,
-        playSessionId,
-        currentServer.accessToken,
-        true
+      setPaused(true);
+      setVideoError(
+        errMsg
+          ? `媒体流加载失败 (${errMsg})。请检查服务器连接、直链重定向网络或服务端转码设置。`
+          : '无法打开该媒体流或服务端禁止转码，请检查网络连接或重试原画直连。'
       );
-      setCurrentStreamUrl(remuxUrl);
-      setIsLoadingVideo(true);
-      setVideoError(null);
-      return;
-    }
+    },
+    [currentServer, item, mediaSource, playSessionId, engineType, setPaused]
+  );
 
-    if (fallbackLevel === 1) {
-      console.log('[Video Auto-Fallback 2] 尝试通用兼容 H.264 模式...');
-      setFallbackLevel(2);
-      const transcodeUrl = buildTranscodeStreamUrl(
-        currentServer.url,
-        item.Id,
-        mediaSource,
-        playSessionId,
-        currentServer.accessToken
-      );
-      setCurrentStreamUrl(transcodeUrl);
-      setIsLoadingVideo(true);
-      setVideoError(null);
-      return;
-    }
+  useEffect(() => {
+    handleVideoErrorRef.current = handleVideoError;
+  }, [handleVideoError]);
 
-    setIsLoadingVideo(false);
-    setPaused(true);
-    setVideoError(
-      '无法解码该片源或服务端禁止转码。可能由于当前设备缺少 HEVC 扩展，或服务端直连网络受限。'
-    );
+  const handleRetryDirect = () => {
+    if (!currentServer || !item || !mediaSource || !playSessionId) return;
+    fallbackLevelRef.current = 0;
+    setFallbackLevel(0);
+    setIsLoadingVideo(true);
+    setVideoError(null);
+    hasInitialSeekedRef.current = false;
+    const directUrl =
+      engineType === 'mpv' && isTauriEnvironment()
+        ? buildNativeDirectStreamUrl(
+            currentServer.url,
+            item.Id,
+            mediaSource,
+            playSessionId,
+            currentServer.accessToken
+          )
+        : buildDirectStreamUrl(
+            currentServer.url,
+            item.Id,
+            mediaSource,
+            playSessionId,
+            currentServer.accessToken
+          );
+    setCurrentStreamUrl(directUrl);
+    if (currentStreamUrl === directUrl && engineRef.current) {
+      engineRef.current.load({
+        url: directUrl,
+        initialTime: initialTimeRef.current,
+        title: item.Name,
+      });
+    }
   };
 
   const handleManualRetry = () => {
     if (!currentServer || !item || !mediaSource || !playSessionId) return;
+    fallbackLevelRef.current = 2;
     setFallbackLevel(2);
     setIsLoadingVideo(true);
     setVideoError(null);
@@ -836,6 +913,13 @@ export const PlayerPage: React.FC = () => {
       currentServer.accessToken
     );
     setCurrentStreamUrl(transcodeUrl);
+    if (currentStreamUrl === transcodeUrl && engineRef.current) {
+      engineRef.current.load({
+        url: transcodeUrl,
+        initialTime: initialTimeRef.current,
+        title: item.Name,
+      });
+    }
   };
 
   if (!item) {
@@ -901,7 +985,9 @@ export const PlayerPage: React.FC = () => {
               <h2 className="text-base font-bold text-white tracking-wide">{item.Name}</h2>
               <p className="text-xs text-gray-400 mt-1">
                 {fallbackLevel === 0
-                  ? '正在直连原始媒体流...'
+                  ? engineType === 'mpv'
+                    ? '正在通过 MPV 硬解引擎直连原始媒体流...'
+                    : '正在直连原始媒体流...'
                   : fallbackLevel === 1
                   ? '正在进行轻量 MP4 兼容重封装...'
                   : '正在转为通用 H.264 兼容流...'}
@@ -931,11 +1017,18 @@ export const PlayerPage: React.FC = () => {
             </div>
             <div className="pt-2 flex flex-col sm:flex-row gap-2">
               <button
-                onClick={handleManualRetry}
+                onClick={handleRetryDirect}
                 className="flex-1 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-xl text-xs font-semibold flex items-center justify-center space-x-1.5 transition cursor-pointer"
               >
                 <RefreshCw className="w-3.5 h-3.5" />
-                <span>尝试兼容流重试</span>
+                <span>重试原画直连</span>
+              </button>
+              <button
+                onClick={handleManualRetry}
+                className="flex-1 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-semibold flex items-center justify-center space-x-1.5 transition cursor-pointer"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>尝试转码流</span>
               </button>
               <button
                 onClick={handleBack}

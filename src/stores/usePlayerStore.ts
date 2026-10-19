@@ -212,6 +212,15 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       payload.audioTracks.find((t) => t.isDefault)?.id || payload.audioTracks[0]?.id || null;
     const defaultSub = payload.subtitleTracks.find((t) => t.isDefault)?.id || null;
 
+    // 完播防回滚：当进度距片尾不足 15 秒或超过 98% 时，视为完播，下次重新起播从 0:00 开始
+    const runTimeSec = payload.item.RunTimeTicks ? payload.item.RunTimeTicks / 10000000 : 0;
+    let safeInitialTime = payload.initialTime || 0;
+    if (runTimeSec > 0 && safeInitialTime > 0) {
+      if (runTimeSec - safeInitialTime < 15 || safeInitialTime / runTimeSec > 0.98) {
+        safeInitialTime = 0;
+      }
+    }
+
     set({
       item: payload.item,
       mediaSource: payload.mediaSource,
@@ -221,8 +230,8 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       subtitleTracks: payload.subtitleTracks,
       selectedAudioId: defaultAudio,
       selectedSubtitleId: defaultSub,
-      currentTime: payload.initialTime || 0,
-      initialTime: payload.initialTime || 0,
+      currentTime: safeInitialTime,
+      initialTime: safeInitialTime,
       paused: false,
       buffering: false,
     });

@@ -587,14 +587,15 @@ export function buildDirectStreamUrl(
   if (mediaSource.IsRemote && mediaSource.Path && mediaSource.Path.startsWith('http')) {
     return mediaSource.Path;
   }
-  const rawContainer = (mediaSource.Container || 'mkv').toLowerCase();
-  const isChromiumUnsupported = ['mkv', 'avi', 'flv', 'ts', 'm2ts', 'wmv'].includes(rawContainer);
+  const rawContainer = (mediaSource.Container || 'mkv').toLowerCase().split(',')[0].trim();
+  const normalizedContainer = rawContainer === 'matroska' ? 'mkv' : rawContainer || 'mkv';
+  const isChromiumUnsupported = ['mkv', 'avi', 'flv', 'ts', 'm2ts', 'wmv'].includes(normalizedContainer);
 
   if (forceCompatible || isChromiumUnsupported) {
     return `${base}/emby/Videos/${itemId}/stream.mp4?MediaSourceId=${mediaSource.Id}&PlaySessionId=${playSessionId}&api_key=${accessToken}&X-Emby-Token=${accessToken}&VideoCodec=copy&AudioCodec=aac&TranscodingMaxAudioChannels=2`;
   }
 
-  return `${base}/emby/Videos/${itemId}/stream.${rawContainer}?static=true&MediaSourceId=${mediaSource.Id}&PlaySessionId=${playSessionId}&api_key=${accessToken}&X-Emby-Token=${accessToken}`;
+  return `${base}/emby/Videos/${itemId}/stream.${normalizedContainer}?static=true&MediaSourceId=${mediaSource.Id}&PlaySessionId=${playSessionId}&api_key=${accessToken}&X-Emby-Token=${accessToken}`;
 }
 
 /**
@@ -612,8 +613,9 @@ export function buildNativeDirectStreamUrl(
   if (mediaSource.IsRemote && mediaSource.Path && mediaSource.Path.startsWith('http')) {
     return mediaSource.Path;
   }
-  const rawContainer = (mediaSource.Container || 'mkv').toLowerCase();
-  return `${base}/emby/Videos/${itemId}/stream.${rawContainer}?static=true&MediaSourceId=${mediaSource.Id}&PlaySessionId=${playSessionId}&api_key=${accessToken}&X-Emby-Token=${accessToken}`;
+  const rawContainer = (mediaSource.Container || 'mkv').toLowerCase().split(',')[0].trim();
+  const normalizedContainer = rawContainer === 'matroska' ? 'mkv' : rawContainer || 'mkv';
+  return `${base}/emby/Videos/${itemId}/stream.${normalizedContainer}?static=true&MediaSourceId=${mediaSource.Id}&PlaySessionId=${playSessionId}&api_key=${accessToken}&X-Emby-Token=${accessToken}`;
 }
 
 /**

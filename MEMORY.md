@@ -388,10 +388,28 @@ pnpm tauri build
 - `libmpv-wrapper.dll` 强依赖同目录的 `libmpv-2.dll`。然而 Windows 的默认依赖检索机制仅查找进程可执行文件主目录，不会自动将子目录 `lib/` 纳入从属依赖链，导致抛出 `LoadLibraryExW code 126 ("找不到指定的模块。")`；
 - **原生层动态挂载**：在 `src-tauri/src/lib.rs` 的 `run()` 和 `app.setup` 中，通过 Win32 API `SetDllDirectoryW` 动态将当前程序的 `lib/` 及 `resources/lib/` 注册为进程级 DLL 优先搜索路径，并同步注入进程环境变量 `PATH`，从根本上解决 DLL 依赖装载失败问题。
 
+---
 
+## 16. MPV 原生硬解起播生命周期、异步定点 Seek 与错误回退隔离规范 (MPV Load/Seek Lifecycle & Error Fallback)
 
+### 16.1 偶发黑屏与误报“正在进行轻量 MP4 兼容重封装”的根因剖析
+1. **`loadfile` 后同步 `seek` 导致有进度视频必现抛错**：
+   - `libmpv` 的 `command('loadfile', [url])` 是异步指令，返回时网络流尚未完成解复用打开；
+   - 当视频无观看进度（`initialTime === 0`）时，不执行 `seek`，因此能正常起播；
+   - 当视频有历史观看进度（`initialTime > 0`）时，紧接着同步调用 `await command('seek', [initialTime, 'absolute'])` 会被 `libmpv` 拒绝并抛出 `mpv command failed: error running command`，被 `load()` 的 `catch` 捕获后误触发 `errorListeners`。
+2. **`PlayerPage.tsx` 陈旧闭包导致回退死锁**：
+   - `engine.onError` 在首次挂载时捕获了 `fallbackLevel = 0` 的旧 `handleVideoError` 闭包；
+   - 当进入 `fallbackLevel = 1`（提示“正在进行轻量 MP4 兼容重封装...”）后再次因 `seek` 报错或服务端不支持重封装报错时，旧闭包读取到的 `fallbackLevel` 仍为 `0`，重复设置相同的 `remuxUrl` 且不触发状态迁移，导致全屏加载黑幕永久悬挂。
+3. **跨页面 `destroy()` 与 `init()` 并发竞态**：
+   - `tauri-plugin-libmpv` 以窗口名 `'main'` 管理单例。退出播放页再进入时，旧实例异步 `destroy()` 可能在新实例 `init()` 之后才执行完毕，导致新实例刚挂载就被销毁。
 
-
-
-
+### 16.2 核心架构修复方案
+1. **原生 `start` 属性起播与 `file-loaded` 延迟兜底 Seek**：
+   - 在 `loadfile` 前设置 `setProperty('start', '+<seconds>')`，由 `libmpv` 解复用器在打开流时原生定点起播；
+   - 监听 `file-loaded` 事件重置 `start='none'`，并在偏差大于 3 秒时执行带独立 `try/catch` 的兜底 `seek`，绝不触发错误回退。
+2. **全局生命周期串行队列与并发合并**：
+   - `MpvPlayerEngine` 通过静态 `lifecycleQueue` 串行化所有 `init` 与 `destroy` 操作，并通过 `initPromise` 合并组件挂载期的并发初始化调用。
+3. **引擎感知回退与实时 Ref 回调**：
+   - 使用 `handleVideoErrorRef` 与 `fallbackLevelRef` 彻底消除陈旧闭包；
+   - `MPV` 硬解模式下跳过 HTML5 专用的 `MP4 Remux`（Level 1），并在错误面板提供「重试原画直连」与「尝试转码流」双通道恢复按钮。
 

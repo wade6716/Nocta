@@ -170,10 +170,15 @@
   - Windows 系统加载器在解析二级依赖 DLL 时，默认仅检索主程序 `.exe` 所在目录和系统目录，不会自动将子目录 `lib/` 纳入解析链，从而抛出 `LoadLibraryExW code 126 ("找不到指定的模块。")`；
   - **解决方案**：在 Rust 程序入口（`pub fn run()` 及 `app.setup`）中，调用 Win32 API `SetDllDirectoryW` 动态将当前程序的 `lib/`、`resources/lib/` 目录注入为进程级 DLL 优先搜索路径，并同步将其追加到进程环境变量 `PATH` 前端，100% 确保内核与所有二级从属动态库均能顺利装载。
 
-
-
-
-
-
-
-
+### 13. MPV 原生硬解起播生命周期、异步定点 Seek 与错误回退隔离规范 (MPV Load/Seek Lifecycle & Error Fallback)
+- **严禁在 `loadfile` 后同步调用 `command('seek')`**：
+  - `libmpv` 的 `command('loadfile', [url])` 是异步入队指令，函数返回时网络流尚未打开（`file-loaded` 尚未触发）。若在 `initialTime > 0`（有历史观看进度）时紧接着调用 `await command('seek', [initialTime, 'absolute'])`，`libmpv` 会直接拒绝并抛出 `mpv command failed: error running command`；
+  - **正确做法**：在 `loadfile` 前通过 `await setProperty('start', '+' + Math.floor(initialTime))` 原生预设起播时间点，并在监听到 `file-loaded` 事件后重置 `start='none'` 及执行带独立 `try/catch` 的兜底 `seek`（绝不向 `errorListeners` 抛出异常导致误触发流回退）。
+- **全局串行生命周期队列 (`MpvPlayerEngine.lifecycleQueue`)**：
+  - `tauri-plugin-libmpv` 按窗口标签 `'main'` 维护单例。跨页面快速进出播放页时，前一个引擎实例的异步 `destroy()` 与新实例的 `init()` 可能并发冲突。必须通过静态 Promise 队列串行化 `init` 与 `destroy`，并在实例内用 `initPromise` 合并并发的初始化请求。
+- **区分引擎的流回退策略与陈旧闭包防护**：
+  - `PlayerPage` 注册 `engine.onError` 时必须使用 `handleVideoErrorRef` 与 `fallbackLevelRef` 获取实时状态，防止因 React 首次挂载闭包陈旧导致 `fallbackLevel` 永远停留在 `0` 而死锁在黑屏加载层；
+  - `MPV` 原生硬解支持全格式直连（`static=true`），回退时**必须跳过专为 HTML5 `<video>` 设计的 Level 1（`MP4 轻量重封装`）**，避免在禁用转码或 302 直链的 Emby 服上因重封装失败而黑屏。
+- **容器后缀规范化与局域网代理旁路**：
+  - `buildNativeDirectStreamUrl` 必须规范化 `mediaSource.Container`（例如将 `mov,mp4,m4a,3gp,3g2,mj2` 取首项 `mov`，将 `matroska,webm` 映射为 `mkv`）；
+  - 当目标流 URL 为局域网或回环地址（`192.168.x.x`、`10.x.x.x`、`172.16-31.x.x`、`localhost`、`127.0.0.1`）时，`MpvPlayerEngine` 自动将 `http-proxy` 置空直连，防止局域网 NAS 视频流被系统代理截留或因非 HTTP 代理协议报错。

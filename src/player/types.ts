@@ -84,4 +84,5 @@ export interface IPlayerEngine {
   onError(cb: (errorMsg: string) => void): () => void;
   onVideoDimensions(cb: (width: number, height: number) => void): () => void;
   onTracksLoaded(cb: (audio: MappedTrack[], subtitles: MappedTrack[]) => void): () => void;
+  onNetworkSpeed?(cb: (speedBytesPerSec: number) => void): () => void;
 }

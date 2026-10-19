@@ -16,6 +16,7 @@ import {
   AudioLines,
   Subtitles,
   Info,
+  ArrowDown,
 } from 'lucide-react';
 import { MappedTrack } from '../../api/embyClient';
 
@@ -35,6 +36,7 @@ interface PlayerOsdProps {
   selectedSubtitleId: string | null;
   isFullscreen: boolean;
   isMaximized?: boolean;
+  networkSpeed?: number;
 
   danmakuCount?: number;
   danmakuOffset?: number;
@@ -71,6 +73,19 @@ function formatTime(seconds: number): string {
   return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
 }
 
+export function formatNetworkSpeed(bytesPerSec?: number): string {
+  if (!bytesPerSec || isNaN(bytesPerSec) || bytesPerSec <= 0) {
+    return '0 KB/s';
+  }
+  if (bytesPerSec < 1024) {
+    return `${Math.round(bytesPerSec)} B/s`;
+  }
+  if (bytesPerSec < 1024 * 1024) {
+    return `${(bytesPerSec / 1024).toFixed(1)} KB/s`;
+  }
+  return `${(bytesPerSec / (1024 * 1024)).toFixed(1)} MB/s`;
+}
+
 export const PlayerOsd: React.FC<PlayerOsdProps> = ({
   title,
   subtitle,
@@ -87,6 +102,7 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
   selectedSubtitleId,
   isFullscreen,
   isMaximized = false,
+  networkSpeed = 0,
   danmakuCount,
   danmakuOffset,
   matchedTitle,
@@ -298,6 +314,15 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
               <span className="tabular-nums text-white font-semibold">{formatTime(currentTime)}</span>
               <span className="mx-1 text-gray-500">/</span>
               <span className="tabular-nums text-gray-400">{formatTime(duration)}</span>
+            </div>
+
+            {/* Real-time Network Speed Badge (跟随进度条与控制栏一同显示和隐藏) */}
+            <div
+              className="flex items-center space-x-1 px-2 py-0.5 rounded-lg bg-white/[0.06] border border-white/10 text-xs font-mono text-sky-400 font-medium select-none shadow-sm"
+              title="当前实时下载网络速度"
+            >
+              <ArrowDown className="w-3 h-3 text-sky-400 shrink-0 animate-pulse" />
+              <span className="tabular-nums">{formatNetworkSpeed(networkSpeed)}</span>
             </div>
 
             {/* Volume slider */}

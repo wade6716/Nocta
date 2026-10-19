@@ -91,6 +91,7 @@ export const PlayerPage: React.FC = () => {
   const [isLoadingVideo, setIsLoadingVideo] = useState(true);
   const [videoError, setVideoError] = useState<string | null>(null);
   const [videoDimensions, setVideoDimensions] = useState<{ width: number; height: number } | null>(null);
+  const [networkSpeed, setNetworkSpeed] = useState<number>(0);
 
   // Initial resume seek flag & live refs for engine callbacks
   const hasInitialSeekedRef = useRef(false);
@@ -206,12 +207,18 @@ export const PlayerPage: React.FC = () => {
       setVideoDimensions({ width, height });
     });
 
+    const unlistenSpeed = engine.onNetworkSpeed?.((spd) => {
+      if (!active) return;
+      setNetworkSpeed(spd);
+    });
+
     return () => {
       active = false;
       unlistenTime();
       unlistenState();
       unlistenError();
       unlistenDim();
+      unlistenSpeed?.();
       engine.destroy();
       engineRef.current = null;
     };
@@ -1022,6 +1029,7 @@ export const PlayerPage: React.FC = () => {
         duration={duration || ticksToSeconds(item.RunTimeTicks || 0)}
         volume={volume}
         playbackRate={playbackRate}
+        networkSpeed={networkSpeed}
         danmakuVisible={danmakuSettings.visible}
         danmakuCount={rawComments.length}
         danmakuOffset={savedOffset}
@@ -1130,6 +1138,7 @@ export const PlayerPage: React.FC = () => {
         danmakuMatchedTitle={matchedTitle}
         danmakuCount={rawComments.length}
         danmakuOffset={savedOffset}
+        networkSpeed={networkSpeed}
       />
     </div>
   );

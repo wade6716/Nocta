@@ -15,6 +15,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { EmbyItem, EmbyMediaSource, MappedTrack } from '../../api/embyClient';
+import { formatNetworkSpeed } from './PlayerOsd';
 
 interface PlaybackInfoModalProps {
   isOpen: boolean;
@@ -34,6 +35,7 @@ interface PlaybackInfoModalProps {
   danmakuMatchedTitle?: string;
   danmakuCount?: number;
   danmakuOffset?: number;
+  networkSpeed?: number;
 }
 
 function formatBytes(bytes?: number): string {
@@ -82,6 +84,7 @@ export const PlaybackInfoModal: React.FC<PlaybackInfoModalProps> = ({
   danmakuMatchedTitle,
   danmakuCount,
   danmakuOffset,
+  networkSpeed,
 }) => {
   const [copied, setCopied] = useState(false);
 
@@ -118,6 +121,7 @@ export const PlaybackInfoModal: React.FC<PlaybackInfoModalProps> = ({
       `媒体标题: ${item.Name}`,
       item.SeriesName ? `剧集归属: ${item.SeriesName} (第 ${item.IndexNumber || 1} 集)` : null,
       `来源服务器: ${currentServerName || item.ServerName || '当前服务器'}`,
+      `实时网速: ${formatNetworkSpeed(networkSpeed)}`,
       `播放内核: ${engineType === 'mpv' ? 'libmpv (原生 GPU 硬解加速)' : 'HTML5 Video'}`,
       `播放进度: ${formatTime(currentTime)} / ${formatTime(duration)} (${progressPercent}%) · ${playbackRate}x 倍速`,
       `--- 视频流 ---`,
@@ -228,7 +232,7 @@ export const PlaybackInfoModal: React.FC<PlaybackInfoModalProps> = ({
               <span>当前播放状态</span>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-slate-300">
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-slate-300">
               <div>
                 <span className="text-slate-500 block text-[11px]">播放进度</span>
                 <span className="font-mono text-white font-medium text-xs">
@@ -245,6 +249,13 @@ export const PlaybackInfoModal: React.FC<PlaybackInfoModalProps> = ({
               <div>
                 <span className="text-slate-500 block text-[11px]">传输协议</span>
                 <span className="text-emerald-400 font-medium text-xs">DirectStream 直链</span>
+              </div>
+
+              <div>
+                <span className="text-slate-500 block text-[11px]">实时网速</span>
+                <span className="font-mono text-sky-400 font-medium text-xs">
+                  {formatNetworkSpeed(networkSpeed)}
+                </span>
               </div>
 
               <div>

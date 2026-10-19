@@ -18,6 +18,10 @@ export class Html5PlayerEngine implements IPlayerEngine {
   private errorListeners: Set<(errorMsg: string) => void> = new Set();
   private videoDimensionsListeners: Set<(width: number, height: number) => void> = new Set();
   private tracksLoadedListeners: Set<(audio: MappedTrack[], subtitles: MappedTrack[]) => void> = new Set();
+  private networkSpeedListeners: Set<(speed: number) => void> = new Set();
+  private speedPollTimer: number | null = null;
+  private lastBufferedEnd = 0;
+  private lastProgressCheckTime = 0;
 
   get state(): PlayerState {
     return this._state;
@@ -125,6 +129,7 @@ export class Html5PlayerEngine implements IPlayerEngine {
   async load(options: PlayerLoadOptions): Promise<void> {
     if (!this.video) return;
 
+    this.startSpeedPolling();
     this.setState('loading');
     this.video.src = options.url;
     this.video.playbackRate = this._playbackRate;
@@ -216,7 +221,47 @@ export class Html5PlayerEngine implements IPlayerEngine {
       : 'center center';
   }
 
+  private startSpeedPolling() {
+    if (this.speedPollTimer !== null) return;
+    this.lastProgressCheckTime = performance.now();
+    this.speedPollTimer = window.setInterval(() => {
+      if (!this.video || this._state === 'idle') {
+        this.networkSpeedListeners.forEach((cb) => cb(0));
+        return;
+      }
+      const now = performance.now();
+      const dt = (now - this.lastProgressCheckTime) / 1000;
+      this.lastProgressCheckTime = now;
+
+      let speed = 0;
+      if (this.video.buffered.length > 0 && dt > 0) {
+        let maxBufferedEnd = 0;
+        for (let i = 0; i < this.video.buffered.length; i++) {
+          const end = this.video.buffered.end(i);
+          if (end > maxBufferedEnd) maxBufferedEnd = end;
+        }
+        const deltaSec = Math.max(0, maxBufferedEnd - this.lastBufferedEnd);
+        this.lastBufferedEnd = maxBufferedEnd;
+
+        // 若缓冲向前延伸，按典型码率估算下载速率 (约 8 Mbps ~ 1MB/s)
+        if (deltaSec > 0) {
+          const estimatedBitrate = 8_000_000;
+          speed = (deltaSec * (estimatedBitrate / 8)) / dt;
+        }
+      }
+      this.networkSpeedListeners.forEach((cb) => cb(speed));
+    }, 1000);
+  }
+
+  private stopSpeedPolling() {
+    if (this.speedPollTimer !== null) {
+      window.clearInterval(this.speedPollTimer);
+      this.speedPollTimer = null;
+    }
+  }
+
   async destroy(): Promise<void> {
+    this.stopSpeedPolling();
     if (this.video) {
       this.video.pause();
       this.video.src = '';
@@ -231,6 +276,7 @@ export class Html5PlayerEngine implements IPlayerEngine {
     this.errorListeners.clear();
     this.videoDimensionsListeners.clear();
     this.tracksLoadedListeners.clear();
+    this.networkSpeedListeners.clear();
     this._state = 'idle';
   }
 
@@ -263,5 +309,11 @@ export class Html5PlayerEngine implements IPlayerEngine {
   onTracksLoaded(cb: (audio: MappedTrack[], subtitles: MappedTrack[]) => void): () => void {
     this.tracksLoadedListeners.add(cb);
     return () => this.tracksLoadedListeners.delete(cb);
+  }
+
+  onNetworkSpeed(cb: (speedBytesPerSec: number) => void): () => void {
+    this.networkSpeedListeners.add(cb);
+    cb(0);
+    return () => this.networkSpeedListeners.delete(cb);
   }
 }

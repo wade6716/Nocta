@@ -428,3 +428,21 @@ pnpm tauri build
 - 当遇到 MKV、HEVC、AV1、DTS 等浏览器无法直接硬件解码的片源时，**坚决不向 Emby 请求转码**；
 - 立即弹出结构化错误卡片：明确提示 *“当前片源为 MKV/HEVC 格式，HTML5 浏览器内核无法直接解码，已严格阻止服务端转码。请使用 MPV 原生硬解引擎播放原画。”*；
 - 配备「一键切换至 MPV 硬解」高亮按钮，点击后自动更新 `usePlayerStore.engineType` 并平滑迁移至 MPV 原画直连起播。
+
+---
+
+## 18. 播放器实时网络速度测量与 OSD 状态联动规范 (Real-Time Network Speed Monitoring & OSD Integration)
+
+### 18.1 测量数据源与平滑采集机制
+- **`libmpv` 原生硬解引擎**：
+  - 通过 `demuxer-cache-state` 节点字典属性获取 `raw-input-rate`（平均网络输入速率，单位：字节/秒，由 mpv 内部做约 1 秒平滑）；
+  - 启动 1 秒间隔轮询定时器与 `observeProperties` 属性变更双重监听；当网络拉流暂停或缓冲填满时，速率自动降为 0；在 `destroy` 时注销定时器和监听器。
+- **`HTML5` 兼容引擎**：
+  - 在加载视频流后启动 1 秒轮询，通过 `video.buffered` 的增量推算瞬时下载速率，在 `destroy` 时清理。
+
+### 18.2 OSD 同步显隐与视觉呈现
+- **进度条联动体验**：
+  - 实时网速微标布局在底部控制栏时间显示（`currentTime / duration`）右侧，随整个 `PlayerOsd` 在鼠标闲置 3.5 秒后淡出隐藏，鼠标移动或触控时即时淡入；
+  - 采用毛玻璃背景微标（`bg-white/[0.06] border border-white/10`）与微脉冲图标动效，搭配等宽字体（`font-mono`），不干扰观影画面；
+- **技术信息 HUD 浮层联动**：
+  - `PlaybackInfoModal` 同步呈现当前实时下载网速，并包含在一键复制的播放信息报告中。

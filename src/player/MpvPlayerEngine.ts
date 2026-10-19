@@ -5,6 +5,7 @@ import {
   listenEvents,
   command,
   setProperty,
+  getProperty,
   MpvConfig,
   MpvObservableProperty,
 } from 'tauri-plugin-libmpv-api';
@@ -23,6 +24,7 @@ const OBSERVED_PROPERTIES = [
   ['dwidth', 'int64', 'none'],
   ['dheight', 'int64', 'none'],
   ['track-list', 'node', 'none'],
+  ['demuxer-cache-state', 'node', 'none'],
 ] as const satisfies readonly MpvObservableProperty[];
 
 function isLanOrLoopbackUrl(rawUrl?: string): boolean {
@@ -93,12 +95,15 @@ export class MpvPlayerEngine implements IPlayerEngine {
   private _isBuffering = false;
   private _videoWidth = 0;
   private _videoHeight = 0;
+  private _networkSpeed = 0;
 
   private timeUpdateListeners: Set<(currentTime: number, duration: number) => void> = new Set();
   private stateChangeListeners: Set<(state: PlayerState) => void> = new Set();
   private errorListeners: Set<(errorMsg: string) => void> = new Set();
   private videoDimensionsListeners: Set<(width: number, height: number) => void> = new Set();
   private tracksLoadedListeners: Set<(audio: MappedTrack[], subtitles: MappedTrack[]) => void> = new Set();
+  private networkSpeedListeners: Set<(speed: number) => void> = new Set();
+  private speedPollTimer: number | null = null;
 
   get state(): PlayerState {
     return this._state;
@@ -278,6 +283,16 @@ export class MpvPlayerEngine implements IPlayerEngine {
             }
             break;
           }
+          case 'demuxer-cache-state': {
+            if (data && typeof data === 'object') {
+              const rawRate = (data as any)['raw-input-rate'];
+              if (typeof rawRate === 'number' && rawRate >= 0) {
+                this._networkSpeed = rawRate;
+                this.networkSpeedListeners.forEach((cb) => cb(this._networkSpeed));
+              }
+            }
+            break;
+          }
         }
       });
 
@@ -324,8 +339,44 @@ export class MpvPlayerEngine implements IPlayerEngine {
           }
         }
       });
+
+      this.startSpeedPolling();
     } catch (err) {
       console.warn('[MpvEngine Observe Error]', err);
+    }
+  }
+
+  private startSpeedPolling() {
+    if (this.speedPollTimer !== null) return;
+    this.speedPollTimer = window.setInterval(async () => {
+      if (!this.isInitialized || this.isDestroyed || this._state === 'idle') {
+        if (this._networkSpeed !== 0) {
+          this._networkSpeed = 0;
+          this.networkSpeedListeners.forEach((cb) => cb(0));
+        }
+        return;
+      }
+      try {
+        const cacheState = await getProperty<any>('demuxer-cache-state', 'node');
+        if (cacheState && typeof cacheState === 'object') {
+          const rawRate = cacheState['raw-input-rate'];
+          const speed = typeof rawRate === 'number' && rawRate >= 0 ? rawRate : 0;
+          if (speed !== this._networkSpeed) {
+            this._networkSpeed = speed;
+            this.networkSpeedListeners.forEach((cb) => cb(this._networkSpeed));
+          }
+        } else if (this._networkSpeed !== 0) {
+          this._networkSpeed = 0;
+          this.networkSpeedListeners.forEach((cb) => cb(0));
+        }
+      } catch {}
+    }, 1000);
+  }
+
+  private stopSpeedPolling() {
+    if (this.speedPollTimer !== null) {
+      window.clearInterval(this.speedPollTimer);
+      this.speedPollTimer = null;
     }
   }
 
@@ -577,11 +628,14 @@ export class MpvPlayerEngine implements IPlayerEngine {
       this.unlistenEvents = null;
     }
 
+    this.stopSpeedPolling();
     this.timeUpdateListeners.clear();
     this.stateChangeListeners.clear();
     this.errorListeners.clear();
     this.videoDimensionsListeners.clear();
     this.tracksLoadedListeners.clear();
+    this.networkSpeedListeners.clear();
+    this._networkSpeed = 0;
     this._state = 'idle';
 
     const task = MpvPlayerEngine.lifecycleQueue.then(async () => {
@@ -629,5 +683,11 @@ export class MpvPlayerEngine implements IPlayerEngine {
   onTracksLoaded(cb: (audio: MappedTrack[], subtitles: MappedTrack[]) => void): () => void {
     this.tracksLoadedListeners.add(cb);
     return () => this.tracksLoadedListeners.delete(cb);
+  }
+
+  onNetworkSpeed(cb: (speedBytesPerSec: number) => void): () => void {
+    this.networkSpeedListeners.add(cb);
+    cb(this._networkSpeed);
+    return () => this.networkSpeedListeners.delete(cb);
   }
 }

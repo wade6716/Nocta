@@ -108,7 +108,15 @@ export class Html5PlayerEngine implements IPlayerEngine {
     };
 
     this.video.onerror = () => {
-      const err = this.video?.error?.message || '视频加载或解码发生未知错误';
+      const code = this.video?.error?.code;
+      let err = '当前视频格式或编码不受浏览器支持';
+      if (code === 4) {
+        err = '浏览器内核不支持该片源格式或编码 (MEDIA_ERR_SRC_NOT_SUPPORTED)';
+      } else if (code === 3) {
+        err = '视频解码错误 (MEDIA_ERR_DECODE)';
+      } else if (code === 2) {
+        err = '网络传输错误 (MEDIA_ERR_NETWORK)';
+      }
       this.setState('idle');
       this.errorListeners.forEach((cb) => cb(err));
     };

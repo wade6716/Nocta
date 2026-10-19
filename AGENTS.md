@@ -182,3 +182,13 @@
 - **容器后缀规范化与局域网代理旁路**：
   - `buildNativeDirectStreamUrl` 必须规范化 `mediaSource.Container`（例如将 `mov,mp4,m4a,3gp,3g2,mj2` 取首项 `mov`，将 `matroska,webm` 映射为 `mkv`）；
   - 当目标流 URL 为局域网或回环地址（`192.168.x.x`、`10.x.x.x`、`172.16-31.x.x`、`localhost`、`127.0.0.1`）时，`MpvPlayerEngine` 自动将 `http-proxy` 置空直连，防止局域网 NAS 视频流被系统代理截留或因非 HTTP 代理协议报错。
+
+### 14. 100% 直连原画与零服务端转码约束 (Zero Server Transcoding & Direct Play Only Policy)
+- **坚决禁止隐式转码与重封装**：
+  - 客户端所有播放流请求必须且只能使用 `static=true` 原始直出，**严禁向 Emby 服务端请求任何实时转码参数（如 `VideoCodec=h264&AudioCodec=aac`）或实时 MP4 重封装（`VideoCodec=copy`）**；
+  - 杜绝因播放器兼容性差而霸占或打满 NAS / VPS 服务端 CPU 与显卡算力；
+- **HTML5 播放内核遇不支持格式直接报错引导**：
+  - HTML5 引擎仅作为基础原画兼容（仅直接播放 MP4/H.264 等浏览器原生支持的原始文件）；
+  - 当遇到 MKV、HEVC、AV1、DTS 等浏览器无法直接硬件解码的格式时，**绝不回退到服务端转码**，直接提示：*“当前片源格式浏览器内核无法直接解码，已严格阻止服务端转码。请使用 MPV 原生硬解引擎播放原画。”*；
+  - 并在错误遮罩中提供「一键切换至 MPV 硬解」行动按钮，方便用户一键无缝恢复播放。
+

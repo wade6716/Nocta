@@ -1153,7 +1153,7 @@ export const SettingsPage: React.FC = () => {
                       {engineType === 'html5' && <CheckCircle2 className="w-4 h-4 text-primary" />}
                     </div>
                     <p className="text-xs text-gray-400 mt-2 leading-relaxed">
-                      基于 Chromium / WebView2 原生 HTML5 播放器，MKV 等格式会由 Emby 轻量封装或转码为 MP4 播放，作为兼容回退。
+                      基于 Chromium / WebView2 原生 HTML5 播放器，仅在原画格式受浏览器原生支持（如 MP4/H.264）时直连播放。客户端严格禁止触发 Emby 服务端转码，遇不支持格式将明确提示并支持一键切换 MPV。
                     </p>
                   </div>
                 </div>

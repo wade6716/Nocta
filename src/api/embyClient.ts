@@ -572,30 +572,17 @@ export async function getPlaybackInfo(
 }
 
 /**
- * 生成直连或兼容播放流地址
- * 对于浏览器/WebView2无法直接硬解的 MKV/TS 等格式，自动请求 Emby 轻量 DirectStream remux，杜绝黑屏
+ * 生成直连原始媒体流地址 (100% 原画直传，static=true)
+ * 坚决不向 Emby 服务端请求任何实时转码 (VideoCodec/AudioCodec) 或重封装 (MP4 Remux)，保证服务端 0% CPU 额外开销
  */
 export function buildDirectStreamUrl(
   serverUrl: string,
   itemId: string,
   mediaSource: EmbyMediaSource,
   playSessionId: string,
-  accessToken: string,
-  forceCompatible = false
+  accessToken: string
 ): string {
-  const base = normalizeServerUrl(serverUrl);
-  if (mediaSource.IsRemote && mediaSource.Path && mediaSource.Path.startsWith('http')) {
-    return mediaSource.Path;
-  }
-  const rawContainer = (mediaSource.Container || 'mkv').toLowerCase().split(',')[0].trim();
-  const normalizedContainer = rawContainer === 'matroska' ? 'mkv' : rawContainer || 'mkv';
-  const isChromiumUnsupported = ['mkv', 'avi', 'flv', 'ts', 'm2ts', 'wmv'].includes(normalizedContainer);
-
-  if (forceCompatible || isChromiumUnsupported) {
-    return `${base}/emby/Videos/${itemId}/stream.mp4?MediaSourceId=${mediaSource.Id}&PlaySessionId=${playSessionId}&api_key=${accessToken}&X-Emby-Token=${accessToken}&VideoCodec=copy&AudioCodec=aac&TranscodingMaxAudioChannels=2`;
-  }
-
-  return `${base}/emby/Videos/${itemId}/stream.${normalizedContainer}?static=true&MediaSourceId=${mediaSource.Id}&PlaySessionId=${playSessionId}&api_key=${accessToken}&X-Emby-Token=${accessToken}`;
+  return buildNativeDirectStreamUrl(serverUrl, itemId, mediaSource, playSessionId, accessToken);
 }
 
 /**
@@ -616,20 +603,6 @@ export function buildNativeDirectStreamUrl(
   const rawContainer = (mediaSource.Container || 'mkv').toLowerCase().split(',')[0].trim();
   const normalizedContainer = rawContainer === 'matroska' ? 'mkv' : rawContainer || 'mkv';
   return `${base}/emby/Videos/${itemId}/stream.${normalizedContainer}?static=true&MediaSourceId=${mediaSource.Id}&PlaySessionId=${playSessionId}&api_key=${accessToken}&X-Emby-Token=${accessToken}`;
-}
-
-/**
- * 通用兼容转码流 (H.264 + AAC)，保证在任何缺失 HEVC 硬件扩展的 Windows 设备上 100% 可播放
- */
-export function buildTranscodeStreamUrl(
-  serverUrl: string,
-  itemId: string,
-  mediaSource: EmbyMediaSource,
-  playSessionId: string,
-  accessToken: string
-): string {
-  const base = normalizeServerUrl(serverUrl);
-  return `${base}/emby/Videos/${itemId}/stream.mp4?MediaSourceId=${mediaSource.Id}&PlaySessionId=${playSessionId}&api_key=${accessToken}&X-Emby-Token=${accessToken}&VideoCodec=h264&AudioCodec=aac&TranscodingMaxAudioChannels=2&MaxStreamingBitrate=20000000`;
 }
 
 /**

@@ -8,6 +8,7 @@ import {
   AlertTriangle,
   Play,
   Pause,
+  Zap,
 } from 'lucide-react';
 import { useAuthStore } from '../stores/useAuthStore';
 import { usePlayerStore } from '../stores/usePlayerStore';
@@ -19,7 +20,6 @@ import {
   ticksToSeconds,
   buildDirectStreamUrl,
   buildNativeDirectStreamUrl,
-  buildTranscodeStreamUrl,
   getItemDetail,
   getPlaybackInfo,
   mapStreamTracks,
@@ -86,10 +86,8 @@ export const PlayerPage: React.FC = () => {
   const bridgeRef = useRef<MpvDanmakuBridge>(new MpvDanmakuBridge());
   const bridge = bridgeRef.current;
 
-  // Video playback status and auto-recovery (0: Direct, 1: Remux MP4, 2: H264 Transcode)
+  // Video playback status (100% 原画直连，坚决不向服务端请求转码)
   const [currentStreamUrl, setCurrentStreamUrl] = useState<string | null>(streamUrl);
-  const [fallbackLevel, setFallbackLevel] = useState<0 | 1 | 2>(0);
-  const fallbackLevelRef = useRef<0 | 1 | 2>(0);
   const [isLoadingVideo, setIsLoadingVideo] = useState(true);
   const [videoError, setVideoError] = useState<string | null>(null);
   const [videoDimensions, setVideoDimensions] = useState<{ width: number; height: number } | null>(null);
@@ -141,8 +139,6 @@ export const PlayerPage: React.FC = () => {
       setCurrentStreamUrl(streamUrl);
       setIsLoadingVideo(true);
       setVideoError(null);
-      setFallbackLevel(0);
-      fallbackLevelRef.current = 0;
       hasInitialSeekedRef.current = false;
     }
   }, [streamUrl]);
@@ -794,69 +790,41 @@ export const PlayerPage: React.FC = () => {
     resetHideTimer,
   ]);
 
-  // Two-tier Video error auto-recovery (with live ref to avoid stale closures)
+  // 零转码原画直连策略下的错误处理
   const handleVideoError = useCallback(
     (errMsg?: string) => {
-      const currentLevel = fallbackLevelRef.current;
-      console.warn('[Video Error Event] engine:', engineType, 'current level:', currentLevel, 'err:', errMsg);
+      console.warn('[Video Error Event] engine:', engineType, 'err:', errMsg);
+
+      setIsLoadingVideo(false);
+      setPaused(true);
 
       if (!currentServer || !item || !mediaSource || !playSessionId) {
-        setIsLoadingVideo(false);
         setVideoError('未获取到媒体播放会话信息');
         return;
       }
 
-      // 若是 libmpv 动态库初始化本身报错，不再无意义重试流地址
+      // 若是 HTML5 引擎报错，绝不隐式向 Emby 请求转码或 MP4 重封装
+      if (engineType === 'html5') {
+        const container = (mediaSource.Container || 'MKV').toUpperCase();
+        const videoCodec = (
+          mediaSource.MediaStreams?.find((s) => s.Type === 'Video')?.Codec || ''
+        ).toUpperCase();
+        setVideoError(
+          `当前片源为 ${container}${videoCodec ? ` (${videoCodec})` : ''} 格式，HTML5 浏览器内核无法直接解码播放。客户端已严格禁止触发 Emby 服务端转码以保护服务器性能。请使用 MPV 原生硬解引擎播放原画。`
+        );
+        return;
+      }
+
+      // 若是 libmpv 动态库初始化本身报错
       if (errMsg && (errMsg.includes('初始化 libmpv') || errMsg.includes('FFI error'))) {
-        setIsLoadingVideo(false);
-        setPaused(true);
         setVideoError(errMsg);
         return;
       }
 
-      // HTML5 引擎：0 (直连) -> 1 (MP4 轻量重封装) -> 2 (H.264 转码)
-      if (engineType === 'html5' && currentLevel === 0) {
-        console.log('[Video Auto-Fallback 1] HTML5 尝试 MP4 Remux 直接流模式...');
-        fallbackLevelRef.current = 1;
-        setFallbackLevel(1);
-        const remuxUrl = buildDirectStreamUrl(
-          currentServer.url,
-          item.Id,
-          mediaSource,
-          playSessionId,
-          currentServer.accessToken,
-          true
-        );
-        setCurrentStreamUrl(remuxUrl);
-        setIsLoadingVideo(true);
-        setVideoError(null);
-        return;
-      }
-
-      // MPV 引擎在 Level 0 失败时跳过无意义的 MP4 Remux，或 HTML5 在 Level 1 失败时，尝试通用兼容流
-      if (currentLevel === 0 || currentLevel === 1) {
-        console.log('[Video Auto-Fallback 2] 尝试通用兼容 H.264 模式...');
-        fallbackLevelRef.current = 2;
-        setFallbackLevel(2);
-        const transcodeUrl = buildTranscodeStreamUrl(
-          currentServer.url,
-          item.Id,
-          mediaSource,
-          playSessionId,
-          currentServer.accessToken
-        );
-        setCurrentStreamUrl(transcodeUrl);
-        setIsLoadingVideo(true);
-        setVideoError(null);
-        return;
-      }
-
-      setIsLoadingVideo(false);
-      setPaused(true);
       setVideoError(
         errMsg
-          ? `媒体流加载失败 (${errMsg})。请检查服务器连接、直链重定向网络或服务端转码设置。`
-          : '无法打开该媒体流或服务端禁止转码，请检查网络连接或重试原画直连。'
+          ? `直连媒体流播放中断 (${errMsg})。请检查网络连接或服务器直链状态。`
+          : '无法打开该媒体直连流，请检查网络连接或重试。'
       );
     },
     [currentServer, item, mediaSource, playSessionId, engineType, setPaused]
@@ -868,8 +836,6 @@ export const PlayerPage: React.FC = () => {
 
   const handleRetryDirect = () => {
     if (!currentServer || !item || !mediaSource || !playSessionId) return;
-    fallbackLevelRef.current = 0;
-    setFallbackLevel(0);
     setIsLoadingVideo(true);
     setVideoError(null);
     hasInitialSeekedRef.current = false;
@@ -899,27 +865,11 @@ export const PlayerPage: React.FC = () => {
     }
   };
 
-  const handleManualRetry = () => {
-    if (!currentServer || !item || !mediaSource || !playSessionId) return;
-    fallbackLevelRef.current = 2;
-    setFallbackLevel(2);
-    setIsLoadingVideo(true);
+  const handleSwitchToMpv = () => {
     setVideoError(null);
-    const transcodeUrl = buildTranscodeStreamUrl(
-      currentServer.url,
-      item.Id,
-      mediaSource,
-      playSessionId,
-      currentServer.accessToken
-    );
-    setCurrentStreamUrl(transcodeUrl);
-    if (currentStreamUrl === transcodeUrl && engineRef.current) {
-      engineRef.current.load({
-        url: transcodeUrl,
-        initialTime: initialTimeRef.current,
-        title: item.Name,
-      });
-    }
+    setIsLoadingVideo(true);
+    hasInitialSeekedRef.current = false;
+    setEngineType('mpv');
   };
 
   if (!item) {
@@ -984,13 +934,9 @@ export const PlayerPage: React.FC = () => {
             <div className="text-center">
               <h2 className="text-base font-bold text-white tracking-wide">{item.Name}</h2>
               <p className="text-xs text-gray-400 mt-1">
-                {fallbackLevel === 0
-                  ? engineType === 'mpv'
-                    ? '正在通过 MPV 硬解引擎直连原始媒体流...'
-                    : '正在直连原始媒体流...'
-                  : fallbackLevel === 1
-                  ? '正在进行轻量 MP4 兼容重封装...'
-                  : '正在转为通用 H.264 兼容流...'}
+                {engineType === 'mpv'
+                  ? '正在通过 MPV 硬解引擎直连原画 (0 转码)...'
+                  : '正在通过 HTML5 引擎直连原画 (0 转码)...'}
               </p>
             </div>
             <button
@@ -1016,20 +962,32 @@ export const PlayerPage: React.FC = () => {
               <p className="text-xs text-gray-400 mt-2 leading-relaxed">{videoError}</p>
             </div>
             <div className="pt-2 flex flex-col sm:flex-row gap-2">
-              <button
-                onClick={handleRetryDirect}
-                className="flex-1 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-xl text-xs font-semibold flex items-center justify-center space-x-1.5 transition cursor-pointer"
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-                <span>重试原画直连</span>
-              </button>
-              <button
-                onClick={handleManualRetry}
-                className="flex-1 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-semibold flex items-center justify-center space-x-1.5 transition cursor-pointer"
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-                <span>尝试转码流</span>
-              </button>
+              {engineType === 'html5' ? (
+                <>
+                  <button
+                    onClick={handleSwitchToMpv}
+                    className="flex-1 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-xl text-xs font-semibold flex items-center justify-center space-x-1.5 transition cursor-pointer shadow-lg shadow-primary/20"
+                  >
+                    <Zap className="w-3.5 h-3.5" />
+                    <span>一键切换至 MPV 硬解</span>
+                  </button>
+                  <button
+                    onClick={handleRetryDirect}
+                    className="py-2.5 px-4 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-semibold flex items-center justify-center space-x-1.5 transition cursor-pointer"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>重试</span>
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={handleRetryDirect}
+                  className="flex-1 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-xl text-xs font-semibold flex items-center justify-center space-x-1.5 transition cursor-pointer"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>重试原画直连</span>
+                </button>
+              )}
               <button
                 onClick={handleBack}
                 className="flex-1 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-semibold flex items-center justify-center space-x-1.5 transition cursor-pointer"

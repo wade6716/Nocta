@@ -411,5 +411,20 @@ pnpm tauri build
    - `MpvPlayerEngine` 通过静态 `lifecycleQueue` 串行化所有 `init` 与 `destroy` 操作，并通过 `initPromise` 合并组件挂载期的并发初始化调用。
 3. **引擎感知回退与实时 Ref 回调**：
    - 使用 `handleVideoErrorRef` 与 `fallbackLevelRef` 彻底消除陈旧闭包；
-   - `MPV` 硬解模式下跳过 HTML5 专用的 `MP4 Remux`（Level 1），并在错误面板提供「重试原画直连」与「尝试转码流」双通道恢复按钮。
+   - `MPV` 硬解模式下跳过 HTML5 专用的 `MP4 Remux`（Level 1），并在错误面板提供「重试原画直连」按钮。
 
+---
+
+## 17. 100% 直连原画与零服务端转码约束 (Zero Server Transcoding & Direct Play Only Policy)
+
+### 17.1 设计准则与架构约束
+- **零服务端开销（0% CPU/GPU Overhead）**：
+  - Nocta 作为本地专用私人影院客户端，核心价值在于依托本机强劲的软硬件算力完成全格式直解；
+  - 彻底移除向 Emby 发起实时转码（`VideoCodec=h264&AudioCodec=aac`）与实时重封装（`VideoCodec=copy&AudioCodec=aac`）的逻辑；
+  - `buildDirectStreamUrl` 与 `buildNativeDirectStreamUrl` 统一生成 100% 原始文件直出链接（`static=true`）。
+
+### 17.2 HTML5 遇不支持格式直接报错引导
+- 浏览器的 HTML5 引擎仅作为基础原画兼容（仅直接播放 MP4/H.264 等受浏览器原生支持的文件）；
+- 当遇到 MKV、HEVC、AV1、DTS 等浏览器无法直接硬件解码的片源时，**坚决不向 Emby 请求转码**；
+- 立即弹出结构化错误卡片：明确提示 *“当前片源为 MKV/HEVC 格式，HTML5 浏览器内核无法直接解码，已严格阻止服务端转码。请使用 MPV 原生硬解引擎播放原画。”*；
+- 配备「一键切换至 MPV 硬解」高亮按钮，点击后自动更新 `usePlayerStore.engineType` 并平滑迁移至 MPV 原画直连起播。

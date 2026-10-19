@@ -194,10 +194,22 @@
 
 ### 15. 播放器实时网络速度测量与 OSD 状态联动规范 (Real-Time Network Speed Monitoring & OSD Integration)
 - **测量数据源与平滑采集机制**：
-  - `libmpv` 原生硬解：通过 1 秒周期性轮询与 `observeProperties` 监听 `demuxer-cache-state` 属性节点，提取解复用器内部平滑加权的网络输入速率字段 `raw-input-rate`（字节/秒）；当本地解复用缓冲填满暂停拉流时，速率自动平滑归零；在引擎销毁（`destroy`）时严格清理轮询定时器与监听器；
+  - `libmpv` 原生硬解：通过 `observeProperties` 监听 `cache-speed`（`int64`）与 `demuxer-cache-state`（`node`），提取网络输入速率（字节/秒）；配合纯 JS 定时器（**严禁调用 `getProperty(..., 'node')`**）在超过 2.5 秒无新速率事件或闲置时自动平滑归零；
   - `HTML5` 引擎：在 `video` 原生加载周期中以 1 秒为基准采样 `video.buffered` 增量估算瞬时网络下载速率；
 - **OSD 同步显隐与非侵入视觉呈现**：
   - 用户体验要求实时网速必须跟随进度条一起隐藏和显示；因此将网速微标布局在底部控制栏左侧时间显示（`currentTime / duration`）右侧，天然受 `PlayerOsd` 的 `isOsdVisible` 统一控制（3.5 秒闲置淡出，鼠标移动即时淡入）；
   - 采用轻量格式化工具 `formatNetworkSpeed`（支持 `0 KB/s`、`KB/s`、`MB/s`，保留一位小数），配备微脉冲下载动效与等宽字体（`font-mono`）；
   - 详细播放信息面板（HUD 浮层）同步呈现当前实时下载速率，并在「一键复制信息」纯文本中导出。
 
+### 16. `libmpv-wrapper` 内存安全红线与 macOS 自包含动态库打包规范 (FFI Memory Safety & macOS Self-Contained Dylib Bundling)
+- **严禁调用 `getProperty(..., 'node')`（致命栈溢出红线）**：
+  - `nini22P/libmpv-wrapper` 的 `get_property_node` 在栈上仅声明了 8 字节指针（`let mut data: *mut mpv_node = null_mut()`），而 `libmpv` C API 的 `mpv_get_property(..., MPV_FORMAT_NODE, &mut data)` 会直接向 `&mut data` 写入 **16 字节** 的 `struct mpv_node` 结构体，随后 `defer!` 又将损坏的结构体首字段当作指针传入 `mpv_free_node_contents`；
+  - 一旦在前端调用 `getProperty('demuxer-cache-state', 'node')`（或任何 `'node'` 类型的 `getProperty`），会导致 100% 必现的栈缓冲区溢出与非法内存访问崩溃（Windows 弹窗报错 `nocta has stopped working / Error launching CrashSender.exe`）；
+  - **正确做法**：所有复杂属性或数值属性统一通过 `observeProperties` 事件回调获取（`events.rs` 中 `mpv_event_property.data` 为真实指针且无非法释放），**绝不调用 `getProperty(..., 'node')`**。
+- **规避 `tauri-plugin-libmpv` 的 `destroy()` Use-After-Free 崩溃**：
+  - `tauri-plugin-libmpv` 在 `destroy()` 时调用 `mpv_wrapper_destroy` 后立即执行 `Box::from_raw(instance.event_userdata)` 释放内存，而此时 `libmpv-wrapper` 的后台 `event-client` 线程仍在并发回调 `event_callback(Event::Shutdown)` 读取 `event_userdata`；
+  - **解决方案**：`'main'` 窗口的 `mpv` 实例一经创建即作为进程级持久单例复用（`MpvPlayerEngine.mpvInstanceCreated = true`）；退出播放页调用 `MpvPlayerEngine.destroy()` 时，仅解绑前端事件监听并执行 `setProperty('pause', true)` + `command('stop')` 使内核进入 0 占用的 `idle` 状态，不调用插件的 `destroy()`。
+- **macOS 自包含 `libmpv.dylib` + `MoltenVK` 打包与运行时软链规范**：
+  - `libmpv-wrapper` 在 macOS 下首先查找 `current_exe().parent().join("libmpv.dylib")`（即 `Nocta.app/Contents/MacOS/libmpv.dylib`），随后回退调用 `dlopen("libmpv.dylib")`（在 GUI 应用中仅搜索 `$HOME/lib:/usr/local/lib:/usr/lib`，**不会搜索 `/opt/homebrew/lib`**），若找不到则直接返回 `NULL` 并报错 `Failed to create mpv instance`；
+  - **CI 打包规范**：macOS Apple Silicon (`macos-15`) 与 Intel (`macos-15-intel`) 分别在原生架构 Runner 上通过 `dylibbundler` 将 `libmpv.dylib` 及其全部非系统依赖动态库、连同 `libMoltenVK.dylib` 与 `MoltenVK_icd.json` 一并打包进 `src-tauri/lib/`，重写 `@loader_path/` 并对所有 `.dylib` 执行 `codesign --force --sign -` 重签名；
+  - **Rust 运行时兜底 (`init_macos_mpv_environment`)**：启动时自动将内置或系统（Homebrew/MacPorts/IINA）的 `libmpv.dylib` 软链至 `Contents/MacOS/libmpv.dylib`、`Contents/Resources/lib/libmpv.dylib` 以及 `$HOME/lib/libmpv.dylib`（确保即使在只读 DMG 中直接运行也能通过 `dyld` 默认 `$HOME/lib` 回退路径成功加载），并自动注入 `VK_ICD_FILENAMES` / `VK_DRIVER_FILES`。

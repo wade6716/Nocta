@@ -45,7 +45,7 @@ jobs:
             mpv_arch: 'x86_64'
 
           # 2. macOS Apple Silicon (M1/M2/M3/M4 系列芯片)
-          - platform: macos-latest
+          - platform: macos-15
             args: '--target aarch64-apple-darwin --bundles dmg'
             rust_targets: 'aarch64-apple-darwin'
             name_suffix: 'macOS Apple Silicon'
@@ -53,8 +53,8 @@ jobs:
             mpv_platform: 'macos'
             mpv_arch: 'aarch64'
 
-          # 3. macOS Intel (x86_64 系列芯片)
-          - platform: macos-latest
+          # 3. macOS Intel (x86_64 系列芯片，使用原生 Intel Runner 确保 Homebrew dylib 架构一致)
+          - platform: macos-15-intel
             args: '--target x86_64-apple-darwin --bundles dmg'
             rust_targets: 'x86_64-apple-darwin'
             name_suffix: 'macOS Intel'
@@ -111,7 +111,7 @@ jobs:
 
       - name: Install macOS Dependencies
         if: startsWith(matrix.platform, 'macos')
-        run: brew install mpv
+        run: brew install mpv molten-vk dylibbundler
 
       - name: Rust Cache
         uses: swatinem/rust-cache@v2
@@ -123,6 +123,52 @@ jobs:
 
       - name: Setup libmpv and Wrapper Libraries
         run: node scripts/setup-mpv.mjs --platform ${{ matrix.mpv_platform }} --arch ${{ matrix.mpv_arch }}
+
+      - name: Bundle Self-Contained libmpv & MoltenVK for macOS
+        if: startsWith(matrix.platform, 'macos')
+        run: |
+          BREW_PREFIX=$(brew --prefix)
+          MPV_LIB="$BREW_PREFIX/opt/mpv/lib/libmpv.2.dylib"
+          if [ ! -f "$MPV_LIB" ]; then
+            MPV_LIB="$BREW_PREFIX/lib/libmpv.dylib"
+          fi
+          cp -L "$MPV_LIB" src-tauri/lib/libmpv.dylib
+          chmod 755 src-tauri/lib/libmpv.dylib
+
+          # 将 libmpv.dylib 的所有非系统动态库依赖打包进 src-tauri/lib/ 并重写为 @loader_path/
+          dylibbundler -of -b \
+            -x src-tauri/lib/libmpv.dylib \
+            -d src-tauri/lib/ \
+            -p "@loader_path/"
+
+          # 同时复制一份 libmpv.2.dylib 以兼容按 SONAME 查找的场景
+          cp -f src-tauri/lib/libmpv.dylib src-tauri/lib/libmpv.2.dylib
+
+          # 打包 MoltenVK 驱动与 ICD 清单，确保 macOS vo=gpu-next (macvk) 开箱即用
+          MOLTENVK_LIB="$BREW_PREFIX/opt/molten-vk/lib/libMoltenVK.dylib"
+          if [ ! -f "$MOLTENVK_LIB" ]; then
+            MOLTENVK_LIB="$BREW_PREFIX/lib/libMoltenVK.dylib"
+          fi
+          if [ -f "$MOLTENVK_LIB" ]; then
+            cp -L "$MOLTENVK_LIB" src-tauri/lib/libMoltenVK.dylib
+            chmod 755 src-tauri/lib/libMoltenVK.dylib
+            cat > src-tauri/lib/MoltenVK_icd.json << 'EOF'
+          {
+            "file_format_version": "1.0.0",
+            "ICD": {
+              "library_path": "./libMoltenVK.dylib",
+              "api_version": "1.2.0"
+            }
+          }
+          EOF
+          fi
+
+          # 为所有打包的 dylib 重新执行 Ad-hoc 签名，防止 Apple Silicon dyld 因 install_name_tool 修改而拒绝加载
+          for f in src-tauri/lib/*.dylib; do
+            chmod 755 "$f"
+            codesign --force --sign - "$f"
+          done
+          ls -lh src-tauri/lib/
 
       - name: Build and Release via Tauri Action
         uses: tauri-apps/tauri-action@v0

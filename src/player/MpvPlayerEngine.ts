@@ -1,11 +1,9 @@
 import {
   init,
-  destroy,
   observeProperties,
   listenEvents,
   command,
   setProperty,
-  getProperty,
   MpvConfig,
   MpvObservableProperty,
 } from 'tauri-plugin-libmpv-api';
@@ -24,6 +22,7 @@ const OBSERVED_PROPERTIES = [
   ['dwidth', 'int64', 'none'],
   ['dheight', 'int64', 'none'],
   ['track-list', 'node', 'none'],
+  ['cache-speed', 'int64', 'none'],
   ['demuxer-cache-state', 'node', 'none'],
 ] as const satisfies readonly MpvObservableProperty[];
 
@@ -74,8 +73,10 @@ async function resolveMpvHttpProxy(targetUrl?: string): Promise<string> {
 }
 
 export class MpvPlayerEngine implements IPlayerEngine {
-  // 全局串行队列：防止跨页面销毁旧实例与创建新实例在底层 'main' 窗口发生并发冲突
+  // 全局串行队列：防止跨页面停止旧播放与初始化新实例在底层 'main' 窗口发生并发冲突
   private static lifecycleQueue: Promise<void> = Promise.resolve();
+  // 进程级 'main' 窗口 mpv 实例存活标记：避免调用 tauri-plugin-libmpv 的 destroy() 触发底层 event_userdata Use-After-Free
+  private static mpvInstanceCreated = false;
 
   private unlisten: UnlistenFn | null = null;
   private unlistenEvents: UnlistenFn | null = null;
@@ -96,6 +97,7 @@ export class MpvPlayerEngine implements IPlayerEngine {
   private _videoWidth = 0;
   private _videoHeight = 0;
   private _networkSpeed = 0;
+  private lastSpeedUpdateAt = 0;
 
   private timeUpdateListeners: Set<(currentTime: number, duration: number) => void> = new Set();
   private stateChangeListeners: Set<(state: PlayerState) => void> = new Set();
@@ -133,44 +135,64 @@ export class MpvPlayerEngine implements IPlayerEngine {
 
       const effectiveProxy = await resolveMpvHttpProxy();
 
-      const initialOptions: Record<string, string | boolean | number> = {
-        vo: 'gpu,gpu-next',
-        hwdec: 'auto-safe',
-        'keep-open': 'yes',
-        'force-window': 'yes',
-        panscan: '0.0',
-        'autofit-larger': '100%x100%',
-        osc: 'no',
-        'osd-level': '0',
-        'input-default-bindings': 'no',
-        'input-vo-keyboard': 'no',
-      };
+      if (!MpvPlayerEngine.mpvInstanceCreated) {
+        // initialOptions 仅保留跨平台 100% 兼容的核心参数，避免因个别平台不识别辅助选项导致 mpv_wrapper_create 返回 NULL
+        const initialOptions: Record<string, string | boolean | number> = {
+          vo: 'gpu-next,gpu',
+          hwdec: 'auto-safe',
+          'keep-open': 'yes',
+          'force-window': 'yes',
+        };
 
-      if (effectiveProxy) {
-        initialOptions['http-proxy'] = effectiveProxy;
-      }
+        const mpvConfig: MpvConfig = {
+          initialOptions,
+          observedProperties: OBSERVED_PROPERTIES,
+        };
 
-      const mpvConfig: MpvConfig = {
-        initialOptions,
-        observedProperties: OBSERVED_PROPERTIES,
-      };
-
-      try {
-        await init(mpvConfig);
-      } catch (err: any) {
-        const msg = String(err?.message || err || '');
-        // 若底层 'main' 窗口已存在 mpv 实例，直接复用而不抛错中断
-        if (!msg.toLowerCase().includes('already exists')) {
-          console.error('[MpvEngine Init Error]', err);
-          throw new Error(`初始化 libmpv 原生内核失败: ${msg}`);
+        try {
+          await init(mpvConfig);
+          MpvPlayerEngine.mpvInstanceCreated = true;
+        } catch (err: any) {
+          const msg = String(err?.message || err || '');
+          if (msg.toLowerCase().includes('already exists')) {
+            MpvPlayerEngine.mpvInstanceCreated = true;
+          } else {
+            // 若因特定平台显卡驱动不接受 vo=gpu-next,gpu 导致创建失败，使用极简兼容参数重试一次
+            try {
+              await init({
+                initialOptions: {
+                  'keep-open': 'yes',
+                  'force-window': 'yes',
+                },
+                observedProperties: OBSERVED_PROPERTIES,
+              });
+              MpvPlayerEngine.mpvInstanceCreated = true;
+            } catch (retryErr: any) {
+              const retryMsg = String(retryErr?.message || retryErr || '');
+              if (retryMsg.toLowerCase().includes('already exists')) {
+                MpvPlayerEngine.mpvInstanceCreated = true;
+              } else {
+                console.error('[MpvEngine Init Error]', err);
+                throw new Error(`初始化 libmpv 原生内核失败: ${msg}`);
+              }
+            }
+          }
         }
       }
 
       if (this.isDestroyed) {
-        try {
-          await destroy();
-        } catch {}
+        await command('stop').catch(() => {});
         return;
+      }
+
+      // 辅助运行参数在实例就绪后通过 setProperty 安全注入，即使单个属性在特定平台不支持也不会阻断内核启动
+      await setProperty('osc', 'no').catch(() => {});
+      await setProperty('osd-level', 0).catch(() => {});
+      await setProperty('input-default-bindings', 'no').catch(() => {});
+      await setProperty('input-vo-keyboard', 'no').catch(() => {});
+      await setProperty('panscan', 0.0).catch(() => {});
+      if (effectiveProxy) {
+        await setProperty('http-proxy', effectiveProxy).catch(() => {});
       }
 
       this.isInitialized = true;
@@ -283,12 +305,25 @@ export class MpvPlayerEngine implements IPlayerEngine {
             }
             break;
           }
+          case 'cache-speed': {
+            if (typeof data === 'number' && !Number.isNaN(data) && data >= 0) {
+              this.lastSpeedUpdateAt = Date.now();
+              if (this._networkSpeed !== data) {
+                this._networkSpeed = data;
+                this.networkSpeedListeners.forEach((cb) => cb(this._networkSpeed));
+              }
+            }
+            break;
+          }
           case 'demuxer-cache-state': {
             if (data && typeof data === 'object') {
               const rawRate = (data as any)['raw-input-rate'];
-              if (typeof rawRate === 'number' && rawRate >= 0) {
-                this._networkSpeed = rawRate;
-                this.networkSpeedListeners.forEach((cb) => cb(this._networkSpeed));
+              if (typeof rawRate === 'number' && !Number.isNaN(rawRate) && rawRate >= 0) {
+                this.lastSpeedUpdateAt = Date.now();
+                if (this._networkSpeed !== rawRate) {
+                  this._networkSpeed = rawRate;
+                  this.networkSpeedListeners.forEach((cb) => cb(this._networkSpeed));
+                }
               }
             }
             break;
@@ -346,30 +381,28 @@ export class MpvPlayerEngine implements IPlayerEngine {
     }
   }
 
+  /**
+   * 重要避坑：绝对禁止调用 getProperty(..., 'node')！
+   * nini22P/libmpv-wrapper 的 get_property_node 在栈上仅分配 8 字节指针 (*mut mpv_node)，
+   * 而 libmpv 的 mpv_get_property(..., MPV_FORMAT_NODE) 会直接向该地址写入 16 字节的 mpv_node 结构体并触发非法释放，
+   * 导致 Windows/macOS 下 100% 发生栈缓冲区溢出崩溃 (STATUS_ACCESS_VIOLATION / CrashSender.exe)。
+   * 因此实时网速完全通过 observeProperties 事件推送获取，此处仅用纯 JS 定时器做闲置归零衰减。
+   */
   private startSpeedPolling() {
     if (this.speedPollTimer !== null) return;
-    this.speedPollTimer = window.setInterval(async () => {
-      if (!this.isInitialized || this.isDestroyed || this._state === 'idle') {
+    this.speedPollTimer = window.setInterval(() => {
+      if (!this.isInitialized || this.isDestroyed || this._state === 'idle' || this._state === 'ended') {
         if (this._networkSpeed !== 0) {
           this._networkSpeed = 0;
           this.networkSpeedListeners.forEach((cb) => cb(0));
         }
         return;
       }
-      try {
-        const cacheState = await getProperty<any>('demuxer-cache-state', 'node');
-        if (cacheState && typeof cacheState === 'object') {
-          const rawRate = cacheState['raw-input-rate'];
-          const speed = typeof rawRate === 'number' && rawRate >= 0 ? rawRate : 0;
-          if (speed !== this._networkSpeed) {
-            this._networkSpeed = speed;
-            this.networkSpeedListeners.forEach((cb) => cb(this._networkSpeed));
-          }
-        } else if (this._networkSpeed !== 0) {
-          this._networkSpeed = 0;
-          this.networkSpeedListeners.forEach((cb) => cb(0));
-        }
-      } catch {}
+      // 当缓冲填满暂停拉流、超过 2.5 秒未收到新的速率更新事件时，自动平滑归零
+      if (this._networkSpeed > 0 && Date.now() - this.lastSpeedUpdateAt > 2500) {
+        this._networkSpeed = 0;
+        this.networkSpeedListeners.forEach((cb) => cb(0));
+      }
     }, 1000);
   }
 
@@ -474,6 +507,7 @@ export class MpvPlayerEngine implements IPlayerEngine {
         if (errMsg.toLowerCase().includes('not found')) {
           console.warn('[MpvEngine] mpv instance lost, re-initializing and retrying loadfile...');
           this.isInitialized = false;
+          MpvPlayerEngine.mpvInstanceCreated = false;
           await this.init(null);
           if (this.pendingSeekTime && this.pendingSeekTime > 0) {
             await setProperty('start', `+${Math.floor(this.pendingSeekTime)}`).catch(() => {});
@@ -642,10 +676,12 @@ export class MpvPlayerEngine implements IPlayerEngine {
       if (this.isInitialized) {
         this.isInitialized = false;
         try {
+          // 仅停止当前播放流并进入空闲状态，不调用 tauri-plugin-libmpv 的 destroy()，
+          // 规避插件底层销毁时释放 event_userdata 与后台事件线程产生 Use-After-Free 崩溃。
+          await setProperty('pause', true).catch(() => {});
           await command('stop').catch(() => {});
-          await destroy();
         } catch (e) {
-          console.warn('[MpvEngine Destroy Error]', e);
+          console.warn('[MpvEngine Stop Error]', e);
         }
       }
     });

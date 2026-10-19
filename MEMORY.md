@@ -435,8 +435,8 @@ pnpm tauri build
 
 ### 18.1 测量数据源与平滑采集机制
 - **`libmpv` 原生硬解引擎**：
-  - 通过 `demuxer-cache-state` 节点字典属性获取 `raw-input-rate`（平均网络输入速率，单位：字节/秒，由 mpv 内部做约 1 秒平滑）；
-  - 启动 1 秒间隔轮询定时器与 `observeProperties` 属性变更双重监听；当网络拉流暂停或缓冲填满时，速率自动降为 0；在 `destroy` 时注销定时器和监听器。
+  - 通过 `observeProperties` 监听 `cache-speed`（`int64`）与 `demuxer-cache-state`（`node`），提取 `raw-input-rate`（平均网络输入速率，单位：字节/秒）；
+  - 配合纯 JS 定时器（**严禁调用 `getProperty(..., 'node')`**），当超过 2.5 秒无新速率事件或处于闲置状态时，速率自动归零；在 `destroy` 时清理定时器和监听器。
 - **`HTML5` 兼容引擎**：
   - 在加载视频流后启动 1 秒轮询，通过 `video.buffered` 的增量推算瞬时下载速率，在 `destroy` 时清理。
 
@@ -446,3 +446,23 @@ pnpm tauri build
   - 采用毛玻璃背景微标（`bg-white/[0.06] border border-white/10`）与微脉冲图标动效，搭配等宽字体（`font-mono`），不干扰观影画面；
 - **技术信息 HUD 浮层联动**：
   - `PlaybackInfoModal` 同步呈现当前实时下载网速，并包含在一键复制的播放信息报告中。
+
+---
+
+## 19. `libmpv-wrapper` 底层 FFI 内存安全排坑与 macOS 自包含动态库打包架构 (FFI Memory Safety & macOS Self-Contained Dylib Bundling)
+
+### 19.1 Windows 弹窗崩溃（`nocta has stopped working / Error launching CrashSender.exe`）根因与修复
+1. **`libmpv-wrapper` 中 `get_property_node` 的致命栈缓冲区溢出**：
+   - 在 `nini22P/libmpv-wrapper/src/property.rs` 中，`get_property_node` 使用宏 `get_property_ptr_impl!` 在栈上仅分配了 **8 字节指针**（`let mut data: *mut mpv_node = null_mut()`），并将 `&mut data` 传给 `mpv_get_property(..., MPV_FORMAT_NODE, &mut data)`；
+   - 然而 `libmpv` 的 C API 对 `MPV_FORMAT_NODE` 会直接向传入地址写入 **16 字节的 `struct mpv_node` 值类型**，导致当场覆写栈帧 8 字节，紧接着 `MpvNode::from_node(data)` 与 `mpv_free_node_contents(data)` 将结构体首字段当作指针解引用与释放，引发 100% 必现的 `STATUS_ACCESS_VIOLATION` 崩溃（触发 `libmpv-2.dll` 内置的 `CrashRpt` 弹出 `Error launching CrashSender.exe`）；
+   - **修复**：彻底移除 `getProperty('demuxer-cache-state', 'node')` 调用，改用 `observeProperties` 接收 `cache-speed`（`int64`）与 `demuxer-cache-state` 事件推送（`events.rs` 中 `property.data` 为真实指针且不调用 `mpv_free_node_contents`）。
+2. **`tauri-plugin-libmpv` 中 `destroy()` 的 Use-After-Free 竞态**：
+   - 插件在 `destroy()` 中调用 `mpv_wrapper_destroy` 后立即 `Box::from_raw(instance.event_userdata)` 释放内存，而后台 `event-client` 线程仍在并发派发 `Event::Shutdown` 并访问 `event_userdata`；
+   - **修复**：将 `'main'` 窗口的 `mpv` 实例作为进程级持久单例复用（`MpvPlayerEngine.mpvInstanceCreated = true`），离开播放页时仅调用 `setProperty('pause', true)` + `command('stop')` 停止流解码，不销毁底层实例。
+
+### 19.2 macOS 报错（`初始化 libmpv 原生内核失败: Failed to create mpv instance`）根因与修复
+1. **macOS GUI 应用下 `dlopen("libmpv.dylib")` 路径缺失**：
+   - `libmpv-wrapper` 在 macOS 下首先检查 `current_exe().parent().join("libmpv.dylib")`（即 `Nocta.app/Contents/MacOS/libmpv.dylib`），若不存在则调用 `dlopen("libmpv.dylib")`，而 macOS GUI 应用默认仅搜索 `$HOME/lib:/usr/local/lib:/usr/lib`，既不搜索 `Contents/Resources/lib/`，也不搜索 Apple Silicon Homebrew 的 `/opt/homebrew/lib/`，导致 `mpv_wrapper_create()` 返回 `NULL`；
+2. **双保险解决策略**：
+   - **CI 自包含打包（`.github/workflows/release.yml`）**：Apple Silicon (`macos-15`) 与 Intel (`macos-15-intel`) 分别在原生架构 Runner 上通过 `dylibbundler` 将 `libmpv.dylib` 及其全部非系统依赖动态库、连同 `libMoltenVK.dylib` 与 `MoltenVK_icd.json` 打包入 `src-tauri/lib/`，重写 `@loader_path/` 并统一执行 `codesign --force --sign -` 重签名；
+   - **Rust 运行时自动软链与 Vulkan ICD 注入（`src-tauri/src/lib.rs`）**：启动时自动将内置或系统（Homebrew/MacPorts/IINA）的 `libmpv.dylib` 软链至 `Contents/MacOS/libmpv.dylib`、`Contents/Resources/lib/libmpv.dylib` 以及 `$HOME/lib/libmpv.dylib`（兼容只读 DMG 直接双击运行），并自动设置 `VK_ICD_FILENAMES` / `VK_DRIVER_FILES` 指向 `MoltenVK_icd.json`。

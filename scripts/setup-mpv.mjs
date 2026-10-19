@@ -213,11 +213,27 @@ async function run() {
     } catch (err) {
       errorExit(`Failed to process libmpv: ${err.message}`);
     }
+  } else if (osName === 'macos') {
+    log(`\n[2/2] Checking local Homebrew libmpv for macOS...`, COLORS.Cyan);
+    const macCandidates = [
+      '/opt/homebrew/opt/mpv/lib/libmpv.2.dylib',
+      '/opt/homebrew/lib/libmpv.dylib',
+      '/usr/local/opt/mpv/lib/libmpv.2.dylib',
+      '/usr/local/lib/libmpv.dylib',
+    ];
+    const foundMacMpv = macCandidates.find((p) => fs.existsSync(p));
+    if (foundMacMpv) {
+      const dest1 = path.join(TARGET_DIR, 'libmpv.dylib');
+      const dest2 = path.join(TARGET_DIR, 'libmpv.2.dylib');
+      fs.copyFileSync(foundMacMpv, dest1);
+      fs.copyFileSync(foundMacMpv, dest2);
+      log(`  -> Copied ${foundMacMpv} to ${dest1}`, COLORS.Green);
+    } else {
+      log("NOTE: On macOS, ensure libmpv is installed via 'brew install mpv'", COLORS.Yellow);
+    }
   } else {
     log(`\n[2/2] Skipping libmpv download for ${osName} (uses system libmpv)`, COLORS.Gray);
-    if (osName === 'macos') {
-      log("NOTE: On macOS, ensure libmpv is installed via 'brew install mpv'", COLORS.Yellow);
-    } else if (osName === 'linux') {
+    if (osName === 'linux') {
       log("NOTE: On Linux, ensure libmpv is installed via 'sudo apt install libmpv-dev'", COLORS.Yellow);
     }
   }

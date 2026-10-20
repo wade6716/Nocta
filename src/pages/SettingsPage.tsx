@@ -2096,7 +2096,7 @@ export const SettingsPage: React.FC = () => {
                   <h2 className="text-xl font-bold text-white flex items-center space-x-2">
                     <span>Nocta · 夜幕</span>
                     <span className="text-xs px-2 py-0.5 rounded-full bg-white/10 text-gray-300 font-mono font-normal">
-                      v0.1.0-alpha.5
+                      v0.1.0-alpha.6
                     </span>
                   </h2>
                   <p className="text-xs text-gray-400 mt-1">

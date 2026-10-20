@@ -114,7 +114,26 @@ fn init_macos_mpv_environment(resource_dir: Option<std::path::PathBuf>) {
         mpv_candidates.push(PathBuf::from(sys_path));
     }
 
+    // 预先尝试 dlopen 加载 libmpv-wrapper 与 libmpv（带 RTLD_GLOBAL），
+    // 使得符号进入全局符号表，即便后续子模块发起无路径的 dlopen 也能命中内存缓存
+    if let Some(ref rlib) = res_lib {
+        let wrapper_path = rlib.join("libmpv-wrapper.dylib");
+        if wrapper_path.exists() {
+            if let Ok(c_str) = std::ffi::CString::new(wrapper_path.to_string_lossy().as_bytes()) {
+                unsafe {
+                    libc::dlopen(c_str.as_ptr(), libc::RTLD_NOW | libc::RTLD_GLOBAL);
+                }
+            }
+        }
+    }
+
     if let Some(found_mpv) = mpv_candidates.into_iter().find(|p| p.exists()) {
+        if let Ok(c_str) = std::ffi::CString::new(found_mpv.to_string_lossy().as_bytes()) {
+            unsafe {
+                libc::dlopen(c_str.as_ptr(), libc::RTLD_NOW | libc::RTLD_GLOBAL);
+            }
+        }
+
         // libmpv-wrapper 在 macOS 下首先查找 current_exe().parent().join("libmpv.dylib")
         if let Some(ref edir) = exe_dir {
             ensure_unix_symlink(&found_mpv, &edir.join("libmpv.dylib"));

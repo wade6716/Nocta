@@ -460,9 +460,12 @@ pnpm tauri build
    - 插件在 `destroy()` 中调用 `mpv_wrapper_destroy` 后立即 `Box::from_raw(instance.event_userdata)` 释放内存，而后台 `event-client` 线程仍在并发派发 `Event::Shutdown` 并访问 `event_userdata`；
    - **修复**：将 `'main'` 窗口的 `mpv` 实例作为进程级持久单例复用（`MpvPlayerEngine.mpvInstanceCreated = true`），离开播放页时仅调用 `setProperty('pause', true)` + `command('stop')` 停止流解码，不销毁底层实例。
 
-### 19.2 macOS 报错（`初始化 libmpv 原生内核失败: Failed to create mpv instance`）根因与修复
-1. **macOS GUI 应用下 `dlopen("libmpv.dylib")` 路径缺失**：
-   - `libmpv-wrapper` 在 macOS 下首先检查 `current_exe().parent().join("libmpv.dylib")`（即 `Nocta.app/Contents/MacOS/libmpv.dylib`），若不存在则调用 `dlopen("libmpv.dylib")`，而 macOS GUI 应用默认仅搜索 `$HOME/lib:/usr/local/lib:/usr/lib`，既不搜索 `Contents/Resources/lib/`，也不搜索 Apple Silicon Homebrew 的 `/opt/homebrew/lib/`，导致 `mpv_wrapper_create()` 返回 `NULL`；
-2. **双保险解决策略**：
-   - **CI 自包含打包（`.github/workflows/release.yml`）**：Apple Silicon (`macos-15`) 与 Intel (`macos-15-intel`) 分别在原生架构 Runner 上通过 `dylibbundler` 将 `libmpv.dylib` 及其全部非系统依赖动态库、连同 `libMoltenVK.dylib` 与 `MoltenVK_icd.json` 打包入 `src-tauri/lib/`，重写 `@loader_path/` 并统一执行 `codesign --force --sign -` 重签名；
-   - **Rust 运行时自动软链与 Vulkan ICD 注入（`src-tauri/src/lib.rs`）**：启动时自动将内置或系统（Homebrew/MacPorts/IINA）的 `libmpv.dylib` 软链至 `Contents/MacOS/libmpv.dylib`、`Contents/Resources/lib/libmpv.dylib` 以及 `$HOME/lib/libmpv.dylib`（兼容只读 DMG 直接双击运行），并自动设置 `VK_ICD_FILENAMES` / `VK_DRIVER_FILES` 指向 `MoltenVK_icd.json`。
+### 19.3 macOS 报错（`FFI error: Failed to load libmpv-wrapper from 'libmpv-wrapper.dylib'`）根因与双重穿透修复
+1. **`tauri-plugin-libmpv` 原版寻址盲区与只读 Bundle 冲突**：
+   - 官方插件原版 `desktop.rs` 的 `search_dirs` 仅写死检索 `exe_dir` (`Contents/MacOS`) 与 `exe_dir.join("lib")` (`Contents/MacOS/lib`)；
+   - Tauri 打包机制将资源放入 `Contents/Resources/lib`，在只读 DMG 挂载运行（`EROFS`）或签名后的 `/Applications` 目录下，进程无法在 `Contents/MacOS` 动态建立软链；
+   - 导致 `valid_lib_path` 退化为裸库名 `"libmpv-wrapper.dylib"`，dyld 仅检索 `/usr/lib` 因而抛出 `dlopen(libmpv-wrapper.dylib, 0x0005): tried: 'libmpv-wrapper.dylib' (no such file)...`；
+2. **双重穿透修复**：
+   - **插件本地 Patch（Cargo `[patch.crates-io]`）**：在 `src-tauri/crates/tauri-plugin-libmpv` 中，将 `search_dirs` 扩充检索 `Contents/Resources/lib`、`Contents/Resources`、`Contents/Frameworks` 以及 `self.app.path().resource_dir()`，彻底消除裸库名退化，100% 传入绝对路径；
+   - **Rust 全局预热预载（`init_macos_mpv_environment`）**：在应用入口使用 `libc::dlopen(..., RTLD_NOW | RTLD_GLOBAL)` 先行预热加载 `libmpv-wrapper.dylib` 与 `libmpv.dylib`，将动态库常驻进程全局符号表。
+

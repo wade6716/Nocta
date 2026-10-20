@@ -150,7 +150,9 @@ function findAndMove(searchDir, fileName, destDir) {
 
   if (foundPath) {
     const destPath = path.join(destDir, fileName);
+    try { if (fs.existsSync(destPath)) fs.unlinkSync(destPath); } catch {}
     fs.renameSync(foundPath, destPath);
+    try { fs.chmodSync(destPath, 0o755); } catch {}
     log(`  -> ${fileName} downloaded successfully to ${destPath}`, COLORS.Green);
   } else {
     throw new Error(`${fileName} not found in extracted files.`);
@@ -225,8 +227,12 @@ async function run() {
     if (foundMacMpv) {
       const dest1 = path.join(TARGET_DIR, 'libmpv.dylib');
       const dest2 = path.join(TARGET_DIR, 'libmpv.2.dylib');
+      try { if (fs.existsSync(dest1)) fs.unlinkSync(dest1); } catch {}
+      try { if (fs.existsSync(dest2)) fs.unlinkSync(dest2); } catch {}
       fs.copyFileSync(foundMacMpv, dest1);
       fs.copyFileSync(foundMacMpv, dest2);
+      try { fs.chmodSync(dest1, 0o755); } catch {}
+      try { fs.chmodSync(dest2, 0o755); } catch {}
       log(`  -> Copied ${foundMacMpv} to ${dest1}`, COLORS.Green);
     } else {
       log("NOTE: On macOS, ensure libmpv is installed via 'brew install mpv'", COLORS.Yellow);

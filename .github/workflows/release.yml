@@ -132,7 +132,11 @@ jobs:
           if [ ! -f "$MPV_LIB" ]; then
             MPV_LIB="$BREW_PREFIX/lib/libmpv.dylib"
           fi
-          cp -L "$MPV_LIB" src-tauri/lib/libmpv.dylib
+
+          # 确保目录和已有文件具有写权限，并先清理旧软链/文件，杜绝 cp 报错 Permission denied
+          chmod -R u+w src-tauri/lib/ 2>/dev/null || true
+          rm -f src-tauri/lib/libmpv*.dylib
+          cp -fL "$MPV_LIB" src-tauri/lib/libmpv.dylib
           chmod 755 src-tauri/lib/libmpv.dylib
 
           # 将 libmpv.dylib 的所有非系统动态库依赖打包进 src-tauri/lib/ 并重写为 @loader_path/
@@ -142,7 +146,9 @@ jobs:
             -p "@loader_path/"
 
           # 同时复制一份 libmpv.2.dylib 以兼容按 SONAME 查找的场景
-          cp -f src-tauri/lib/libmpv.dylib src-tauri/lib/libmpv.2.dylib
+          rm -f src-tauri/lib/libmpv.2.dylib
+          cp -fL src-tauri/lib/libmpv.dylib src-tauri/lib/libmpv.2.dylib
+          chmod 755 src-tauri/lib/libmpv.2.dylib
 
           # 打包 MoltenVK 驱动与 ICD 清单，确保 macOS vo=gpu-next (macvk) 开箱即用
           MOLTENVK_LIB="$BREW_PREFIX/opt/molten-vk/lib/libMoltenVK.dylib"
@@ -150,7 +156,8 @@ jobs:
             MOLTENVK_LIB="$BREW_PREFIX/lib/libMoltenVK.dylib"
           fi
           if [ -f "$MOLTENVK_LIB" ]; then
-            cp -L "$MOLTENVK_LIB" src-tauri/lib/libMoltenVK.dylib
+            rm -f src-tauri/lib/libMoltenVK.dylib
+            cp -fL "$MOLTENVK_LIB" src-tauri/lib/libMoltenVK.dylib
             chmod 755 src-tauri/lib/libMoltenVK.dylib
             cat > src-tauri/lib/MoltenVK_icd.json << 'EOF'
           {
@@ -163,7 +170,8 @@ jobs:
           EOF
           fi
 
-          # 为所有打包的 dylib 重新执行 Ad-hoc 签名，防止 Apple Silicon dyld 因 install_name_tool 修改而拒绝加载
+          # 为所有打包的 dylib 重新赋予写权限与 Ad-hoc 签名，防止 Apple Silicon dyld 因 install_name_tool 修改而拒绝加载
+          chmod -R u+w src-tauri/lib/
           for f in src-tauri/lib/*.dylib; do
             chmod 755 "$f"
             codesign --force --sign - "$f"

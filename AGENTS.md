@@ -221,5 +221,8 @@
   - **解决方案**：`'main'` 窗口的 `mpv` 实例一经创建即作为进程级持久单例复用（`MpvPlayerEngine.mpvInstanceCreated = true`）；退出播放页调用 `MpvPlayerEngine.destroy()` 时，仅解绑前端事件监听并执行 `setProperty('pause', true)` + `command('stop')` 使内核进入 0 占用的 `idle` 状态，不调用插件的 `destroy()`。
 - **macOS 自包含 `libmpv.dylib` + `MoltenVK` 打包与运行时软链规范**：
   - `libmpv-wrapper` 在 macOS 下首先查找 `current_exe().parent().join("libmpv.dylib")`（即 `Nocta.app/Contents/MacOS/libmpv.dylib`），随后回退调用 `dlopen("libmpv.dylib")`（在 GUI 应用中仅搜索 `$HOME/lib:/usr/local/lib:/usr/lib`，**不会搜索 `/opt/homebrew/lib`**），若找不到则直接返回 `NULL` 并报错 `Failed to create mpv instance`；
-  - **CI 打包规范**：macOS Apple Silicon (`macos-15`) 与 Intel (`macos-15-intel`) 分别在原生架构 Runner 上通过 `dylibbundler` 将 `libmpv.dylib` 及其全部非系统依赖动态库、连同 `libMoltenVK.dylib` 与 `MoltenVK_icd.json` 一并打包进 `src-tauri/lib/`，重写 `@loader_path/` 并对所有 `.dylib` 执行 `codesign --force --sign -` 重签名；
+  - **CI 打包规范与 Homebrew 只读权限避坑**：
+    - Homebrew 安装在 Cellar 中的动态库文件权限默认为只读（`0444`/`0555`）。通过 `setup-mpv.mjs` 复制或 shell 脚本重复覆盖时，BSD/macOS 的 `cp` 会直接报 `cp: src-tauri/lib/libmpv.dylib: Permission denied` 导致 CI 构建中断；
+    - **解决方案**：在 `setup-mpv.mjs` 复制完后立即 `chmodSync(dest, 0o755)`；在 CI 工作流执行打包前显式注入 `chmod -R u+w src-tauri/lib/ 2>/dev/null || true` 并使用 `rm -f` + `cp -fL`，彻底杜绝权限不足；
+    - macOS Apple Silicon (`macos-15`) 与 Intel (`macos-15-intel`) 分别在原生架构 Runner 上通过 `dylibbundler` 将 `libmpv.dylib` 及其全部非系统依赖动态库、连同 `libMoltenVK.dylib` 与 `MoltenVK_icd.json` 一并打包进 `src-tauri/lib/`，重写 `@loader_path/` 并对所有 `.dylib` 执行 `codesign --force --sign -` 重签名；
   - **Rust 运行时兜底 (`init_macos_mpv_environment`)**：启动时自动将内置或系统（Homebrew/MacPorts/IINA）的 `libmpv.dylib` 软链至 `Contents/MacOS/libmpv.dylib`、`Contents/Resources/lib/libmpv.dylib` 以及 `$HOME/lib/libmpv.dylib`（确保即使在只读 DMG 中直接运行也能通过 `dyld` 默认 `$HOME/lib` 回退路径成功加载），并自动注入 `VK_ICD_FILENAMES` / `VK_DRIVER_FILES`。

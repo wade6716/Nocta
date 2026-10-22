@@ -382,6 +382,11 @@ pnpm tauri build
   - 自动根据目标平台与架构下载对应版本的 `libmpv-wrapper`（Windows/macOS/Linux）；
   - Windows 环境下自动下载解压 `libmpv-2.dll` 并写入 `src-tauri/lib/`；
   - 确保 Tauri 打包时 `resources: ["lib/**/*"]` 能够准确将内核打包入最终安装包。
+- **本地开发缺库误报**：
+  - 新克隆或重新拉取后 `src-tauri/lib/` 仅有 `.gitkeep` 时，`tauri-plugin-libmpv` 的搜索路径会全部落空并退化为裸库名，报错 `Failed to load libmpv-wrapper from 'libmpv-wrapper.dylib'` 且 dyld 列出一串 `no such file`；
+  - macOS 修复顺序：`pnpm install` -> `brew install mpv` -> `pnpm setup-mpv` -> 重启 `pnpm tauri dev`；仅补齐文件而不重启旧进程，预加载和 `Contents/MacOS`/开发目录软链不会重新建立；
+  - `setup-mpv` 已改为在 macOS 缺少 Homebrew `libmpv` 时直接失败，避免安装不完整却仍输出 `SUCCESS`。
+  - 开发模式会同时存在 `src-tauri/lib/` 与 Tauri 复制的 `target/debug/lib/`。若 `target/debug/libmpv.dylib` 旧软链仍指向 Homebrew，而 `init_macos_mpv_environment` 又未识别 `exe_dir/lib`，进程会先预载 Homebrew 原件、再由 wrapper 加载项目副本，形成两份同源 `libmpv` 并触发 Objective-C 重复类警告。修复方式是让 `ensure_unix_symlink` 比对并替换旧软链，同时在无 `resource_dir` 时优先探测 `exe_dir/lib`；用 `lsof -p <pid> | grep libmpv` 验证只剩一份。
 
 ### 15.2 Windows 下 DLL 依赖解析链修复（解决 126 错误码）
 - `tauri-plugin-libmpv` 通过 `LoadLibraryExW` 加载 `libmpv-wrapper.dll`；
@@ -459,6 +464,17 @@ pnpm tauri build
 2. **`tauri-plugin-libmpv` 中 `destroy()` 的 Use-After-Free 竞态**：
    - 插件在 `destroy()` 中调用 `mpv_wrapper_destroy` 后立即 `Box::from_raw(instance.event_userdata)` 释放内存，而后台 `event-client` 线程仍在并发派发 `Event::Shutdown` 并访问 `event_userdata`；
    - **修复**：将 `'main'` 窗口的 `mpv` 实例作为进程级持久单例复用（`MpvPlayerEngine.mpvInstanceCreated = true`），离开播放页时仅调用 `setProperty('pause', true)` + `command('stop')` 停止流解码，不销毁底层实例。
+
+### 19.2 macOS 播放窗口嵌入方案（避免弹出独立 mpv 窗口）
+- **根因**：mpv 的 `--wid` 文档与源码均只支持 X11、Win32、Android。macOS `CocoaCB` 会忽略 `wid`，自己创建 `NSWindow`，因此即使插件传入 NSView 指针也会出现独立播放器窗口，Nocta 的 WebView 被甩到后面。
+- **方案**：
+  - mpv 初始化时固定 `title=Nocta Video Surface`、`border=no`、`title-bar=no`、`auto-window-resize=no`、`focus-on=never`、`input-cursor-passthrough=yes`；
+  - 前端在 `file-loaded` / `playback-restart` 后轮询调用 `attach_mpv_window`；
+  - `mpv_embed_macos.m` 在主线程查找该标题的 `NSWindow`，设置为无边框、无阴影、忽略鼠标、`FullScreenAuxiliary`，通过 `addChildWindow:ordered:NSWindowBelow` 挂到 Tauri 主窗口下方，并每 200ms 同步父窗口 frame；
+  - Tauri 主窗口保持 transparent + WKWebView `drawsBackground=false`，因此下层视频可透出，上层 React OSD/弹幕继续工作；
+  - AppKit 操作必须通过 `window.run_on_main_thread`；离开播放页时 detach 并 orderOut，防止空闲 mpv 窗口残留。
+- **避坑**：`cursor-passthrough` 不是有效 mpv 选项，必须使用 `input-cursor-passthrough`；错误的选项名会让初始化直接失败。
+- **全屏**：macOS 不能使用原生 `setFullscreen`。原生全屏进入独立 Space 后会把 mpv 的 `FullScreenAuxiliary` 子窗口置于 WebView 上方，表现为画面正常但底部进度条和控制栏消失。改用 `setSimpleFullscreen` 保持同一 Space 与子窗口层级，并新增 `core:window:allow-set-simple-fullscreen` 权限；全屏切换后调用 `resetHideTimer()` 重新显示 OSD，组件卸载时退出 simple fullscreen。
 
 ### 19.3 macOS 报错（`FFI error: Failed to load libmpv-wrapper from 'libmpv-wrapper.dylib'`）根因与双重穿透修复
 1. **`tauri-plugin-libmpv` 原版寻址盲区与只读 Bundle 冲突**：

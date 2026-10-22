@@ -42,6 +42,8 @@ import { DanmakuDrawer } from '../components/player/DanmakuDrawer';
 import { PlaybackInfoModal } from '../components/player/PlaybackInfoModal';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 
+const IS_MACOS = /Macintosh|Mac OS X/i.test(navigator.userAgent);
+
 export const PlayerPage: React.FC = () => {
   const { itemId } = useParams<{ itemId: string }>();
   const navigate = useNavigate();
@@ -130,6 +132,7 @@ export const PlayerPage: React.FC = () => {
   const centerIconTimerRef = useRef<number | null>(null);
   const clickTimerRef = useRef<number | null>(null);
   const hideTimerRef = useRef<number | null>(null);
+  const simpleFullscreenRef = useRef(false);
 
   // Current item offset
   const savedOffset = (itemId && itemOffsets[itemId]) || 0;
@@ -524,7 +527,9 @@ export const PlayerPage: React.FC = () => {
       const unlistenPromise = win.onResized(async () => {
         try {
           const [fs, max] = await Promise.all([win.isFullscreen(), win.isMaximized()]);
-          setIsFullscreen(fs);
+          if (!IS_MACOS || !simpleFullscreenRef.current) {
+            setIsFullscreen(fs);
+          }
           setIsMaximized(max);
         } catch (e) {
           console.warn(e);
@@ -533,6 +538,10 @@ export const PlayerPage: React.FC = () => {
 
       return () => {
         unlistenPromise.then((unlisten) => unlisten());
+        if (IS_MACOS && simpleFullscreenRef.current) {
+          win.setSimpleFullscreen(false).catch(() => {});
+          simpleFullscreenRef.current = false;
+        }
       };
     } catch (e) {
       console.warn(e);
@@ -643,6 +652,17 @@ export const PlayerPage: React.FC = () => {
     if (isTauriEnvironment()) {
       try {
         const win = getCurrentWindow();
+        if (IS_MACOS) {
+          const next = !simpleFullscreenRef.current;
+          await win.setSimpleFullscreen(next);
+          simpleFullscreenRef.current = next;
+          setIsFullscreen(next);
+          if (!next) {
+            setIsMaximized(await win.isMaximized());
+          }
+          resetHideTimer();
+          return;
+        }
         const cur = await win.isFullscreen();
         await win.setFullscreen(!cur);
         setIsFullscreen(!cur);
@@ -668,6 +688,14 @@ export const PlayerPage: React.FC = () => {
     if (isTauriEnvironment()) {
       try {
         const win = getCurrentWindow();
+        if (IS_MACOS && simpleFullscreenRef.current) {
+          await win.setSimpleFullscreen(false);
+          simpleFullscreenRef.current = false;
+          setIsFullscreen(false);
+          setIsMaximized(await win.isMaximized());
+          resetHideTimer();
+          return;
+        }
         const full = await win.isFullscreen();
         if (full) {
           await win.setFullscreen(false);

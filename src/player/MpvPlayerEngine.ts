@@ -8,9 +8,13 @@ import {
   MpvObservableProperty,
 } from 'tauri-plugin-libmpv-api';
 import { UnlistenFn } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
 import { IPlayerEngine, PlayerLoadOptions, PlayerState } from './types';
 import { MappedTrack } from '../api/embyClient';
 import { resolveEffectiveProxy } from '../api/http';
+
+const IS_MACOS = /Macintosh|Mac OS X/i.test(navigator.userAgent);
+const MPV_EMBED_WINDOW_TITLE = 'Nocta Video Surface';
 
 const OBSERVED_PROPERTIES = [
   ['pause', 'flag'],
@@ -86,6 +90,7 @@ export class MpvPlayerEngine implements IPlayerEngine {
   private pendingSeekTime: number | null = null;
   private pendingAlignment: { verticalOffsetPercent: number; bottomAlign: boolean } | null = null;
   private loadEpoch = 0;
+  private macWindowAttachPromise: Promise<void> | null = null;
 
   private _state: PlayerState = 'idle';
   private _currentTime = 0;
@@ -143,6 +148,14 @@ export class MpvPlayerEngine implements IPlayerEngine {
           'keep-open': 'yes',
           'force-window': 'yes',
         };
+        if (IS_MACOS) {
+          initialOptions.title = MPV_EMBED_WINDOW_TITLE;
+          initialOptions.border = false;
+          initialOptions['title-bar'] = false;
+          initialOptions['auto-window-resize'] = false;
+          initialOptions['focus-on'] = 'never';
+          initialOptions['input-cursor-passthrough'] = true;
+        }
 
         const mpvConfig: MpvConfig = {
           initialOptions,
@@ -163,6 +176,16 @@ export class MpvPlayerEngine implements IPlayerEngine {
                 initialOptions: {
                   'keep-open': 'yes',
                   'force-window': 'yes',
+                  ...(IS_MACOS
+                    ? {
+                        title: MPV_EMBED_WINDOW_TITLE,
+                        border: false,
+                        'title-bar': false,
+                        'auto-window-resize': false,
+                        'focus-on': 'never',
+                        'input-cursor-passthrough': true,
+                      }
+                    : {}),
                 },
                 observedProperties: OBSERVED_PROPERTIES,
               });
@@ -205,6 +228,9 @@ export class MpvPlayerEngine implements IPlayerEngine {
       await setProperty('hr-seek', 'default').catch(() => {});
       await setProperty('hr-seek-framedrop', 'yes').catch(() => {}); // 4K 60fps HEVC HDR 跳转避免解码器拥塞黑屏
       await setProperty('demuxer-mkv-subtitle-preroll', 'no').catch(() => {}); // 杜绝 MKV 内嵌字幕反向扫描拖垮网络流
+      if (IS_MACOS) {
+        await setProperty('title', MPV_EMBED_WINDOW_TITLE).catch(() => {});
+      }
 
       this.isInitialized = true;
       await this.bindMpvEvents();
@@ -359,12 +385,14 @@ export class MpvPlayerEngine implements IPlayerEngine {
               console.warn('[MpvEngine Deferred Seek Warning]', seekErr);
             }
           }
+          this.attachMacWindow();
         } else if (evName === 'playback-restart') {
           // 首帧或定点跳转后音视频解码恢复就绪，重置 start 属性以免影响后续切片
           setProperty('start', 'none').catch(() => {});
           this._isBuffering = false;
           this.updateCurrentState();
           this.timeUpdateListeners.forEach((cb) => cb(this._currentTime, this._duration));
+          this.attachMacWindow();
         } else if (evName === 'end-file') {
           const reason = (ev as any).reason;
           if (reason === 'error') {
@@ -384,6 +412,29 @@ export class MpvPlayerEngine implements IPlayerEngine {
     } catch (err) {
       console.warn('[MpvEngine Observe Error]', err);
     }
+  }
+
+  private attachMacWindow() {
+    if (!IS_MACOS || this.isDestroyed || this.macWindowAttachPromise) return;
+
+    const epoch = this.loadEpoch;
+    this.macWindowAttachPromise = (async () => {
+      for (let attempt = 0; attempt < 50; attempt++) {
+        if (this.isDestroyed || epoch !== this.loadEpoch) return;
+        try {
+          if (await invoke<boolean>('attach_mpv_window')) return;
+        } catch (err) {
+          console.warn('[MpvEngine Attach Window Warning]', err);
+          return;
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, 100));
+      }
+      if (!this.isDestroyed && epoch === this.loadEpoch) {
+        console.warn('[MpvEngine] macOS mpv 窗口嵌入超时，未找到 Nocta Video Surface 窗口');
+      }
+    })().finally(() => {
+      this.macWindowAttachPromise = null;
+    });
   }
 
   /**
@@ -526,6 +577,7 @@ export class MpvPlayerEngine implements IPlayerEngine {
           throw loadErr;
         }
       }
+      this.attachMacWindow();
 
       if (this.isDestroyed || currentEpoch !== this.loadEpoch) return;
 
@@ -657,6 +709,9 @@ export class MpvPlayerEngine implements IPlayerEngine {
   async destroy(): Promise<void> {
     this.isDestroyed = true;
     this.loadEpoch++;
+    if (IS_MACOS) {
+      invoke('detach_mpv_window').catch(() => {});
+    }
 
     if (this.unlisten) {
       try {

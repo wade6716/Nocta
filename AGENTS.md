@@ -165,6 +165,11 @@
 ### 12. libmpv / libmpv-wrapper 打包与 Windows DLL 依赖链加载规范 (Dynamic Library Bundling & Windows DLL Search Path)
 - **CI/CD 打包前置依赖注入**：
   - Git 仓库基于体积考虑排除了 `src-tauri/lib/*.dll`, `*.so`, `*.dylib`；因此在 GitHub Actions CI 流水线中，打包动作前必须运行 `scripts/setup-mpv.mjs --platform <platform> --arch <arch>` 自动拉取与目标平台架构严格匹配的 `libmpv-wrapper`（以及 Windows 专属的 `libmpv-2.dll`），避免安装包遗漏内核导致冷启动崩溃；
+- **本地开发环境前置检查**：
+  - 新克隆仓库、切换机器或拉取代码后发现 `src-tauri/lib/` 只有 `.gitkeep` 时，必须先执行 `pnpm install`、安装平台内核（macOS：`brew install mpv`；Windows/Linux 按 README 指引），再执行 `pnpm setup-mpv`；
+  - `pnpm setup-mpv` 在 macOS 找不到 Homebrew `libmpv` 时必须直接失败并提示 `brew install mpv`，不得输出 `SUCCESS` 掩盖缺库；同步动态库后必须重启 `pnpm tauri dev`，否则 Rust 进程不会重新执行 `init_macos_mpv_environment` 的预加载与软链建立；
+  - 典型误报：`Failed to load libmpv-wrapper from 'libmpv-wrapper.dylib'` 且搜索路径全部显示 `no such file`，优先检查 `src-tauri/lib/libmpv-wrapper.dylib` 与 `src-tauri/lib/libmpv.dylib` 是否存在且架构匹配（`file` / `otool -L`），不要先怀疑 Bundle 寻址补丁；
+  - **禁止同时装载两份同源 `libmpv`**：`ensure_unix_symlink` 若发现目标软链已存在但指向旧路径（如 Homebrew `libmpv`），必须删除并重建为当前资源副本，不能因 `dst.exists()` 直接跳过；开发模式下 `init_macos_mpv_environment(None)` 还必须识别 `current_exe().parent()/lib/`（即 `target/debug/lib`）作为资源目录。否则进程会既预载 Homebrew 原件又由 wrapper 加载项目副本，触发 Objective-C `Class ... is implemented in both ...` 重复类警告甚至崩溃；可通过 `lsof -p <nocta-pid> | grep libmpv` 验证只映射一份。
 - **Windows 下 DLL 依赖链加载与 126 错误码修复**：
   - 在 Windows 下，`tauri-plugin-libmpv` 会调用 `LoadLibraryExW` 加载 `libmpv-wrapper.dll`，而该 DLL 的导入表强依赖同目录下的 `libmpv-2.dll`；
   - Windows 系统加载器在解析二级依赖 DLL 时，默认仅检索主程序 `.exe` 所在目录和系统目录，不会自动将子目录 `lib/` 纳入解析链，从而抛出 `LoadLibraryExW code 126 ("找不到指定的模块。")`；
@@ -229,3 +234,10 @@
     - **上游插件硬编码路径缺陷**：`tauri-plugin-libmpv` 原版 `desktop.rs` 仅检查 `current_exe().parent()` (`Contents/MacOS`) 与 `exe_dir.join("lib")` (`Contents/MacOS/lib`)。在 macOS Bundle 体系中，Tauri 的 `"resources": ["lib/**/*"]` 必然打入 `Contents/Resources/lib/`。若在只读 DMG（`EROFS`）或签名后的 `/Applications` 运行时，动态在 `Contents/MacOS` 建立软链会失败，导致 `valid_lib_path` 退化为裸文件名 `"libmpv-wrapper.dylib"`，继而触发 dyld 报错：`dlopen(libmpv-wrapper.dylib, 0x0005): tried: 'libmpv-wrapper.dylib' (no such file)...`；
     - **解决方案 1（插件原生路径补丁）**：通过 Cargo `[patch.crates-io]` 本地重写 `src-tauri/crates/tauri-plugin-libmpv`，在 `search_dirs` 中显式扩展 `contents_dir.join("Resources").join("lib")`、`contents_dir.join("Resources")`、`contents_dir.join("Frameworks")` 及 `self.app.path().resource_dir()`，确保绝对路径 100% 精准寻址；
     - **解决方案 2（Rust 进程全局预热 Pre-loading）**：在 `init_macos_mpv_environment` 中，使用 `libc::dlopen(..., RTLD_NOW | RTLD_GLOBAL)` 先行预热加载 `libmpv-wrapper.dylib` 与 `libmpv.dylib`，将动态库镜像常驻进程内存，使后续任何裸库名 dlopen 均能瞬间命中内存缓存。
+  - **macOS 播放窗口必须嵌入 Nocta 主窗口（禁止独立 mpv 窗口体验）**：
+    - mpv 官方 `--wid` 仅支持 X11、Win32、Android，macOS 的 `CocoaCB` 会忽略 `wid` 并自行创建 `NSWindow`；不能通过插件传入 NSView 指针实现嵌入；
+    - 当前方案：mpv 启动参数使用固定标题 `Nocta Video Surface`、`border=no`、`title-bar=no`、`auto-window-resize=no`、`focus-on=never`、`input-cursor-passthrough=yes`；前端在 `file-loaded` / `playback-restart` 后调用 `attach_mpv_window`；
+    - Rust 侧 `src-tauri/src/mpv_embed_macos.m` 在主线程枚举 `NSApp.windows`，找到固定标题窗口后设置为无边框、透明背景、忽略鼠标事件、`FullScreenAuxiliary`，并通过 `addChildWindow:ordered:NSWindowBelow` 放在 Nocta 主窗口下方；WebView 保持上层，弹幕、OSD 和控制栏继续由 React 渲染；
+    - `NSWindow` / AppKit 操作必须经 `window.run_on_main_thread(...)`，绝不能在 Tauri IPC 线程直接调用；离开播放页时调用 `detach_mpv_window` 将子窗口移除并 `orderOut`；
+    - 选项名避坑：mpv 实际选项为 `input-cursor-passthrough`，写成 `cursor-passthrough` 会使 `mpv_set_option_string` 返回错误，导致内核初始化失败。
+    - **macOS 全屏必须使用 simple fullscreen**：禁止调用原生 `setFullscreen`，因为原生全屏会切换 Space，并把 `FullScreenAuxiliary` 子窗口抬到 WebView 上方，导致底部进度条与控制栏不可见。应使用 `setSimpleFullscreen`（capability 需包含 `core:window:allow-set-simple-fullscreen`），保持同一 Space 与现有窗口层级；切换后调用 `resetHideTimer()` 强制重新显示 OSD，离开播放页时确保退出 simple fullscreen。

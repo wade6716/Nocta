@@ -235,7 +235,9 @@ async function run() {
       try { fs.chmodSync(dest2, 0o755); } catch {}
       log(`  -> Copied ${foundMacMpv} to ${dest1}`, COLORS.Green);
     } else {
-      log("NOTE: On macOS, ensure libmpv is installed via 'brew install mpv'", COLORS.Yellow);
+      errorExit(
+        "macOS libmpv not found. Install it first with 'brew install mpv', then rerun 'pnpm setup-mpv'.",
+      );
     }
   } else {
     log(`\n[2/2] Skipping libmpv download for ${osName} (uses system libmpv)`, COLORS.Gray);

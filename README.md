@@ -108,9 +108,16 @@ cd Nocta
 # 2. 安装前端依赖
 pnpm install
 
-# 3. 启动桌面端开发调试环境 (自动启动 Vite + Tauri 窗口)
+# 3. 安装并同步 libmpv 动态库
+# macOS 需先安装 Homebrew 的 mpv
+brew install mpv
+pnpm setup-mpv
+
+# 4. 启动桌面端开发调试环境 (自动启动 Vite + Tauri 窗口)
 pnpm tauri dev
 ```
+
+`src-tauri/lib/` 中的动态库因体积原因未纳入 Git。新克隆仓库或重新拉取代码后，若尚未同步动态库，播放页会报 `Failed to load libmpv-wrapper`。补齐依赖后需重启 `pnpm tauri dev`，让 Rust 进程重新建立动态库搜索路径。
 
 ### 生产环境打包构建
 

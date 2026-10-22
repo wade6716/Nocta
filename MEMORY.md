@@ -485,3 +485,9 @@ pnpm tauri build
    - **插件本地 Patch（Cargo `[patch.crates-io]`）**：在 `src-tauri/crates/tauri-plugin-libmpv` 中，将 `search_dirs` 扩充检索 `Contents/Resources/lib`、`Contents/Resources`、`Contents/Frameworks` 以及 `self.app.path().resource_dir()`，彻底消除裸库名退化，100% 传入绝对路径；
    - **Rust 全局预热预载（`init_macos_mpv_environment`）**：在应用入口使用 `libc::dlopen(..., RTLD_NOW | RTLD_GLOBAL)` 先行预热加载 `libmpv-wrapper.dylib` 与 `libmpv.dylib`，将动态库常驻进程全局符号表。
 
+## 20. macOS 无边框窗口交通灯适配 (Frameless macOS Traffic Lights)
+
+- Tauri 的 `decorations: false` 会同时移除 macOS 原生红黄绿按钮，因此需要在 `TitleBar` 内自行实现。
+- `TitleBar` 容器使用 `relative`，左上角渲染 12px 三色圆点：`#ff5f57` 关闭、`#febc2e` 最小化、`#28c840` 缩放；hover 时显示 `X / Minus / Maximize2` 深色图标。
+- 按钮分别调用 `close()`、`minimize()`、`maximize()/unmaximize()`；保留 `pl-20` 给按钮组让位，并确保按钮位于 `pointer-events-auto` 容器中，不被标题栏拖拽区域拦截。
+

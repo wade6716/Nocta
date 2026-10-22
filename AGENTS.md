@@ -241,3 +241,8 @@
     - `NSWindow` / AppKit 操作必须经 `window.run_on_main_thread(...)`，绝不能在 Tauri IPC 线程直接调用；离开播放页时调用 `detach_mpv_window` 将子窗口移除并 `orderOut`；
     - 选项名避坑：mpv 实际选项为 `input-cursor-passthrough`，写成 `cursor-passthrough` 会使 `mpv_set_option_string` 返回错误，导致内核初始化失败。
     - **macOS 全屏必须使用 simple fullscreen**：禁止调用原生 `setFullscreen`，因为原生全屏会切换 Space，并把 `FullScreenAuxiliary` 子窗口抬到 WebView 上方，导致底部进度条与控制栏不可见。应使用 `setSimpleFullscreen`（capability 需包含 `core:window:allow-set-simple-fullscreen`），保持同一 Space 与现有窗口层级；切换后调用 `resetHideTimer()` 强制重新显示 OSD，离开播放页时确保退出 simple fullscreen。
+
+### 17. macOS 无边框窗口红黄绿交通灯控件规范 (Frameless macOS Traffic Lights)
+- Tauri 配置为 `decorations: false` 时，macOS 不会显示系统原生交通灯；必须在 `TitleBar` 左上角自行渲染三个 12px 圆形按钮，颜色分别为关闭 `#ff5f57`、最小化 `#febc2e`、缩放 `#28c840`，hover 时显示深色图标。
+- 标题栏容器必须设置 `relative`，交通灯使用 `absolute left-4 top-1/2 -translate-y-1/2`，并保留 `pl-20` 避免与 Logo/标题重叠；按钮区域需 `pointer-events-auto`，避免被 `data-tauri-drag-region` 吞掉点击。
+- 三键分别调用 `getCurrentWindow().close()`、`.minimize()`、`.maximize()/.unmaximize()`；所需权限已在 `src-tauri/capabilities/default.json` 中声明（`allow-close`、`allow-minimize`、`allow-maximize`、`allow-unmaximize`）。

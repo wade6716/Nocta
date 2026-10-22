@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Minus, Square, Copy, X, Search, Settings } from 'lucide-react';
+import { Minus, Square, Copy, X, Search, Settings, Maximize2 } from 'lucide-react';
 import { isTauriEnvironment } from '../../api/http';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { ServerSwitcherDropdown } from './ServerSwitcherDropdown';
@@ -72,10 +72,39 @@ export const TitleBar: React.FC<TitleBarProps> = ({
   return (
     <header
       data-tauri-drag-region
-      className={`h-12 flex-shrink-0 bg-[#0B0E17]/95 backdrop-blur-2xl border-b border-white/[0.06] flex items-center justify-between px-4 select-none z-40 w-full ${
+      className={`relative h-12 flex-shrink-0 bg-[#0B0E17]/95 backdrop-blur-2xl border-b border-white/[0.06] flex items-center justify-between px-4 select-none z-40 w-full ${
         isMac ? 'pl-20' : ''
       }`}
     >
+      {isMac && (
+        <div className="group/traffic absolute left-4 top-1/2 -translate-y-1/2 flex items-center space-x-2 pointer-events-auto">
+          <button
+            onClick={handleClose}
+            className="w-3 h-3 rounded-full bg-[#ff5f57] border border-black/20 shadow-sm flex items-center justify-center cursor-pointer"
+            title="关闭"
+            aria-label="关闭窗口"
+          >
+            <X className="w-2 h-2 text-black/60 opacity-0 group-hover/traffic:opacity-100 transition-opacity" strokeWidth={3} />
+          </button>
+          <button
+            onClick={handleMinimize}
+            className="w-3 h-3 rounded-full bg-[#febc2e] border border-black/20 shadow-sm flex items-center justify-center cursor-pointer"
+            title="最小化"
+            aria-label="最小化窗口"
+          >
+            <Minus className="w-2 h-2 text-black/60 opacity-0 group-hover/traffic:opacity-100 transition-opacity" strokeWidth={3} />
+          </button>
+          <button
+            onClick={handleToggleMaximize}
+            className="w-3 h-3 rounded-full bg-[#28c840] border border-black/20 shadow-sm flex items-center justify-center cursor-pointer"
+            title="缩放"
+            aria-label="缩放窗口"
+          >
+            <Maximize2 className="w-2 h-2 text-black/60 opacity-0 group-hover/traffic:opacity-100 transition-opacity" strokeWidth={3} />
+          </button>
+        </div>
+      )}
+
       {/* 左侧：Logo 与应用标题 */}
       <div className="flex items-center space-x-2.5 pointer-events-none">
         <img src="/app-icon.svg" alt="Nocta" className="w-4 h-4 rounded-sm object-contain" />

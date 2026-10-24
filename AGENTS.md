@@ -240,9 +240,38 @@
     - Rust 侧 `src-tauri/src/mpv_embed_macos.m` 在主线程枚举 `NSApp.windows`，找到固定标题窗口后设置为无边框、透明背景、忽略鼠标事件、`FullScreenAuxiliary`，并通过 `addChildWindow:ordered:NSWindowBelow` 放在 Nocta 主窗口下方；WebView 保持上层，弹幕、OSD 和控制栏继续由 React 渲染；
     - `NSWindow` / AppKit 操作必须经 `window.run_on_main_thread(...)`，绝不能在 Tauri IPC 线程直接调用；离开播放页时调用 `detach_mpv_window` 将子窗口移除并 `orderOut`；
     - 选项名避坑：mpv 实际选项为 `input-cursor-passthrough`，写成 `cursor-passthrough` 会使 `mpv_set_option_string` 返回错误，导致内核初始化失败。
-    - **macOS 全屏必须使用 simple fullscreen**：禁止调用原生 `setFullscreen`，因为原生全屏会切换 Space，并把 `FullScreenAuxiliary` 子窗口抬到 WebView 上方，导致底部进度条与控制栏不可见。应使用 `setSimpleFullscreen`（capability 需包含 `core:window:allow-set-simple-fullscreen`），保持同一 Space 与现有窗口层级；切换后调用 `resetHideTimer()` 强制重新显示 OSD，离开播放页时确保退出 simple fullscreen。
+    - **macOS 全屏使用原生 `setFullscreen`**：`setSimpleFullscreen` 本质仍是铺满屏幕的普通窗口，会被用户感知为“只是最大化”，且 Tauri 会吞掉底层失败返回值。进入原生全屏后必须依靠 `mpv_embed_macos.m` 的 `NSWindowDidEnterFullScreenNotification` / `NSWindowDidExitFullScreenNotification` / `NSWindowDidChangeScreenNotification` 监听，在事件后同步子窗口 frame 并执行 `orderWindow:NSWindowBelow relativeTo:`，重新把 mpv 压回 WebView 下方；200ms 同步定时器也要持续校正层级。
 
-### 17. macOS 无边框窗口红黄绿交通灯控件规范 (Frameless macOS Traffic Lights)
-- Tauri 配置为 `decorations: false` 时，macOS 不会显示系统原生交通灯；必须在 `TitleBar` 左上角自行渲染三个 12px 圆形按钮，颜色分别为关闭 `#ff5f57`、最小化 `#febc2e`、缩放 `#28c840`，hover 时显示深色图标。
-- 标题栏容器必须设置 `relative`，交通灯使用 `absolute left-4 top-1/2 -translate-y-1/2`，并保留 `pl-20` 避免与 Logo/标题重叠；按钮区域需 `pointer-events-auto`，避免被 `data-tauri-drag-region` 吞掉点击。
-- 三键分别调用 `getCurrentWindow().close()`、`.minimize()`、`.maximize()/.unmaximize()`；所需权限已在 `src-tauri/capabilities/default.json` 中声明（`allow-close`、`allow-minimize`、`allow-maximize`、`allow-unmaximize`）。
+### 17. macOS 原生交通灯与标题栏 Overlay 规范 (Native Traffic Lights & Overlay Title Bar)
+- **禁止在 macOS 用 CSS 模拟交通灯**：12px 圆点经过 WebView 合成必然存在模糊与语义偏差（绿色按钮无法正确进入原生全屏）。macOS 必须使用 AppKit 原生交通灯。
+- 通过 `src-tauri/tauri.macos.conf.json` 做平台覆盖：`decorations: true`、`titleBarStyle: "Overlay"`、`trafficLightPosition: { x: 16, y: 18 }`、`hiddenTitle: true`；主 `tauri.conf.json` 保持 `decorations: false`，供 Windows/Linux 使用自定义右侧窗口按钮。
+- 原生交通灯覆盖在 48px 自定义标题栏左上角，`TitleBar` 保留 `pl-20` 让位，但不得再渲染红黄绿 CSS 按钮；标题栏自身仍使用 `data-tauri-drag-region`。播放页的 `PlayerOsd` 在 macOS 非全屏时使用 `left-20` 避让原生交通灯，全屏时恢复 `left-5`。
+- 全屏入口统一调用原生 `setFullscreen`，绿色交通灯、OSD 全屏按钮、`F` 与 `Escape` 必须使用同一状态来源 `isFullscreen()`；“最大化”只能是独立操作，禁止再用“窗口全屏”文案混淆。
+
+### 18. macOS 原生全屏 OSD 独立浮层规范 (Fullscreen OSD Overlay Window)
+- **根因认知**：进入 macOS 原生全屏 Space 后，mpv 的 `FullScreenAuxiliary` 子窗口会被系统抬到主窗口之上，WebView 内渲染的 OSD、弹幕与进度条被视频画面遮挡。这不是 CSS `z-index` 问题，`orderWindow:NSWindowBelow` 与 200ms 层级校正也无法穿透全屏合成器；因此不要在全屏时继续单窗口渲染 OSD。
+- **方案**：仅当 `macOS + engineType === 'mpv' + 原生全屏` 时，由 `PlayerPage` 调用 `open_osd_overlay` 创建第二个 Tauri 窗口 `osd-overlay`（`index.html?osd=1`），透明、无边框、`always_on_top`，并在主线程配置 `NSStatusWindowLevel` + `NSWindowCollectionBehaviorFullScreenAuxiliary`，承载 `PlayerOsd` 与 `DanmakuLayer`；主窗口同时隐藏自身 OSD 与弹幕，退出全屏或离开播放页立即 `close_osd_overlay`。
+- **状态同步协议**（`src/player/osdOverlaySync.ts`）：主窗口每 200ms 广播 `osd:sync`（播放进度、音量、倍速、网速、音字幕轨、弹幕设置等），弹幕列表变化时广播 `osd:comments`，浮层挂载后发 `osd:ready`，浮层操作通过 `osd:command` 回传主窗口统一执行。禁止在浮层里直接操作引擎或 Emby API。
+- **浮层交互**：浮层是 key window，必须自行接管 `Space / ← → / ↑ ↓ / D / F / Esc` 快捷键；`PlayerOsd` 的 `overlayMode` 下隐藏弹幕设置抽屉、分集、播放信息与窗口模式按钮（这些 UI 仍挂在主窗口，全屏时不可见）。OSD 隐藏时顶部胶囊必须同步 `pointer-events-none`，否则不可见区域会吞掉视频点击。
+- **窗口生命周期**：`WebviewUrl::App("index.html?osd=1")` 由 Tauri 通过 `Url::join` 解析；创建后、`show()` 后都要重新应用原生 level/collectionBehavior，防止显示时排序被重置。React StrictMode 会并发触发创建，Rust 侧遇到 `label already exists` 必须视为成功返回。
+- **平台隔离红线**：该浮层只允许 macOS + mpv 引擎启用；Windows/Linux 的 `--wid` 嵌入与 HTML5 引擎必须保持原单窗口渲染路径，禁止无条件调用 `open_osd_overlay`。
+
+### 19. 片头片尾标记与自动跳过规范 (Intro/Outro Skip Segments)
+- **数据模型与共享粒度**：
+  - `SkipSegments` 仅存储 `introEnd`（片头结束秒数）、`outroStart`（片尾开始秒数）与 `updatedAt`；不要存“片头开始”，起播永远从 0 或用户记忆进度开始判断；
+  - `getSkipKey(item)` 对带 `SeriesId` 的剧集统一使用 `series_<SeriesId>`（标一集全剧生效），电影/无剧集条目使用 `item_<Id>`；跨集继承时必须额外校验 `introEnd < runtime - 5`、`outroStart < runtime - 2`，避免不同时长剧集误触发；
+- **起播自动跳片头**：
+  - 必须在 `PlayerPage` 内、`engine.load()` 前把记忆进度解析为 effective initial time；满足 `skipIntroEnabled && rawTime < introEnd - 1` 时以 `introEnd` 作为 `initialTime` 传给引擎；
+  - MPV 与 HTML5 引擎都复用既有 `initialTime` 链路（MPV 的 `start` 预设、HTML5 的首帧 seek），禁止在 `loadfile` 后同步追加 `seek`；`initialTimeRef` 必须更新为实际起播秒数，继续参与首跳黑屏防护；
+- **片尾轻提示与取消**：
+  - 检测点放在引擎无关的 `onTimeUpdate`，用 `usePlayerStore.getState()` 读取最新标记与设置，禁止依赖首次挂载闭包；每次播放/每次切换条目仅触发一次 `outroToastShownRef`；
+  - 8 秒倒计时由主窗口统一维护，`cancel` 设置 `outroDismissedRef`（本次会话不再提示），`skip` 执行 `seek(total - 0.25)` 让播放器自然派发 ended；默认行为为 `ask`（倒计时结束仅关闭提示），可选 `auto`；
+  - 片尾提示独立于 OSD 显隐渲染（`z-40`），即使进度条因鼠标闲置淡出也必须保持可见；
+- **OSD 标记面板**：
+  - 控制栏使用 `SkipForward` 入口，面板提供“标记片头结束/片尾开始”、点击已标记时间跳转校验与清除操作；标记必须校验 `seconds >= 1`、片头不超过片长 95%、片头结束早于片尾开始、片尾开始晚于片头结束且早于结尾 2 秒；
+- **macOS 全屏浮层同步**：
+  - `osd:sync` 载荷必须携带 `skipSegments / outroToast{visible,remainingMs,totalMs} / skipOutroAction / skipNotice`；浮层渲染同一套标记面板、片尾 Toast 与操作提示；
+  - 浮层的标记、清除、跳过、取消全部通过 `osd:command` 回传主窗口执行，禁止浮层直接写 store 或操作引擎；
+- **持久化与多端同步**：
+  - localStorage 使用 `nocta_skip_segments` / `nocta_skip_settings`；备份与多端合并时按 `updatedAt` 取新者，导入旧版本备份必须容忍字段缺失并保留本机已有数据（replace 模式除外）；
+  - 设置页提供“自动跳过片头 / 片尾跳过提示 / 倒计时结束仅提示或自动跳过”三项，默认全部开启且采用 `ask`，避免错过片尾彩蛋。

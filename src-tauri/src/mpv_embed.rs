@@ -5,6 +5,7 @@ mod platform {
     extern "C" {
         fn nocta_attach_mpv_window(parent: *mut c_void, title: *const c_char) -> i32;
         fn nocta_detach_mpv_window();
+        fn nocta_configure_osd_overlay(window: *mut c_void);
     }
 
     pub fn attach(parent: *mut c_void, title: &str) -> Result<bool, String> {
@@ -14,6 +15,10 @@ mod platform {
 
     pub fn detach() {
         unsafe { nocta_detach_mpv_window() };
+    }
+
+    pub fn configure_osd_overlay(window: *mut c_void) {
+        unsafe { nocta_configure_osd_overlay(window) };
     }
 }
 
@@ -26,6 +31,8 @@ mod platform {
     }
 
     pub fn detach() {}
+
+    pub fn configure_osd_overlay(_window: *mut c_void) {}
 }
 
-pub use platform::{attach, detach};
+pub use platform::{attach, configure_osd_overlay, detach};

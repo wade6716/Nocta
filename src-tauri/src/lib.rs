@@ -1,6 +1,7 @@
 mod proxy;
 mod sync;
 mod system;
+mod osd_overlay;
 #[cfg(target_os = "macos")]
 mod mpv_embed;
 
@@ -284,6 +285,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             attach_mpv_window,
             detach_mpv_window,
+            osd_overlay::open_osd_overlay,
+            osd_overlay::show_osd_overlay,
+            osd_overlay::close_osd_overlay,
             proxy::get_system_proxy,
             sync::sync_smb_test,
             sync::sync_smb_read,

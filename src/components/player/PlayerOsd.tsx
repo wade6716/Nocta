@@ -17,8 +17,14 @@ import {
   Subtitles,
   Info,
   ArrowDown,
+  SkipForward,
+  Crosshair,
+  X,
 } from 'lucide-react';
 import { MappedTrack } from '../../api/embyClient';
+import { SkipSegments } from '../../stores/usePlayerStore';
+
+const IS_MACOS = /Macintosh|Mac OS X/i.test(navigator.userAgent);
 
 interface PlayerOsdProps {
   title: string;
@@ -36,11 +42,13 @@ interface PlayerOsdProps {
   selectedSubtitleId: string | null;
   isFullscreen: boolean;
   isMaximized?: boolean;
+  overlayMode?: boolean;
   networkSpeed?: number;
 
   danmakuCount?: number;
   danmakuOffset?: number;
   matchedTitle?: string;
+  skipSegments?: SkipSegments | null;
 
   onBack: () => void;
   onHome?: () => void;
@@ -57,6 +65,9 @@ interface PlayerOsdProps {
   onSelectSubtitleTrack: (id: string | null) => void;
   onToggleWindowMode: () => void;
   onToggleFullscreen: () => void;
+  onMarkIntroEnd?: () => void;
+  onMarkOutroStart?: () => void;
+  onClearSkipSegment?: (field: 'introEnd' | 'outroStart') => void;
   onVideoClick?: () => void;
   onVideoDoubleClick?: (e?: React.MouseEvent) => void;
 }
@@ -86,6 +97,68 @@ export function formatNetworkSpeed(bytesPerSec?: number): string {
   return `${(bytesPerSec / (1024 * 1024)).toFixed(1)} MB/s`;
 }
 
+interface SkipSegmentRowProps {
+  label: string;
+  value?: number;
+  onMark?: () => void;
+  onClear?: () => void;
+  onSeek: (seconds: number) => void;
+}
+
+const SkipSegmentRow: React.FC<SkipSegmentRowProps> = ({
+  label,
+  value,
+  onMark,
+  onClear,
+  onSeek,
+}) => (
+  <div className="rounded-xl bg-white/[0.04] border border-white/10 p-2.5">
+    <div className="flex items-center justify-between">
+      <span className="text-[11px] font-medium text-gray-400">{label}</span>
+      {value !== undefined ? (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onSeek(value);
+          }}
+          className="text-xs font-mono tabular-nums text-sky-400 hover:text-sky-300 transition cursor-pointer"
+          title="跳转到该标记位置"
+        >
+          {formatTime(value)}
+        </button>
+      ) : (
+        <span className="text-[11px] text-gray-500">未标记</span>
+      )}
+    </div>
+
+    <div className="flex items-center gap-1.5 mt-2">
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          onMark?.();
+        }}
+        disabled={!onMark}
+        className="flex-1 py-1.5 rounded-lg text-[11px] font-semibold text-gray-200 bg-white/5 border border-white/10 hover:bg-white/10 hover:text-white transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
+      >
+        <Crosshair className="w-3 h-3" />
+        <span>标记当前</span>
+      </button>
+      {value !== undefined && onClear && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onClear();
+          }}
+          className="p-1.5 rounded-lg text-gray-400 bg-white/5 border border-white/10 hover:text-rose-400 hover:bg-rose-500/10 transition cursor-pointer"
+          title="清除该标记"
+        >
+          <X className="w-3.5 h-3.5" />
+        </button>
+      )}
+    </div>
+  </div>
+);
+
 export const PlayerOsd: React.FC<PlayerOsdProps> = ({
   title,
   subtitle,
@@ -102,10 +175,12 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
   selectedSubtitleId,
   isFullscreen,
   isMaximized = false,
+  overlayMode = false,
   networkSpeed = 0,
   danmakuCount,
   danmakuOffset,
   matchedTitle,
+  skipSegments,
   onBack,
   onHome,
   onTogglePlay,
@@ -121,12 +196,16 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
   onSelectSubtitleTrack,
   onToggleWindowMode,
   onToggleFullscreen,
+  onMarkIntroEnd,
+  onMarkOutroStart,
+  onClearSkipSegment,
   onVideoClick,
   onVideoDoubleClick,
 }) => {
   const [showAudioMenu, setShowAudioMenu] = useState(false);
   const [showSubtitleMenu, setShowSubtitleMenu] = useState(false);
   const [showRateMenu, setShowRateMenu] = useState(false);
+  const [showSkipMenu, setShowSkipMenu] = useState(false);
   const [prevVolume, setPrevVolume] = useState(100);
 
   // Scrubber Hover Timestamp Preview
@@ -157,18 +236,23 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
 
   const rates = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
   const progressPercent = duration > 0 ? Math.min(100, Math.max(0, (currentTime / duration) * 100)) : 0;
+  const hasSkipSegments = Boolean(skipSegments?.introEnd || skipSegments?.outroStart);
 
   return (
     <div className="fixed inset-0 z-20 pointer-events-none flex flex-col justify-between overflow-hidden select-none">
       {/* 顶部悬浮毛玻璃胶囊栏 (双胶囊：左侧导航与标题，右侧弹幕载入状态与快捷设置) */}
       <div
-        data-tauri-drag-region
-        className={`fixed top-5 left-5 right-5 flex items-center justify-between pointer-events-none transition-all duration-300 ${
+        data-tauri-drag-region={overlayMode ? undefined : ''}
+        className={`fixed top-5 ${IS_MACOS && !isFullscreen ? 'left-20' : 'left-5'} right-5 flex items-center justify-between pointer-events-none transition-all duration-300 ${
           visible ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-3 pointer-events-none'
         }`}
       >
         {/* 左侧胶囊：返回、首页、剧集标题 */}
-        <div className="pointer-events-auto flex items-center space-x-3 px-4 py-2.5 rounded-2xl bg-[#0B0E17]/80 backdrop-blur-2xl border border-white/[0.12] shadow-xl">
+        <div
+          className={`${
+            visible ? 'pointer-events-auto' : 'pointer-events-none'
+          } flex items-center space-x-3 px-4 py-2.5 rounded-2xl bg-[#0B0E17]/80 backdrop-blur-2xl border border-white/[0.12] shadow-xl`}
+        >
           <button
             onClick={onBack}
             className="p-1.5 rounded-xl bg-white/5 hover:bg-white/15 text-white transition cursor-pointer flex items-center space-x-1.5"
@@ -203,7 +287,11 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
         </div>
 
         {/* 右侧胶囊：弹幕实时载入徽章与快速抽屉开关 */}
-        <div className="pointer-events-auto flex items-center space-x-2.5 px-3.5 py-2 rounded-2xl bg-[#0B0E17]/80 backdrop-blur-2xl border border-white/[0.12] shadow-xl text-xs text-gray-300">
+        <div
+          className={`${
+            visible ? 'pointer-events-auto' : 'pointer-events-none'
+          } flex items-center space-x-2.5 px-3.5 py-2 rounded-2xl bg-[#0B0E17]/80 backdrop-blur-2xl border border-white/[0.12] shadow-xl text-xs text-gray-300`}
+        >
           {danmakuCount !== undefined && danmakuCount > 0 ? (
             <div className="flex items-center space-x-1.5 text-xs text-emerald-400 font-medium px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/25">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse flex-shrink-0" />
@@ -216,13 +304,15 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
             </div>
           )}
 
-          <button
-            onClick={onToggleDanmakuDrawer}
-            className="p-1.5 rounded-xl bg-white/5 hover:bg-white/15 text-gray-300 hover:text-white transition cursor-pointer"
-            title="打开弹幕设置与时间校准"
-          >
-            <Sliders className="w-4 h-4 text-primary" />
-          </button>
+          {!overlayMode && (
+            <button
+              onClick={onToggleDanmakuDrawer}
+              className="p-1.5 rounded-xl bg-white/5 hover:bg-white/15 text-gray-300 hover:text-white transition cursor-pointer"
+              title="打开弹幕设置与时间校准"
+            >
+              <Sliders className="w-4 h-4 text-primary" />
+            </button>
+          )}
         </div>
       </div>
 
@@ -374,26 +464,85 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
               <span>{danmakuVisible ? '弹幕 开' : '弹幕 关'}</span>
             </button>
 
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onToggleDanmakuDrawer();
-              }}
-              className="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/15 text-gray-200 hover:text-white transition cursor-pointer flex items-center space-x-1.5 text-xs font-medium border border-white/10"
-              title="打开弹幕控制中心 (换源绑定、时间微调与样式过滤)"
-            >
-              <Sliders className="w-3.5 h-3.5 text-primary" />
-              <span>弹幕设置</span>
-              {danmakuOffset !== undefined && danmakuOffset !== 0 && (
-                <span className="px-1.5 py-0.5 rounded bg-primary/20 text-primary font-mono text-[11px] tabular-nums font-semibold">
-                  {danmakuOffset > 0 ? `+${danmakuOffset}s` : `${danmakuOffset}s`}
-                </span>
-              )}
-            </button>
+            {!overlayMode && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleDanmakuDrawer();
+                }}
+                className="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/15 text-gray-200 hover:text-white transition cursor-pointer flex items-center space-x-1.5 text-xs font-medium border border-white/10"
+                title="打开弹幕控制中心 (换源绑定、时间微调与样式过滤)"
+              >
+                <Sliders className="w-3.5 h-3.5 text-primary" />
+                <span>弹幕设置</span>
+                {danmakuOffset !== undefined && danmakuOffset !== 0 && (
+                  <span className="px-1.5 py-0.5 rounded bg-primary/20 text-primary font-mono text-[11px] tabular-nums font-semibold">
+                    {danmakuOffset > 0 ? `+${danmakuOffset}s` : `${danmakuOffset}s`}
+                  </span>
+                )}
+              </button>
+            )}
           </div>
 
           {/* Right Zone: Speed, Tracks, Episode Drawer, Window, Fullscreen */}
           <div className="flex items-center space-x-2 text-sm">
+            {/* Intro / Outro Segment Marking */}
+            <div className="relative">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowSkipMenu(!showSkipMenu);
+                  setShowRateMenu(false);
+                  setShowAudioMenu(false);
+                  setShowSubtitleMenu(false);
+                }}
+                className={`relative p-1.5 rounded-xl transition cursor-pointer border ${
+                  showSkipMenu || hasSkipSegments
+                    ? 'bg-primary/20 text-primary border-primary/40'
+                    : 'bg-white/5 text-white hover:bg-white/15 border-white/5'
+                }`}
+                title="标记片头结束与片尾开始"
+              >
+                <SkipForward className="w-4 h-4" />
+                {hasSkipSegments && (
+                  <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-primary shadow-[0_0_6px_rgba(56,189,248,0.9)]" />
+                )}
+              </button>
+
+              {showSkipMenu && (
+                <div className="absolute bottom-full mb-3 right-0 w-72 rounded-xl bg-[#0B0E17]/95 backdrop-blur-2xl border border-white/15 shadow-2xl p-2.5 space-y-2 z-40">
+                  <div className="flex items-center justify-between px-1">
+                    <span className="text-xs font-semibold text-white">片头片尾标记</span>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowSkipMenu(false);
+                      }}
+                      className="p-1 rounded-lg text-gray-400 hover:text-white hover:bg-white/10 transition cursor-pointer"
+                      title="关闭"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  <SkipSegmentRow
+                    label="片头结束"
+                    value={skipSegments?.introEnd}
+                    onMark={onMarkIntroEnd}
+                    onClear={() => onClearSkipSegment?.('introEnd')}
+                    onSeek={onSeek}
+                  />
+                  <SkipSegmentRow
+                    label="片尾开始"
+                    value={skipSegments?.outroStart}
+                    onMark={onMarkOutroStart}
+                    onClear={() => onClearSkipSegment?.('outroStart')}
+                    onSeek={onSeek}
+                  />
+                </div>
+              )}
+            </div>
+
             {/* Playback Speed Menu */}
             <div className="relative">
               <button
@@ -402,6 +551,7 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
                   setShowRateMenu(!showRateMenu);
                   setShowAudioMenu(false);
                   setShowSubtitleMenu(false);
+                  setShowSkipMenu(false);
                 }}
                 className="px-2.5 py-1.5 rounded-xl bg-white/5 hover:bg-white/15 text-xs font-mono font-medium transition cursor-pointer border border-white/5"
                 title="倍速选择"
@@ -440,6 +590,7 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
                     setShowAudioMenu(!showAudioMenu);
                     setShowRateMenu(false);
                     setShowSubtitleMenu(false);
+                    setShowSkipMenu(false);
                   }}
                   className="p-1.5 rounded-xl bg-white/5 hover:bg-white/15 text-white transition cursor-pointer border border-white/5"
                   title="音轨切换"
@@ -482,6 +633,7 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
                     setShowSubtitleMenu(!showSubtitleMenu);
                     setShowRateMenu(false);
                     setShowAudioMenu(false);
+                    setShowSkipMenu(false);
                   }}
                   className={`p-1.5 rounded-xl transition cursor-pointer border ${
                     selectedSubtitleId
@@ -534,7 +686,7 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
             )}
 
             {/* Episode Drawer Shortcut */}
-            {onToggleEpisodeDrawer && (
+            {onToggleEpisodeDrawer && !overlayMode && (
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -548,7 +700,7 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
             )}
 
             {/* Playback Info Modal Trigger */}
-            {onTogglePlaybackInfo && (
+            {onTogglePlaybackInfo && !overlayMode && (
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -566,22 +718,24 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
             )}
 
             {/* Window Mode Toggle */}
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onToggleWindowMode();
-              }}
-              className="p-1.5 rounded-xl bg-white/5 hover:bg-white/15 text-white transition cursor-pointer border border-white/5"
-              title={
-                isFullscreen
-                  ? '恢复窗口 (退出全屏)'
-                  : isMaximized
-                  ? '还原窗口'
-                  : '窗口全屏 / 最大化'
-              }
-            >
-              <AppWindow className="w-4 h-4" />
-            </button>
+            {!overlayMode && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleWindowMode();
+                }}
+                className="p-1.5 rounded-xl bg-white/5 hover:bg-white/15 text-white transition cursor-pointer border border-white/5"
+                title={
+                  isFullscreen
+                    ? '恢复窗口 (退出全屏)'
+                    : isMaximized
+                    ? '还原窗口'
+                    : '最大化窗口'
+                }
+              >
+                <AppWindow className="w-4 h-4" />
+              </button>
+            )}
 
             {/* Fullscreen Toggle */}
             <button

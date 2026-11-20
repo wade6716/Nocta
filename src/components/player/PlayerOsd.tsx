@@ -520,11 +520,11 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
 
           <div className="hidden sm:block h-3.5 w-px bg-white/15" />
 
-          {/* 弹幕载入徽章 */}
+          {/* 弹幕载入徽章（窗口态与全屏态均可点击打开弹幕控制中心） */}
           <button
-            onClick={overlayMode ? undefined : onToggleDanmakuDrawer}
-            className={`${overlayMode ? 'cursor-default' : 'cursor-pointer'} transition`}
-            title={overlayMode ? '弹幕状态' : '点击打开弹幕控制中心'}
+            onClick={onToggleDanmakuDrawer}
+            className="cursor-pointer transition"
+            title="点击打开弹幕控制中心"
           >
             {danmakuCount !== undefined && danmakuCount > 0 ? (
               <div className="flex items-center space-x-1.5 text-xs text-emerald-400 font-medium px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/25 hover:bg-emerald-500/25 transition">
@@ -540,7 +540,7 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
           </button>
 
           {/* 置顶 Pin */}
-          {isTauri && !overlayMode && onTogglePin && (
+          {isTauri && !overlayMode && !isFullscreen && onTogglePin && (
             <button
               onClick={onTogglePin}
               className={`p-1.5 rounded-xl transition cursor-pointer ${
@@ -830,29 +830,27 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
               <span>{danmakuVisible ? '弹幕 开' : '弹幕 关'}</span>
             </button>
 
-            {!overlayMode && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  closeAllDropdowns();
-                  onToggleDanmakuDrawer();
-                }}
-                className={`px-3 py-1.5 rounded-xl transition cursor-pointer flex items-center space-x-1.5 text-xs font-medium border ${
-                  isDanmakuDrawerOpen
-                    ? 'bg-primary/25 text-white border-primary/50'
-                    : 'bg-white/5 hover:bg-white/15 text-gray-200 hover:text-white border-white/10'
-                }`}
-                title="打开弹幕控制中心 (换源绑定、时间微调、防刷屏与弹幕列表)"
-              >
-                <Sliders className="w-3.5 h-3.5 text-primary" />
-                <span>弹幕</span>
-                {danmakuOffset !== undefined && danmakuOffset !== 0 && (
-                  <span className="px-1.5 py-0.2 rounded bg-primary/20 text-primary font-mono text-[11px] tabular-nums font-semibold">
-                    {danmakuOffset > 0 ? `+${danmakuOffset}s` : `${danmakuOffset}s`}
-                  </span>
-                )}
-              </button>
-            )}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                closeAllDropdowns();
+                onToggleDanmakuDrawer();
+              }}
+              className={`px-3 py-1.5 rounded-xl transition cursor-pointer flex items-center space-x-1.5 text-xs font-medium border ${
+                isDanmakuDrawerOpen
+                  ? 'bg-primary/25 text-white border-primary/50'
+                  : 'bg-white/5 hover:bg-white/15 text-gray-200 hover:text-white border-white/10'
+              }`}
+              title="打开弹幕控制中心 (换源绑定、时间微调、防刷屏与弹幕列表)"
+            >
+              <Sliders className="w-3.5 h-3.5 text-primary" />
+              <span>弹幕</span>
+              {danmakuOffset !== undefined && danmakuOffset !== 0 && (
+                <span className="px-1.5 py-0.2 rounded bg-primary/20 text-primary font-mono text-[11px] tabular-nums font-semibold">
+                  {danmakuOffset > 0 ? `+${danmakuOffset}s` : `${danmakuOffset}s`}
+                </span>
+              )}
+            </button>
           </div>
 
           {/* Right Zone: 片头片尾标记, 版本源, 倍速, 音轨, 字幕, 画质调校, 选集, 信息, 窗口, 全屏 */}
@@ -914,7 +912,7 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
             </div>
 
             {/* 多版本原画源快捷菜单 */}
-            {!overlayMode && availableMediaSources.length > 1 && onSelectMediaSource && (
+            {availableMediaSources.length > 1 && onSelectMediaSource && (
               <div className="relative">
                 <button
                   onClick={(e) => {
@@ -1101,7 +1099,7 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
             )}
 
             {/* 画质、硬解与音字幕 Pro 调校面板开关 */}
-            {onToggleVideoProPanel && !overlayMode && (
+            {onToggleVideoProPanel && (
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -1120,7 +1118,7 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
             )}
 
             {/* Episode Drawer Shortcut */}
-            {onToggleEpisodeDrawer && !overlayMode && (
+            {onToggleEpisodeDrawer && (
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -1139,7 +1137,7 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
             )}
 
             {/* Playback Info Modal Trigger */}
-            {onTogglePlaybackInfo && !overlayMode && (
+            {onTogglePlaybackInfo && (
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -1158,24 +1156,22 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
             )}
 
             {/* Window Mode Toggle */}
-            {!overlayMode && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onToggleWindowMode();
-                }}
-                className="p-1.5 rounded-xl bg-white/5 hover:bg-white/15 text-white transition cursor-pointer border border-white/5"
-                title={
-                  isFullscreen
-                    ? '恢复窗口 (退出全屏)'
-                    : isMaximized
-                    ? '还原窗口'
-                    : '最大化窗口'
-                }
-              >
-                <AppWindow className="w-4 h-4" />
-              </button>
-            )}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleWindowMode();
+              }}
+              className="p-1.5 rounded-xl bg-white/5 hover:bg-white/15 text-white transition cursor-pointer border border-white/5"
+              title={
+                isFullscreen
+                  ? '恢复窗口 (退出全屏)'
+                  : isMaximized
+                  ? '还原窗口'
+                  : '最大化窗口'
+              }
+            >
+              <AppWindow className="w-4 h-4" />
+            </button>
 
             {/* Fullscreen Toggle */}
             <button

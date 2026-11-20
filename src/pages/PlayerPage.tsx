@@ -161,6 +161,8 @@ export const PlayerPage: React.FC = () => {
   const autoSwitchedItemIdRef = useRef<string | null>(null);
   const appliedPrefTrackUrlRef = useRef<string | null>(null);
   const episodeSwitchReqIdRef = useRef(0);
+  const storeRevisionRef = useRef(1);
+  const applyingOverlayPatchRef = useRef(false);
   const networkSpeedRef = useRef(0);
   const handleVideoErrorRef = useRef<(errMsg?: string) => void>(() => {});
   const proxyOverrideRef = useRef<StreamProxyOverride>('follow');
@@ -170,6 +172,26 @@ export const PlayerPage: React.FC = () => {
   useEffect(() => {
     proxyOverrideRef.current = proxyOverride;
   }, [proxyOverride]);
+
+  useEffect(() => {
+    return usePlayerStore.subscribe((state, prev) => {
+      if (applyingOverlayPatchRef.current) return;
+      if (
+        state.danmakuSettings !== prev.danmakuSettings ||
+        state.playerPreferences !== prev.playerPreferences ||
+        state.videoLayouts !== prev.videoLayouts ||
+        state.itemOffsets !== prev.itemOffsets ||
+        state.seriesOffsets !== prev.seriesOffsets ||
+        state.danmakuBindings !== prev.danmakuBindings ||
+        state.seriesDanmakuBindings !== prev.seriesDanmakuBindings ||
+        state.skipSegments !== prev.skipSegments ||
+        state.skipSettings !== prev.skipSettings ||
+        state.engineType !== prev.engineType
+      ) {
+        storeRevisionRef.current += 1;
+      }
+    });
+  }, []);
 
   // Player Engine and Container refs
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -1671,13 +1693,20 @@ export const PlayerPage: React.FC = () => {
     handleVideoErrorRef.current = handleVideoError;
   }, [handleVideoError]);
 
-  // 顶部标题旁画质微标（如 4K · HDR）
+  // 顶部标题旁画质微标（如 4K · HDR）与代理摘要
   const vStream = mediaSource?.MediaStreams?.find((s) => s.Type === 'Video');
   const specParts: string[] = [];
   if (vStream?.Width && vStream.Width >= 3800) specParts.push('4K');
   else if (vStream?.Width && vStream.Width >= 1900) specParts.push('1080p');
   if (vStream?.VideoRange && vStream.VideoRange !== 'SDR') specParts.push(vStream.VideoRange);
   const videoSpecLabel = specParts.join(' · ') || undefined;
+
+  const proxySummaryLabel =
+    proxyInfo?.mode === 'system_http' || proxyInfo?.mode === 'manual_http'
+      ? 'HTTP 代理'
+      : proxyInfo?.mode === 'lan_bypass'
+      ? 'LAN 直通'
+      : '直连';
 
   const handleRetryDirect = (overrideMode?: StreamProxyOverride) => {
     if (!currentServer || !item || !mediaSource || !playSessionId) return;
@@ -1714,6 +1743,7 @@ export const PlayerPage: React.FC = () => {
   // 其他平台与窗口模式完全沿用原有单窗口渲染路径。
   const canUseMacOsdOverlay = isTauriEnvironment() && IS_MACOS && engineType === 'mpv';
 
+  const livePlayerState = usePlayerStore.getState();
   const osdSyncPayload: OsdSyncPayload | null = item
     ? {
         title: item.Name,
@@ -1748,6 +1778,7 @@ export const PlayerPage: React.FC = () => {
             }
           : null,
         fastForwardRate,
+        centerIcon,
         danmakuVisible: danmakuSettings.visible,
         danmakuCount: rawComments.length,
         danmakuOffset: savedOffset,
@@ -1756,6 +1787,7 @@ export const PlayerPage: React.FC = () => {
         subtitleTracks,
         selectedAudioId,
         selectedSubtitleId,
+        selectedSecondarySubtitleId,
         danmakuStyle: {
           speed: danmakuSettings.speed,
           opacity: danmakuSettings.opacity,
@@ -1772,8 +1804,75 @@ export const PlayerPage: React.FC = () => {
         },
         skipNotice,
         skipOutroAction: skipSettings.skipOutroAction,
+        item,
+        mediaSource,
+        availableMediaSources,
+        streamUrl: currentStreamUrl || streamUrl,
+        currentServerName: currentServer?.name,
+        currentServerUrl: currentServer?.url,
+        seasons,
+        selectedSeasonId,
+        episodes,
+        episodesLoading,
+        hasNextEpisode: !!nextEpisode,
+        hasPrevEpisode: !!prevEpisode,
+        nextEpisode,
+        showSkipIntro,
+        autoNextCountdown,
+        speedHistory,
+        proxyOverride,
+        proxySummaryLabel,
+        layoutKey,
+        videoAspectRatio,
+        isWidescreen,
+        sourceDuration,
+        danmuToast,
+        durationAlert,
+        storeSnapshot: {
+          revision: storeRevisionRef.current,
+          danmakuSettings,
+          playerPreferences,
+          videoLayouts,
+          itemOffsets: livePlayerState.itemOffsets,
+          seriesOffsets: livePlayerState.seriesOffsets,
+          danmakuBindings: livePlayerState.danmakuBindings,
+          seriesDanmakuBindings: livePlayerState.seriesDanmakuBindings,
+          skipSegments: livePlayerState.skipSegments,
+          skipSettings,
+          engineType,
+        },
       }
     : null;
+
+  const instantSyncKey = [
+    paused,
+    danmakuSettings.visible,
+    savedOffset,
+    playbackRate,
+    volume,
+    selectedAudioId,
+    selectedSubtitleId,
+    selectedSecondarySubtitleId,
+    isLoadingVideo,
+    videoSpecLabel,
+    miniHud?.id ?? 0,
+    fastForwardRate ?? '',
+    centerIcon ?? '',
+    outroToast?.deadline ?? 0,
+    skipNotice ?? '',
+    danmuToast ?? '',
+    durationAlert ?? '',
+    autoNextCountdown ?? '',
+    showSkipIntro,
+    abLoopA ?? '',
+    abLoopB ?? '',
+    proxyOverride,
+    selectedSeasonId ?? '',
+    episodes.length,
+    mediaSource?.Id ?? '',
+    item?.Id ?? '',
+    storeRevisionRef.current,
+  ].join('|');
 
   const handleOsdCommand = (cmd: OsdCommand) => {
     switch (cmd.type) {
@@ -1832,6 +1931,9 @@ export const PlayerPage: React.FC = () => {
       case 'toggle-fullscreen':
         handleToggleFullscreen();
         break;
+      case 'toggle-window-mode':
+        handleToggleWindowMode();
+        break;
       case 'back':
         handleBack();
         break;
@@ -1849,6 +1951,9 @@ export const PlayerPage: React.FC = () => {
         break;
       case 'cycle-subtitle':
         handleCycleSubtitle();
+        break;
+      case 'select-secondary-subtitle':
+        handleSelectSecondarySubtitleTrack(cmd.id);
         break;
       case 'mark-intro-end':
         handleMarkIntroEnd(cmd.seconds);
@@ -1874,6 +1979,73 @@ export const PlayerPage: React.FC = () => {
       case 'toggle-remaining-time':
         updatePlayerPreferences({ showRemainingTime: !playerPreferences.showRemainingTime });
         break;
+      case 'set-ab-loop':
+        handleSetAbLoop(cmd.point);
+        break;
+      case 'sync-player-store':
+        applyingOverlayPatchRef.current = true;
+        try {
+          usePlayerStore.getState().applyRemoteStoreSnapshot(cmd.patch, true);
+        } finally {
+          applyingOverlayPatchRef.current = false;
+        }
+        break;
+      case 'sync-danmu-store':
+        useDanmuStore.getState().syncServersFromRemote(cmd.servers, cmd.activeServerId, true);
+        break;
+      case 'sync-proxy-config':
+        useAuthStore.getState().updateGlobalProxyConfig(cmd.config);
+        handleHotReloadStreamWithProxy(proxyOverride);
+        break;
+      case 'comments-loaded':
+        handleCommentsLoaded(cmd.comments, cmd.sourceDuration, cmd.meta);
+        break;
+      case 're-auto-match':
+        triggerDanmakuLoad(true);
+        break;
+      case 'dismiss-duration-alert':
+        setDurationAlert(null);
+        break;
+      case 'select-season':
+        handleSelectSeasonInDrawer(cmd.seasonId);
+        break;
+      case 'select-episode': {
+        const ep = episodes.find((e) => e.Id === cmd.episodeId);
+        if (ep) switchToEpisode(ep);
+        break;
+      }
+      case 'next-episode':
+        if (nextEpisode) switchToEpisode(nextEpisode);
+        break;
+      case 'prev-episode':
+        if (prevEpisode) switchToEpisode(prevEpisode);
+        break;
+      case 'cancel-auto-next':
+        setCancelAutoNext(true);
+        setAutoNextCountdown(null);
+        break;
+      case 'select-media-source': {
+        const ms = availableMediaSources.find((m) => m.Id === cmd.mediaSourceId);
+        if (ms) switchMediaSource(ms);
+        break;
+      }
+      case 'change-proxy-override':
+        handleHotReloadStreamWithProxy(cmd.mode);
+        break;
+      case 'reload-stream':
+        handleHotReloadStreamWithProxy(proxyOverride);
+        break;
+      case 'toggle-bottom-align':
+        if (layoutKey) {
+          setVideoLayout(layoutKey, { bottomAlign: !currentLayout.bottomAlign });
+        }
+        break;
+      case 'cycle-aspect': {
+        const order: VideoAspectPreset[] = ['auto', '16:9', '21:9', '4:3', 'fill'];
+        const next = order[(order.indexOf(playerPreferences.videoAspect) + 1) % order.length];
+        updatePlayerPreferences({ videoAspect: next });
+        break;
+      }
     }
   };
 
@@ -1883,8 +2055,10 @@ export const PlayerPage: React.FC = () => {
     isFullscreen,
     videoError,
     syncPayload: osdSyncPayload,
+    instantSyncKey,
     liveTimeRef: lastValidTimeRef,
     formattedComments,
+    rawComments,
     onCommand: handleOsdCommand,
   });
 
@@ -1911,13 +2085,6 @@ export const PlayerPage: React.FC = () => {
         { type: 'Backdrop', maxWidth: 1920, quality: 75 }
       )
     : '';
-
-  const proxySummaryLabel =
-    proxyInfo?.mode === 'system_http' || proxyInfo?.mode === 'manual_http'
-      ? 'HTTP 代理'
-      : proxyInfo?.mode === 'lan_bypass'
-      ? 'LAN 直通'
-      : '直连';
 
   return (
     <div
@@ -2148,7 +2315,7 @@ export const PlayerPage: React.FC = () => {
         onSeek={handleSeek}
         onVolumeChange={(v) => handleVolumeChange(v, false)}
         onRateChange={(r) => handleRateChange(r, false)}
-        onToggleDanmaku={() => updateDanmakuSettings({ visible: !danmakuSettings.visible })}
+        onToggleDanmaku={handleToggleDanmakuWithHud}
         onToggleDanmakuDrawer={() =>
           setActivePanel((p) => (p === 'danmaku' ? 'none' : 'danmaku'))
         }
@@ -2200,7 +2367,7 @@ export const PlayerPage: React.FC = () => {
           onPrevEpisode={() => prevEpisode && switchToEpisode(prevEpisode)}
           onSkipIntro={handleSkipIntro}
           onRateChange={(r) => handleRateChange(r, true)}
-          onToggleDanmaku={() => updateDanmakuSettings({ visible: !danmakuSettings.visible })}
+          onToggleDanmaku={handleToggleDanmakuWithHud}
           onToggleBottomAlign={() =>
             layoutKey && setVideoLayout(layoutKey, { bottomAlign: !currentLayout.bottomAlign })
           }
@@ -2213,7 +2380,7 @@ export const PlayerPage: React.FC = () => {
           onOpenVideoPro={() => setActivePanel('videoPro')}
           onOpenNetworkPopover={() => setActivePanel('network')}
           onOpenEpisodeDrawer={() => setActivePanel('episodes')}
-          onTogglePin={handleTogglePin}
+          onTogglePin={!isFullscreen ? handleTogglePin : undefined}
           onTakeScreenshot={handleTakeScreenshot}
           onOpenPlaybackInfo={() => setActivePanel('info')}
           onOpenShortcuts={() => setActivePanel('shortcuts')}
@@ -2262,6 +2429,7 @@ export const PlayerPage: React.FC = () => {
         seriesId={item.SeriesId}
         itemTitle={item.Name}
         seriesName={item.SeriesName}
+        episodeNumber={item.IndexNumber}
         currentMatchedTitle={matchedTitle}
         sourceCommentCount={rawComments.length}
         sourceDuration={sourceDuration}

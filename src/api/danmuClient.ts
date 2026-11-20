@@ -37,14 +37,203 @@ export interface DanmuAnimeMatch {
   episodeTitle?: string;
 }
 
+export interface DanmuEpisode {
+  episodeId: number | string;
+  episodeTitle: string;
+  episodeNumber?: string | number;
+}
+
 export interface DanmuAnimeSearchResult {
   animeId: number | string;
   animeTitle: string;
   type?: string;
-  episodes?: Array<{
-    episodeId: number | string;
-    episodeTitle: string;
-  }>;
+  episodes?: DanmuEpisode[];
+}
+
+export interface ParsedDanmuEpisodeInfo {
+  platform?: string;
+  cleanTitle: string;
+  episodeNumber?: number;
+  shortLabel: string;
+  badgeLabel: string;
+  subTitle: string;
+  isFallbackIndex: boolean;
+}
+
+const KNOWN_PLATFORM_TAG_RE =
+  /^(?:bilibili\d*|qq|iqiyi|qiyi|youku|mgtv|bahamut|acfun|renren|hanju|dandan|b站|腾讯(?:视频)?|爱奇艺|优酷|芒果(?:tv)?|巴哈姆特?|人人|韩剧|弹弹|[a-z]{2,15}\d+)$/i;
+const SPECIAL_TAG_GUARD_RE = /^(?:SP|OVA|OAD|PV|OP|ED|NCOP|NCED|CM|BD)\d*$/i;
+
+function normalizeSubTitleText(raw: string): string {
+  return raw
+    .replace(/【\s*】|\[\s*\]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/^[\s\-–—:：·|｜/]+|[\s\-–—:：·|｜/]+$/g, '')
+    .trim();
+}
+
+function formatNumericLabel(num: number): string {
+  return Number.isInteger(num) ? String(num) : String(num);
+}
+
+/**
+ * 结构化解析弹幕源分集标题：剥离【bilibili1】等平台来源前缀，提取规范集数与副标题
+ */
+export function parseDanmuEpisodeInfo(
+  ep: DanmuEpisode,
+  index: number
+): ParsedDanmuEpisodeInfo {
+  const rawTitle = (ep.episodeTitle || '').trim();
+  let cleanTitle = rawTitle;
+  let platform: string | undefined;
+  let strippedAnyPrefix = false;
+
+  // 循环剥离标题开头的平台来源前缀，保留 SP/OVA/OP/ED 等番外标记
+  while (cleanTitle) {
+    const tagMatch = cleanTitle.match(/^(?:【([^】]+)】|\[([^\]]+)\])\s*/);
+    if (!tagMatch) break;
+    const tagText = (tagMatch[1] ?? tagMatch[2] ?? '').trim();
+    if (!tagText || SPECIAL_TAG_GUARD_RE.test(tagText)) break;
+    if (!KNOWN_PLATFORM_TAG_RE.test(tagText)) break;
+
+    if (!platform) platform = tagText;
+    strippedAnyPrefix = true;
+    cleanTitle = cleanTitle.slice(tagMatch[0].length).trim();
+  }
+
+  if (strippedAnyPrefix) {
+    cleanTitle = cleanTitle.replace(/^[\s\-–—:：·|｜/]+/, '').trim();
+  }
+
+  // 1. 开头匹配：第188集 / 第 01 话 / 12.5集 (总集篇)
+  const leadingChineseEp = cleanTitle.match(
+    /^(?:第\s*)?0*(\d+(?:\.\d+)?)\s*(?:集|话|話|期|回|章|幕)(?:\s*[-–—:：·|｜/]*\s*(.*))?$/
+  );
+  if (leadingChineseEp) {
+    const num = Number(leadingChineseEp[1]);
+    if (Number.isFinite(num) && num > 0 && num < 10000) {
+      const shortLabel = formatNumericLabel(num);
+      return {
+        platform,
+        cleanTitle,
+        episodeNumber: num,
+        shortLabel,
+        badgeLabel: `第${shortLabel}集`,
+        subTitle: normalizeSubTitleText(leadingChineseEp[2] || ''),
+        isFallbackIndex: false,
+      };
+    }
+  }
+
+  // 2. 任意位置匹配：第 X 集/话/期/回，保留其余部分为副标题
+  const anywhereChineseEp = cleanTitle.match(/第\s*0*(\d+(?:\.\d+)?)\s*(?:集|话|話|期|回)/);
+  if (anywhereChineseEp && anywhereChineseEp.index !== undefined) {
+    const num = Number(anywhereChineseEp[1]);
+    if (Number.isFinite(num) && num > 0 && num < 10000) {
+      const shortLabel = formatNumericLabel(num);
+      const rest = `${cleanTitle.slice(0, anywhereChineseEp.index)} ${cleanTitle.slice(
+        anywhereChineseEp.index + anywhereChineseEp[0].length
+      )}`;
+      return {
+        platform,
+        cleanTitle,
+        episodeNumber: num,
+        shortLabel,
+        badgeLabel: `第${shortLabel}集`,
+        subTitle: normalizeSubTitleText(rest),
+        isFallbackIndex: false,
+      };
+    }
+  }
+
+  // 3. 开头匹配：EP05 / E05 / EP 12
+  const leadingEnglishEp = cleanTitle.match(
+    /^(?:EP|E)\s*[-._#]*\s*0*(\d+(?:\.\d+)?)(?![a-zA-Z])(?:\s*[-–—:：·|｜/]*\s*(.*))?$/i
+  );
+  if (leadingEnglishEp) {
+    const num = Number(leadingEnglishEp[1]);
+    if (Number.isFinite(num) && num > 0 && num < 10000) {
+      const shortLabel = formatNumericLabel(num);
+      return {
+        platform,
+        cleanTitle,
+        episodeNumber: num,
+        shortLabel,
+        badgeLabel: `第${shortLabel}集`,
+        subTitle: normalizeSubTitleText(leadingEnglishEp[2] || ''),
+        isFallbackIndex: false,
+      };
+    }
+  }
+
+  // 4. 开头纯数字：01 / 188 (副标题)，排除日期大数及 1080p 等后缀
+  const leadingNumberEp = cleanTitle.match(
+    /^0*(\d+(?:\.\d+)?)(?=$|\s|[-–—:：.·|｜/(\[【])(?:\s*[-–—:：.·|｜/]*\s*(.*))?$/
+  );
+  if (leadingNumberEp) {
+    const num = Number(leadingNumberEp[1]);
+    if (Number.isFinite(num) && num > 0 && num < 10000) {
+      const shortLabel = formatNumericLabel(num);
+      return {
+        platform,
+        cleanTitle,
+        episodeNumber: num,
+        shortLabel,
+        badgeLabel: `第${shortLabel}集`,
+        subTitle: normalizeSubTitleText(leadingNumberEp[2] || ''),
+        isFallbackIndex: false,
+      };
+    }
+  }
+
+  // 5. 番外/特典开头：SP1 / OVA / PV / 番外 / 特别篇 等
+  const specialPrefixEp = cleanTitle.match(
+    /^(?:【|\[)?(SP|OVA|OAD|PV|番外|特别篇|特典|彩蛋)\s*0*(\d*)(?![a-zA-Z])(?:】|\])?(?:\s*[-–—:：·|｜/]*\s*(.*))?$/i
+  );
+  if (specialPrefixEp) {
+    const rawKind = specialPrefixEp[1];
+    const normKind = /^[a-z]+$/i.test(rawKind) ? rawKind.toUpperCase() : rawKind;
+    const rawSpecialNum = specialPrefixEp[2];
+    const markerLabel = rawSpecialNum ? `${normKind}${rawSpecialNum}` : normKind;
+    return {
+      platform,
+      cleanTitle,
+      episodeNumber: undefined,
+      shortLabel: markerLabel,
+      badgeLabel: markerLabel,
+      subTitle: normalizeSubTitleText(specialPrefixEp[3] || ''),
+      isFallbackIndex: false,
+    };
+  }
+
+  // 6. 回退读取服务端附带的 episodeNumber 字段
+  if (ep.episodeNumber !== undefined && String(ep.episodeNumber).trim() !== '') {
+    const num = Number(ep.episodeNumber);
+    if (Number.isFinite(num) && num > 0 && num < 10000) {
+      const shortLabel = formatNumericLabel(num);
+      return {
+        platform,
+        cleanTitle,
+        episodeNumber: num,
+        shortLabel,
+        badgeLabel: `第${shortLabel}集`,
+        subTitle: normalizeSubTitleText(cleanTitle),
+        isFallbackIndex: false,
+      };
+    }
+  }
+
+  // 7. 最终序数兜底
+  const fallbackShort = String(index + 1);
+  return {
+    platform,
+    cleanTitle,
+    episodeNumber: undefined,
+    shortLabel: fallbackShort,
+    badgeLabel: `#${fallbackShort}`,
+    subTitle: normalizeSubTitleText(cleanTitle),
+    isFallbackIndex: true,
+  };
 }
 
 // 规范化拼接 API 路径（Token 直接包含在 baseUrl 地址中）

@@ -106,6 +106,7 @@ export interface EmbyItem {
   SeriesPrimaryImageTag?: string;
   SeriesThumbImageTag?: string;
   ParentThumbImageTag?: string;
+  Size?: number;
   MediaSources?: EmbyMediaSource[];
   LibraryName?: string;
   LibraryId?: string;
@@ -787,6 +788,35 @@ export function secondsToTicks(seconds: number): number {
 
 export function ticksToSeconds(ticks: number): number {
   return (ticks || 0) / 10_000_000;
+}
+
+/**
+ * 将字节数格式化为人类可读的文件体积字符串（TB / GB / MB / KB）
+ */
+export function formatFileSize(bytes?: number): string {
+  if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes <= 0) return '';
+  const tb = 1024 ** 4;
+  const gb = 1024 ** 3;
+  const mb = 1024 ** 2;
+  if (bytes >= tb) return `${(bytes / tb).toFixed(2)} TB`;
+  if (bytes >= gb) return `${(bytes / gb).toFixed(2)} GB`;
+  if (bytes >= mb) return `${(bytes / mb).toFixed(1)} MB`;
+  return `${Math.max(1, Math.ceil(bytes / 1024))} KB`;
+}
+
+/**
+ * 提取媒体条目的主文件体积（字节），优先取首个有效 MediaSource，缺失时回退 item.Size
+ */
+export function getItemFileSize(item?: EmbyItem | null): number | undefined {
+  if (!item) return undefined;
+  const sourceSize = item.MediaSources?.find(
+    (ms) => typeof ms.Size === 'number' && Number.isFinite(ms.Size) && ms.Size > 0
+  )?.Size;
+  if (typeof sourceSize === 'number') return sourceSize;
+  if (typeof item.Size === 'number' && Number.isFinite(item.Size) && item.Size > 0) {
+    return item.Size;
+  }
+  return undefined;
 }
 
 /**

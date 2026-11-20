@@ -1,10 +1,11 @@
 import { MutableRefObject, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
-import { FormattedDanmakuItem } from '../../api/danmuClient';
+import { FormattedDanmakuItem, RawDanmuComment } from '../../api/danmuClient';
 import {
   OSD_OVERLAY_COMMENTS_EVENT,
   OSD_OVERLAY_COMMAND_EVENT,
+  OSD_OVERLAY_RAW_COMMENTS_EVENT,
   OSD_OVERLAY_READY_EVENT,
   OSD_OVERLAY_SYNC_EVENT,
   OsdCommand,
@@ -16,8 +17,10 @@ interface UseMacOsdOverlaySyncParams {
   isFullscreen: boolean;
   videoError: string | null;
   syncPayload: OsdSyncPayload | null;
+  instantSyncKey: string;
   liveTimeRef: MutableRefObject<number>;
   formattedComments: FormattedDanmakuItem[];
+  rawComments: RawDanmuComment[];
   onCommand: (cmd: OsdCommand) => void;
 }
 
@@ -29,18 +32,22 @@ export function useMacOsdOverlaySync({
   isFullscreen,
   videoError,
   syncPayload,
+  instantSyncKey,
   liveTimeRef,
   formattedComments,
+  rawComments,
   onCommand,
 }: UseMacOsdOverlaySyncParams) {
   const [osdOverlayActive, setOsdOverlayActive] = useState(false);
 
   const osdSyncPayloadRef = useRef<OsdSyncPayload | null>(null);
   const osdCommentsRef = useRef<FormattedDanmakuItem[]>([]);
+  const osdRawCommentsRef = useRef<RawDanmuComment[]>([]);
   const osdCommandHandlerRef = useRef<(cmd: OsdCommand) => void>(() => {});
 
   osdSyncPayloadRef.current = syncPayload;
   osdCommentsRef.current = formattedComments;
+  osdRawCommentsRef.current = rawComments;
   osdCommandHandlerRef.current = onCommand;
 
   useEffect(() => {
@@ -97,6 +104,7 @@ export function useMacOsdOverlaySync({
     const unlistenReady = listen(OSD_OVERLAY_READY_EVENT, () => {
       pushSync();
       void emit(OSD_OVERLAY_COMMENTS_EVENT, osdCommentsRef.current);
+      void emit(OSD_OVERLAY_RAW_COMMENTS_EVENT, osdRawCommentsRef.current);
     });
 
     return () => {
@@ -105,10 +113,26 @@ export function useMacOsdOverlaySync({
     };
   }, [osdOverlayActive, liveTimeRef]);
 
+  // 关键交互状态变化时零延迟即时推送（不再等 200ms 周期）
+  useEffect(() => {
+    if (!osdOverlayActive) return;
+    const payload = osdSyncPayloadRef.current;
+    if (!payload) return;
+    void emit(OSD_OVERLAY_SYNC_EVENT, {
+      ...payload,
+      currentTime: liveTimeRef.current ?? payload.currentTime,
+    });
+  }, [osdOverlayActive, instantSyncKey, liveTimeRef]);
+
   useEffect(() => {
     if (!osdOverlayActive) return;
     void emit(OSD_OVERLAY_COMMENTS_EVENT, formattedComments);
   }, [osdOverlayActive, formattedComments]);
+
+  useEffect(() => {
+    if (!osdOverlayActive) return;
+    void emit(OSD_OVERLAY_RAW_COMMENTS_EVENT, rawComments);
+  }, [osdOverlayActive, rawComments]);
 
   useEffect(() => {
     if (!osdOverlayActive) return;

@@ -24,6 +24,11 @@ interface DanmuState {
   getActiveServer: () => DanmuServerEntry;
   testServerConnection: (id: string) => Promise<{ ok: boolean; latency: number; error?: string }>;
   importServers: (servers: DanmuServerEntry[], activeId?: string, mode?: 'merge' | 'replace') => void;
+  syncServersFromRemote: (
+    servers: DanmuServerEntry[],
+    activeServerId: string,
+    shouldPersist?: boolean
+  ) => void;
 }
 
 const SERVERS_KEY = 'emby_danmu_servers_v2';
@@ -275,6 +280,17 @@ export const useDanmuStore = create<DanmuState>((set, get) => {
         persist(next, nextActive);
         return { servers: next, activeServerId: nextActive };
       });
+    },
+
+    syncServersFromRemote: (nextServers, nextActiveId, shouldPersist = false) => {
+      const resolvedList = nextServers.length > 0 ? nextServers : [DEFAULT_SERVER];
+      const resolvedActive = resolvedList.some((s) => s.id === nextActiveId)
+        ? nextActiveId
+        : resolvedList[0].id;
+      if (shouldPersist) {
+        persist(resolvedList, resolvedActive);
+      }
+      set({ servers: resolvedList, activeServerId: resolvedActive });
     },
   };
 });

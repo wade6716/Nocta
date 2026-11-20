@@ -13,6 +13,8 @@ import {
   EmbyMediaSource,
   buildItemImageUrl,
   ticksToSeconds,
+  formatFileSize,
+  getItemFileSize,
 } from '../../api/embyClient';
 
 interface EpisodeDrawerProps {
@@ -39,13 +41,6 @@ function formatDurationBadge(ticks?: number): string {
   const m = Math.floor(sec / 60);
   const s = sec % 60;
   return `${m}:${s.toString().padStart(2, '0')}`;
-}
-
-function formatSize(bytes?: number): string {
-  if (!bytes || bytes <= 0) return '';
-  const gb = bytes / (1024 * 1024 * 1024);
-  if (gb >= 1) return `${gb.toFixed(2)} GB`;
-  return `${Math.round(bytes / (1024 * 1024))} MB`;
 }
 
 export const EpisodeDrawer: React.FC<EpisodeDrawerProps> = ({
@@ -146,7 +141,7 @@ export const EpisodeDrawer: React.FC<EpisodeDrawerProps> = ({
                         <div className="text-[11px] text-slate-400 font-mono flex items-center space-x-2 mt-0.5">
                           <span>{(ms.Container || 'MKV').toUpperCase()}</span>
                           {resLabel && <span>{resLabel}</span>}
-                          {ms.Size && <span>{formatSize(ms.Size)}</span>}
+                          {formatFileSize(ms.Size) && <span>{formatFileSize(ms.Size)}</span>}
                         </div>
                       </div>
                       {isActive && (
@@ -211,6 +206,7 @@ export const EpisodeDrawer: React.FC<EpisodeDrawerProps> = ({
                         ? Math.min(100, Math.round((posTicks / totalTicks) * 100))
                         : 0;
                     const isPlayed = !!ep.UserData?.Played;
+                    const epSizeLabel = formatFileSize(getItemFileSize(ep));
 
                     return (
                       <button
@@ -265,6 +261,11 @@ export const EpisodeDrawer: React.FC<EpisodeDrawerProps> = ({
                               第 {ep.IndexNumber ?? '?'} 集
                             </span>
                             <div className="flex items-center space-x-1.5">
+                              {epSizeLabel && (
+                                <span className="text-[10px] font-mono text-sky-300/80">
+                                  {epSizeLabel}
+                                </span>
+                              )}
                               {totalTicks > 0 && (
                                 <span className="text-[10px] font-mono text-slate-500">
                                   {formatDurationBadge(totalTicks)}
@@ -279,9 +280,18 @@ export const EpisodeDrawer: React.FC<EpisodeDrawerProps> = ({
                             className={`text-xs font-medium truncate mt-0.5 ${
                               isCurrent ? 'text-white font-semibold' : 'text-slate-200'
                             }`}
+                            title={ep.Name}
                           >
                             {ep.Name}
                           </div>
+                          {ep.Overview && (
+                            <p
+                              className="text-[11px] text-slate-300/80 line-clamp-1 mt-0.5 leading-snug"
+                              title={ep.Overview}
+                            >
+                              {ep.Overview}
+                            </p>
+                          )}
                         </div>
                       </button>
                     );

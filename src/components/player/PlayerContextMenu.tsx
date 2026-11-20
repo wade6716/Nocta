@@ -48,7 +48,7 @@ interface PlayerContextMenuProps {
   onOpenVideoPro: () => void;
   onOpenNetworkPopover: () => void;
   onOpenEpisodeDrawer: () => void;
-  onTogglePin: () => void;
+  onTogglePin?: () => void;
   onTakeScreenshot: () => void;
   onOpenPlaybackInfo: () => void;
   onOpenShortcuts: () => void;
@@ -289,16 +289,18 @@ export const PlayerContextMenu: React.FC<PlayerContextMenuProps> = ({
       <div className="my-1 border-t border-white/[0.08]" />
 
       {/* 工具 */}
-      <button
-        onClick={() => runAndClose(onTogglePin)}
-        className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-white/10 transition cursor-pointer"
-      >
-        <span className="flex items-center space-x-2.5">
-          <Pin className={`w-3.5 h-3.5 ${isPinned ? 'text-sky-400' : 'text-slate-400'}`} />
-          <span>{isPinned ? '取消窗口置顶' : '窗口置顶'}</span>
-        </span>
-        <kbd className="text-[10px] font-mono text-slate-400">T</kbd>
-      </button>
+      {onTogglePin && (
+        <button
+          onClick={() => runAndClose(onTogglePin)}
+          className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-white/10 transition cursor-pointer"
+        >
+          <span className="flex items-center space-x-2.5">
+            <Pin className={`w-3.5 h-3.5 ${isPinned ? 'text-sky-400' : 'text-slate-400'}`} />
+            <span>{isPinned ? '取消窗口置顶' : '窗口置顶'}</span>
+          </span>
+          <kbd className="text-[10px] font-mono text-slate-400">T</kbd>
+        </button>
+      )}
 
       <button
         onClick={() => runAndClose(onTakeScreenshot)}

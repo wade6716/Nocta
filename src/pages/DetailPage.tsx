@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Play, Calendar, Clock, Film } from 'lucide-react';
+import { ArrowLeft, Play, HardDrive } from 'lucide-react';
 import { useAuthStore } from '../stores/useAuthStore';
 import { usePlayerStore } from '../stores/usePlayerStore';
 import {
@@ -10,6 +10,8 @@ import {
   getSeriesEpisodes,
   buildItemImageUrl,
   ticksToSeconds,
+  formatFileSize,
+  getItemFileSize,
 } from '../api/embyClient';
 import { fetchAndPreparePlaybackSession } from '../player/playbackSessionService';
 import { EpisodeGrid } from '../components/media/EpisodeGrid';
@@ -30,8 +32,10 @@ export const DetailPage: React.FC = () => {
   const [episodes, setEpisodes] = useState<EmbyItem[]>([]);
   const [episodesLoading, setEpisodesLoading] = useState(false);
   const [startingPlay, setStartingPlay] = useState(false);
+  const [overviewExpanded, setOverviewExpanded] = useState(false);
 
   useEffect(() => {
+    setOverviewExpanded(false);
     if (!currentServer || !itemId) {
       navigate('/');
       return;
@@ -42,7 +46,7 @@ export const DetailPage: React.FC = () => {
   const loadItemDetail = async () => {
     if (!currentServer || !itemId) return;
     try {
-      if (!item) {
+      if (!item || item.Id !== itemId) {
         setLoading(true);
       }
       const detail = await getItemDetail(
@@ -69,7 +73,14 @@ export const DetailPage: React.FC = () => {
             seasonList.find((s) => s.Id === detail.SeasonId) || seasonList[0];
           setSelectedSeasonId(matchSeason.Id);
           loadEpisodes(targetSeriesId, matchSeason.Id);
+        } else {
+          setSelectedSeasonId(null);
+          setEpisodes([]);
         }
+      } else {
+        setSeasons([]);
+        setSelectedSeasonId(null);
+        setEpisodes([]);
       }
     } catch (err: any) {
       console.error('获取条目详情失败', err);
@@ -138,6 +149,52 @@ export const DetailPage: React.FC = () => {
   }
 
   const isSeries = item.Type === 'Series';
+
+  const fileSizeSummary: { label: string; tooltip: string } | null = (() => {
+    if (!isSeries) {
+      const sourcesWithSize = (item.MediaSources || []).filter(
+        (ms) => typeof ms.Size === 'number' && Number.isFinite(ms.Size) && ms.Size > 0
+      );
+      const primarySize = getItemFileSize(item);
+      if (!primarySize) return null;
+
+      if (sourcesWithSize.length > 1) {
+        const lines = sourcesWithSize.map(
+          (ms) =>
+            `${ms.Name || '默认版本'}${
+              ms.Container ? ` (${ms.Container.toUpperCase()})` : ''
+            }: ${formatFileSize(ms.Size)}`
+        );
+        return {
+          label: `${formatFileSize(primarySize)} · ${sourcesWithSize.length} 版本`,
+          tooltip: lines.join('\n'),
+        };
+      }
+
+      const container = sourcesWithSize[0]?.Container || item.MediaSources?.[0]?.Container;
+      const formatted = formatFileSize(primarySize);
+      return {
+        label: formatted,
+        tooltip: `视频文件体积：${formatted}${container ? ` (${container.toUpperCase()})` : ''}`,
+      };
+    }
+
+    if (episodesLoading || episodes.length === 0) return null;
+    const sizedEpisodes = episodes
+      .map((ep) => getItemFileSize(ep))
+      .filter((size): size is number => typeof size === 'number' && size > 0);
+    if (sizedEpisodes.length === 0) return null;
+
+    const totalBytes = sizedEpisodes.reduce((sum, size) => sum + size, 0);
+    const prefix = seasons.length > 1 ? '本季' : '共';
+    const totalLabel = formatFileSize(totalBytes);
+    const avgLabel = formatFileSize(totalBytes / sizedEpisodes.length);
+    return {
+      label: `${prefix} ${totalLabel}`,
+      tooltip: `当前季共 ${episodes.length} 集（已统计 ${sizedEpisodes.length} 集），总体积 ${totalLabel}，单集均约 ${avgLabel}`,
+    };
+  })();
+
   const backdropUrl = buildItemImageUrl(
     currentServer!.url,
     item.Id,
@@ -196,6 +253,15 @@ export const DetailPage: React.FC = () => {
                   {Math.round(ticksToSeconds(item.RunTimeTicks) / 60)} 分钟
                 </span>
               )}
+              {fileSizeSummary && (
+                <span
+                  className="px-2.5 py-1 rounded-md bg-white/[0.06] border border-white/[0.08] text-slate-200 tabular-nums inline-flex items-center space-x-1.5"
+                  title={fileSizeSummary.tooltip}
+                >
+                  <HardDrive className="w-3.5 h-3.5 text-[#38BDF8] shrink-0" />
+                  <span>{fileSizeSummary.label}</span>
+                </span>
+              )}
               <span className="px-2.5 py-1 rounded-md bg-[#38BDF8]/15 border border-[#38BDF8]/30 text-[#38BDF8] font-bold">
                 4K HDR
               </span>
@@ -217,9 +283,23 @@ export const DetailPage: React.FC = () => {
 
             {/* 剧情简介 */}
             {item.Overview && (
-              <p className="text-sm text-slate-300 leading-relaxed max-w-3xl line-clamp-4">
-                {item.Overview}
-              </p>
+              <div className="max-w-3xl">
+                <p
+                  className={`text-sm text-slate-200/95 leading-7 whitespace-pre-line ${
+                    overviewExpanded ? '' : 'line-clamp-4'
+                  }`}
+                >
+                  {item.Overview}
+                </p>
+                {item.Overview.length > 120 && (
+                  <button
+                    onClick={() => setOverviewExpanded((v) => !v)}
+                    className="mt-1.5 text-xs font-medium text-[#38BDF8] hover:text-sky-300 transition cursor-pointer"
+                  >
+                    {overviewExpanded ? '收起简介' : '展开全部'}
+                  </button>
+                )}
+              </div>
             )}
 
             {/* 电影直接起播按钮 */}
@@ -271,6 +351,7 @@ export const DetailPage: React.FC = () => {
             <EpisodeGrid
               episodes={episodes}
               serverUrl={currentServer!.url}
+              currentEpisodeId={item.Type === 'Episode' ? item.Id : undefined}
               onSelectEpisode={(ep) => startPlayback(ep)}
             />
           )}

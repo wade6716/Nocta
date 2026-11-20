@@ -252,7 +252,7 @@
 - **根因认知**：进入 macOS 原生全屏 Space 后，mpv 的 `FullScreenAuxiliary` 子窗口会被系统抬到主窗口之上，WebView 内渲染的 OSD、弹幕与进度条被视频画面遮挡。这不是 CSS `z-index` 问题，`orderWindow:NSWindowBelow` 与 200ms 层级校正也无法穿透全屏合成器；因此不要在全屏时继续单窗口渲染 OSD。
 - **方案**：仅当 `macOS + engineType === 'mpv' + 原生全屏` 时，由 `PlayerPage` 调用 `open_osd_overlay` 创建第二个 Tauri 窗口 `osd-overlay`（`index.html?osd=1`），透明、无边框、`always_on_top`，并在主线程配置 `NSStatusWindowLevel` + `NSWindowCollectionBehaviorFullScreenAuxiliary`，承载 `PlayerOsd` 与 `DanmakuLayer`；主窗口同时隐藏自身 OSD 与弹幕，退出全屏或离开播放页立即 `close_osd_overlay`。
 - **状态同步协议**（`src/player/osdOverlaySync.ts`）：主窗口每 200ms 广播 `osd:sync`（播放进度、音量、倍速、网速、音字幕轨、弹幕设置等），弹幕列表变化时广播 `osd:comments`，浮层挂载后发 `osd:ready`，浮层操作通过 `osd:command` 回传主窗口统一执行。禁止在浮层里直接操作引擎或 Emby API。
-- **浮层交互**：浮层是 key window，必须自行接管 `Space / ← → / ↑ ↓ / D / F / Esc` 快捷键；`PlayerOsd` 的 `overlayMode` 下隐藏弹幕设置抽屉、画质调校、分集、多版本片源、播放信息与窗口模式按钮（这些 UI 仍挂在主窗口，全屏时不可见）。OSD 隐藏时顶部胶囊必须同步 `pointer-events-none`，否则不可见区域会吞掉视频点击。
+- **浮层交互**：浮层是 key window，必须自行接管全部播放器快捷键与鼠标手势（含 `Space / ← → / ↑ ↓ / D / F / ? / I / N / P / Esc` 分层退出）。`PlayerOsd` 在 `overlayMode` 下**保留全部功能控件**（弹幕抽屉、弹幕开关、画质调校、分集、多版本切换、播放信息、代理浮层与退出全屏还原按钮），仅禁掉原生窗口拖拽区/双击最大化及非全屏专属的 Pin/Min/Close 按钮；主窗口与全屏浮层共享一致的悬浮进度条、右击菜单（全屏下隐藏无意义的窗口置顶项）及弹幕开关 HUD 反馈。OSD 隐藏时顶部胶囊必须同步 `pointer-events-none`，否则不可见区域会吞掉视频点击。
 - **窗口生命周期**：`WebviewUrl::App("index.html?osd=1")` 由 Tauri 通过 `Url::join` 解析；创建后、`show()` 后都要重新应用原生 level/collectionBehavior，防止显示时排序被重置。React StrictMode 会并发触发创建，Rust 侧遇到 `label already exists` 必须视为成功返回。
 - **平台隔离红线**：该浮层只允许 macOS + mpv 引擎启用；Windows/Linux 的 `--wid` 嵌入与 HTML5 引擎必须保持原单窗口渲染路径，禁止无条件调用 `open_osd_overlay`。
 
@@ -302,3 +302,26 @@
   - 统一通过 `src/player/playbackSessionService.ts` 装配零转码直连流地址与音字幕轨道，`DetailPage` 与 `PlayerPage` 共享同一套起播服务，正交业务拆入 `src/player/hooks/` 四个领域 Hooks。
 - **macOS 全屏浮层协议与快捷键对齐**：
   - `OsdSyncPayload` / `OsdCommand` 与 `OsdOverlayPage` 完整同步画质徽标、硬解遥测、代理路由、章节、高能弹幕热力图、A-B 循环及 `MiniActionHud`，并接入全部快捷键（含 200% MPV 音量增益、长按 `→` 倍速、滚轮手势）。
+
+### 22. macOS 全屏浮层完全对等同步与详情分集卡片可读性规范
+- **双 WebView 状态双向防环同步（Store Bridge Pattern）**：
+  - macOS 全屏下 `OsdOverlayPage`（独立窗口 `osd-overlay`）与主窗口 `PlayerPage` 各自拥有独立的 Zustand 内存实例与 `localStorage` 句柄。凡是来自主窗口同步的状态，浮层侧必须通过 `usePlayerStore.applyRemoteStoreSnapshot(patch, false)` 与 `useDanmuStore.syncServersFromRemote(..., false)` 仅更新内存状态、禁止重复写盘；而用户在浮层面板主动修改设置时，通过 `OsdCommand` 回传主窗口执行 `applyRemoteStoreSnapshot(patch, true)` 统一落盘，防止双端相互覆盖或持久化竞态。
+  - **防环回写锁**：主窗口维护 `storeRevisionRef` 与 `applyingOverlayPatchRef`，浮层维护 `lastStoreRevisionRef` 与 `applyingRemoteStoreRef`；仅当远端 Revision 递增且本地未处于回放补丁阶段时才应用快照，彻底避免双向同步引发事件风暴死循环。
+- **高频 60fps UI 与原始弹幕零延迟同步**：
+  - 浮层内的 `DanmakuDrawer`、`VideoProPanel`、`EpisodeDrawer`、`NetworkProxyPopover`、`PlaybackInfoModal`、`ShortcutsModal`、`NetworkProxyModal` 全部 7 个抽屉/弹窗与主窗口保持 100% 一致；高帧率滑块直接读取本窗口 Zustand 状态获得 60fps 跟手响应。
+  - `OSD_OVERLAY_RAW_COMMENTS_EVENT` 独立传输当前匹配到的原始弹幕数组，避免在 200ms 常规心跳中反复序列化大数组；同时 `useMacOsdOverlaySync` 提供 `instantSyncKey` 触发器，切换开关、章节、面板状态时 0 延迟即时同步。
+- **浮层交互护栏与快捷键分层退出**：
+  - 任何面板打开时（`isAnyPanelOpen`），必须冻结 OSD 自动隐藏计时器并暂停视频区滚轮手势（防止调节弹幕列表或画质滑块滚动时误触音量/进度）；视频单击切换播放需保留 240ms 防抖以区分双击全屏还原；`Escape` 遵循「最上层弹窗 -> 侧滑抽屉 -> 右键菜单 -> 退出全屏」严格层级依次收起。
+- **弹幕控制行为全模式统一**：
+  - 无论处于窗口态还是 macOS 原生全屏态，点击底部/顶部弹幕开关图标统一执行 `handleToggleDanmakuWithHud` 并展示 `MiniActionHud` 状态提示，点击顶部右侧弹幕数胶囊或底部「弹幕」按钮统一打开弹幕抽屉。
+- **分集卡片空间分配与长文本可读性规范**：
+  - `EpisodeGrid` 严禁在多列（`xl:grid-cols-4`）下使用左侧固定宽度缩略图 + 右侧窄列文本的横向挤占排版；必须采用「上方 `w-full aspect-video` 宽屏剧照 + 下方全宽标题与最多 3 行高对比度简介（`text-xs text-slate-300/95`）」的影院级竖向卡片布局，确保窄屏与宽屏下分集编号、标题及简介均完整清晰可读。
+  - 详情页主简介及播放器分集抽屉同步保持清晰行高（`leading-7`）与「展开全部 / 收起简介」长文展开能力。
+- **视频文件体积展示与 `.strm` 空体积兼容规范**：
+  - 全应用统一复用 [`embyClient.ts`](file:///d:/wade/code/emby-tauri-player/src/api/embyClient.ts) 导出的 `formatFileSize`（支持 `TB`/`GB`/`MB`/`KB`）与 `getItemFileSize`（优先读取首个有效正值 `MediaSources[].Size`，缺失时回退 `item.Size`）。
+  - 遇到 `.strm` 远程流或未扫描入库的条目时，`Size` 可能为 `undefined` 或 `0`；严格仅在存在有限正数体积时渲染体积徽标，杜绝出现 `0 MB` 或空白占位符。
+  - 详情页在剧集（`Series`）视图下按当前选中季已拉取的分集汇总总体积（`本季`/`共`），切换非剧集条目时须及时清空残留季/集状态；多版本片源主标签附带版本数量并在 `title` 中逐行列出各版本封装与体积。
+- **弹幕源分集标题结构化解析与选集交互规范**：
+  - `danmu_api` 返回的分集标题常带有 `【bilibili1】`、`[qq]` 等平台来源前缀（如 `【bilibili1】第188集`），若直接显示或使用朴素正则 `/(\d+)/` 提取集号，会导致窄列按钮截断只剩 `【bilibili1...` 且同剧延续匹配会把 `bilibili1` 里的 `1` 误认作第 1 集。
+  - 统一通过 [`danmuClient.ts`](file:///d:/wade/code/emby-tauri-player/src/api/danmuClient.ts) 导出的 `parseDanmuEpisodeInfo` 循环剥离平台来源前缀（**严禁**误剥 `SP`/`OVA`/`OAD`/`PV`/`OP`/`ED` 等番外标记）并提取 `platform`、`episodeNumber`、`shortLabel`、`badgeLabel` 与 `subTitle`；[`useDanmakuSession.ts`](file:///d:/wade/code/emby-tauri-player/src/player/hooks/useDanmakuSession.ts) 的同剧延续匹配亦须复用该解析器。
+  - [`DanmakuDrawer.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/DanmakuDrawer.tsx) 在主平台前缀一致时将该标识提升至头部去重胶囊，超 50 集长番剧自动按每 50 集分段并提供全集筛选、当前播放集一键定位，以及「纯数字网格 / 含副标题列表」自适应视图。选定番剧加载完分集后，优先依据当前播放集号（`IndexNumber` 缺失时从标题 `S01E188`/`第188集`/`EP188` 推导兜底）匹配目标分集，先自动切页再用容器级双 `requestAnimationFrame` + `container.scrollTo({ behavior: 'smooth' })` 将目标按钮与分段标签平滑居中（严禁调用 `Element.scrollIntoView()` 以免外层抽屉跳动）；点击分集拉取绑定期间须使用独立的 `bindingEpisodeId` 局部加载态，严禁复用 `loadingEpisodes` 卸载分集列表导致滚动位置归零。

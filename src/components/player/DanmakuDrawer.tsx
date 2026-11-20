@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   X,
   Search,
@@ -20,13 +20,18 @@ import {
   ListFilter,
   ShieldBan,
   Flame,
+  LayoutGrid,
+  List,
+  LocateFixed,
 } from 'lucide-react';
 import {
   DanmuAnimeSearchResult,
+  DanmuEpisode,
   searchDanmuAnime,
   getDanmuBangumiEpisodes,
   fetchCommentsById,
   fetchCommentsByVideoUrl,
+  parseDanmuEpisodeInfo,
   RawDanmuComment,
 } from '../../api/danmuClient';
 import { MpvDanmakuBridge } from './MpvDanmakuBridge';
@@ -42,6 +47,7 @@ interface DanmakuDrawerProps {
   seriesId?: string;
   itemTitle?: string;
   seriesName?: string;
+  episodeNumber?: number;
   currentMatchedTitle?: string;
   sourceCommentCount?: number;
   sourceDuration?: number;
@@ -56,6 +62,8 @@ interface DanmakuDrawerProps {
   ) => void;
   onReAutoMatch?: () => void;
 }
+
+const EPISODES_PER_PAGE = 50;
 
 function formatSec(sec?: number): string {
   if (sec === undefined || Number.isNaN(sec)) return '--:--';
@@ -73,6 +81,7 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
   seriesId,
   itemTitle = '',
   seriesName = '',
+  episodeNumber,
   currentMatchedTitle,
   sourceCommentCount = 0,
   sourceDuration,
@@ -97,6 +106,19 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
   const [searchResults, setSearchResults] = useState<DanmuAnimeSearchResult[]>([]);
   const [selectedAnime, setSelectedAnime] = useState<DanmuAnimeSearchResult | null>(null);
   const [loadingEpisodes, setLoadingEpisodes] = useState(false);
+  const [bindingEpisodeId, setBindingEpisodeId] = useState<string | number | null>(null);
+  const [episodeFilter, setEpisodeFilter] = useState('');
+  const [episodeRangePage, setEpisodeRangePage] = useState(0);
+  const [episodeViewModeOverride, setEpisodeViewModeOverride] = useState<'grid' | 'list' | null>(
+    null
+  );
+  const [manualScrollTick, setManualScrollTick] = useState(0);
+  const episodeBtnRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const episodeListContainerRef = useRef<HTMLDivElement | null>(null);
+  const rangeTabsContainerRef = useRef<HTMLDivElement | null>(null);
+  const rangeTabRefs = useRef<Record<number, HTMLButtonElement | null>>({});
+  const autoScrolledKeyRef = useRef<string | null>(null);
+  const animeLoadReqIdRef = useRef(0);
   const [directUrl, setDirectUrl] = useState('');
   const [loadingUrl, setLoadingUrl] = useState(false);
   const [bindSuccessToast, setBindSuccessToast] = useState<string | null>(null);
@@ -131,6 +153,228 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
     }
   }, [defaultKeyword]);
 
+  // 关闭抽屉时重置自动滚动锁，确保下次重新打开仍可平滑滚回匹配集
+  useEffect(() => {
+    if (!isOpen) {
+      autoScrolledKeyRef.current = null;
+    }
+  }, [isOpen]);
+
+  // 当前播放集号推导：优先使用 Emby IndexNumber，缺失时从标题提取兜底
+  const effectiveEpisodeNumber = useMemo(() => {
+    if (typeof episodeNumber === 'number' && Number.isFinite(episodeNumber) && episodeNumber > 0) {
+      return episodeNumber;
+    }
+    const rawTitle = (itemTitle || '').trim();
+    if (!rawTitle) return undefined;
+    const patterns = [
+      /S\d+E0*(\d+)/i,
+      /第\s*0*(\d+)\s*(?:集|话|話|期|回)/,
+      /(?:^|[\s._-])(?:EP|E)0*(\d+)(?![a-zA-Z0-9])/i,
+    ];
+    for (const re of patterns) {
+      const match = rawTitle.match(re);
+      if (match) {
+        const num = Number(match[1]);
+        if (Number.isFinite(num) && num > 0 && num < 10000) {
+          return num;
+        }
+      }
+    }
+    return undefined;
+  }, [episodeNumber, itemTitle]);
+
+  // 结构化解析当前所选番剧分集：去前缀、提集号、判断默认视图与当前集定位
+  const parsedEpisodes = useMemo(() => {
+    const list = selectedAnime?.episodes || [];
+    return list.map((ep: DanmuEpisode, index: number) => ({
+      ep,
+      index,
+      parsed: parseDanmuEpisodeInfo(ep, index),
+    }));
+  }, [selectedAnime?.episodes]);
+
+  const dominantPlatform = useMemo(() => {
+    if (parsedEpisodes.length === 0) return null;
+    const counts = new Map<string, number>();
+    for (const entry of parsedEpisodes) {
+      if (entry.parsed.platform) {
+        counts.set(entry.parsed.platform, (counts.get(entry.parsed.platform) || 0) + 1);
+      }
+    }
+    if (counts.size === 0) return null;
+    let topPlatform = '';
+    let topCount = 0;
+    for (const [p, count] of counts.entries()) {
+      if (count > topCount) {
+        topPlatform = p;
+        topCount = count;
+      }
+    }
+    return topCount >= Math.ceil(parsedEpisodes.length * 0.5) ? topPlatform : null;
+  }, [parsedEpisodes]);
+
+  const hasSubtitles = useMemo(
+    () => parsedEpisodes.some((entry) => entry.parsed.subTitle.length > 0),
+    [parsedEpisodes]
+  );
+
+  const episodeViewMode: 'grid' | 'list' =
+    episodeViewModeOverride ?? (hasSubtitles ? 'list' : 'grid');
+
+  // 优先按当前播放集号匹配（兼容选新番或纠错换源场景），未命中再回退已绑定 episodeId
+  const currentMatchedEpIndex = useMemo(() => {
+    if (parsedEpisodes.length === 0) return -1;
+    if (effectiveEpisodeNumber !== undefined && effectiveEpisodeNumber > 0) {
+      const numIdx = parsedEpisodes.findIndex(
+        (entry) => entry.parsed.episodeNumber === effectiveEpisodeNumber
+      );
+      if (numIdx >= 0) return numIdx;
+      if (parsedEpisodes[effectiveEpisodeNumber - 1]) return effectiveEpisodeNumber - 1;
+    }
+    if (currentBinding?.episodeId !== undefined) {
+      const boundIdx = parsedEpisodes.findIndex(
+        (entry) => String(entry.ep.episodeId) === String(currentBinding.episodeId)
+      );
+      if (boundIdx >= 0) return boundIdx;
+    }
+    return -1;
+  }, [parsedEpisodes, effectiveEpisodeNumber, currentBinding?.episodeId]);
+
+  useEffect(() => {
+    setEpisodeFilter('');
+    setEpisodeViewModeOverride(null);
+    autoScrolledKeyRef.current = null;
+    episodeBtnRefs.current = {};
+  }, [selectedAnime?.animeId]);
+
+  useEffect(() => {
+    if (parsedEpisodes.length === 0) {
+      setEpisodeRangePage(0);
+      return;
+    }
+    if (currentMatchedEpIndex >= 0) {
+      setEpisodeRangePage(Math.floor(currentMatchedEpIndex / EPISODES_PER_PAGE));
+    } else {
+      setEpisodeRangePage(0);
+    }
+  }, [selectedAnime?.animeId, parsedEpisodes.length, currentMatchedEpIndex]);
+
+  const totalEpisodes = parsedEpisodes.length;
+  const totalEpisodePages = Math.ceil(totalEpisodes / EPISODES_PER_PAGE);
+  const safeEpisodeRangePage = Math.min(
+    episodeRangePage,
+    Math.max(0, totalEpisodePages - 1)
+  );
+  const trimmedEpisodeFilter = episodeFilter.trim().toLowerCase();
+
+  const filteredEpisodes = useMemo(() => {
+    if (trimmedEpisodeFilter) {
+      return parsedEpisodes.filter(({ ep, index, parsed }) => {
+        const seq = String(index + 1);
+        return (
+          parsed.shortLabel.toLowerCase().includes(trimmedEpisodeFilter) ||
+          parsed.badgeLabel.toLowerCase().includes(trimmedEpisodeFilter) ||
+          parsed.subTitle.toLowerCase().includes(trimmedEpisodeFilter) ||
+          ep.episodeTitle.toLowerCase().includes(trimmedEpisodeFilter) ||
+          seq.includes(trimmedEpisodeFilter)
+        );
+      });
+    }
+    if (totalEpisodes > EPISODES_PER_PAGE) {
+      const start = safeEpisodeRangePage * EPISODES_PER_PAGE;
+      return parsedEpisodes.slice(start, start + EPISODES_PER_PAGE);
+    }
+    return parsedEpisodes;
+  }, [parsedEpisodes, trimmedEpisodeFilter, totalEpisodes, safeEpisodeRangePage]);
+
+  // 选中弹幕源加载分集完毕后，自动将容器与分页条平滑滚动居中到匹配集数
+  useEffect(() => {
+    if (
+      !isOpen ||
+      activeTab !== 'match' ||
+      !selectedAnime ||
+      loadingEpisodes ||
+      totalEpisodes === 0 ||
+      currentMatchedEpIndex < 0 ||
+      trimmedEpisodeFilter
+    ) {
+      return;
+    }
+
+    const targetPage = Math.floor(currentMatchedEpIndex / EPISODES_PER_PAGE);
+    if (safeEpisodeRangePage !== targetPage) {
+      return;
+    }
+
+    const targetEntry = parsedEpisodes[currentMatchedEpIndex];
+    if (!targetEntry) return;
+
+    const scrollKey = `${selectedAnime.animeId}:${totalEpisodes}:${currentMatchedEpIndex}:${manualScrollTick}`;
+    if (autoScrolledKeyRef.current === scrollKey) {
+      return;
+    }
+    autoScrolledKeyRef.current = scrollKey;
+
+    const targetEpisodeKey = String(targetEntry.ep.episodeId);
+    let raf1 = 0;
+    let raf2 = 0;
+
+    raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        const container = episodeListContainerRef.current;
+        const targetEl = episodeBtnRefs.current[targetEpisodeKey];
+        if (container && targetEl) {
+          const containerRect = container.getBoundingClientRect();
+          const targetRect = targetEl.getBoundingClientRect();
+          const offsetWithinContainer = targetRect.top - containerRect.top;
+          const targetTop =
+            container.scrollTop +
+            offsetWithinContainer -
+            container.clientHeight / 2 +
+            targetRect.height / 2;
+          container.scrollTo({
+            top: Math.max(0, targetTop),
+            behavior: 'smooth',
+          });
+        }
+
+        const rangeContainer = rangeTabsContainerRef.current;
+        const rangeTabEl = rangeTabRefs.current[targetPage];
+        if (rangeContainer && rangeTabEl) {
+          const rangeRect = rangeContainer.getBoundingClientRect();
+          const tabRect = rangeTabEl.getBoundingClientRect();
+          const offsetLeft = tabRect.left - rangeRect.left;
+          const targetLeft =
+            rangeContainer.scrollLeft +
+            offsetLeft -
+            rangeContainer.clientWidth / 2 +
+            tabRect.width / 2;
+          rangeContainer.scrollTo({
+            left: Math.max(0, targetLeft),
+            behavior: 'smooth',
+          });
+        }
+      });
+    });
+
+    return () => {
+      if (raf1) cancelAnimationFrame(raf1);
+      if (raf2) cancelAnimationFrame(raf2);
+    };
+  }, [
+    isOpen,
+    activeTab,
+    selectedAnime?.animeId,
+    loadingEpisodes,
+    totalEpisodes,
+    currentMatchedEpIndex,
+    safeEpisodeRangePage,
+    trimmedEpisodeFilter,
+    manualScrollTick,
+    parsedEpisodes,
+  ]);
+
   // 弹幕列表索引与检索（将 currentTime 量化为 5 秒分桶，避免播放时每秒多次触发全量重排）
   const nearTimeBucket = nearCurrentOnly ? Math.floor(currentTime / 5) * 5 : 0;
   const parsedDanmuList = useMemo(() => {
@@ -153,6 +397,13 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
 
   if (!isOpen) return null;
 
+  const handleLocateCurrentEpisode = () => {
+    if (currentMatchedEpIndex < 0) return;
+    setEpisodeFilter('');
+    setEpisodeRangePage(Math.floor(currentMatchedEpIndex / EPISODES_PER_PAGE));
+    setManualScrollTick((n) => n + 1);
+  };
+
   const showToast = (msg: string) => {
     setBindSuccessToast(msg);
     setTimeout(() => setBindSuccessToast(null), 3500);
@@ -162,11 +413,13 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!searchKeyword.trim()) return;
+    animeLoadReqIdRef.current += 1;
     try {
       setSearching(true);
       const res = await searchDanmuAnime(activeServer, searchKeyword.trim());
       setSearchResults(res.animes || []);
       setSelectedAnime(null);
+      setLoadingEpisodes(false);
     } catch (err: any) {
       alert(`搜索失败: ${err.message || '请检查弹幕 API 节点是否连通'}`);
     } finally {
@@ -176,17 +429,22 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
 
   // Select Anime to fetch episodes
   const handleSelectAnime = async (anime: DanmuAnimeSearchResult) => {
+    const reqId = ++animeLoadReqIdRef.current;
     try {
       setLoadingEpisodes(true);
       setSelectedAnime(anime);
       const res = await getDanmuBangumiEpisodes(activeServer, anime.animeId);
+      if (reqId !== animeLoadReqIdRef.current) return;
       if (res?.bangumi?.episodes) {
         setSelectedAnime({ ...anime, episodes: res.bangumi.episodes });
       }
     } catch (err: any) {
+      if (reqId !== animeLoadReqIdRef.current) return;
       alert(`获取分集失败: ${err.message}`);
     } finally {
-      setLoadingEpisodes(false);
+      if (reqId === animeLoadReqIdRef.current) {
+        setLoadingEpisodes(false);
+      }
     }
   };
 
@@ -195,9 +453,9 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
     episodeId: number | string;
     episodeTitle: string;
   }) => {
-    if (!selectedAnime) return;
+    if (!selectedAnime || bindingEpisodeId !== null) return;
     try {
-      setLoadingEpisodes(true);
+      setBindingEpisodeId(ep.episodeId);
       const res = await fetchCommentsById(activeServer, ep.episodeId);
 
       // Persist item binding
@@ -236,7 +494,7 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
     } catch (err: any) {
       alert(`加载弹幕失败: ${err.message}`);
     } finally {
-      setLoadingEpisodes(false);
+      setBindingEpisodeId(null);
     }
   };
 
@@ -320,7 +578,7 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
   return (
     <>
       <div className="fixed inset-0 z-20 bg-transparent" onClick={onClose} />
-      <div className="fixed top-16 bottom-24 right-6 z-30 w-80 md:w-96 rounded-2xl bg-[#0B0E17]/88 backdrop-blur-2xl border border-white/[0.12] shadow-[0_20px_50px_rgba(0,0,0,0.75)] flex flex-col text-gray-200 select-none animate-in slide-in-from-right duration-200 overflow-hidden">
+      <div className="fixed top-16 bottom-24 right-6 z-30 w-80 sm:w-[400px] lg:w-[430px] rounded-2xl bg-[#0B0E17]/88 backdrop-blur-2xl border border-white/[0.12] shadow-[0_20px_50px_rgba(0,0,0,0.75)] flex flex-col text-gray-200 select-none animate-in slide-in-from-right duration-200 overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-white/10 bg-white/[0.02]">
           <div className="flex items-center space-x-2">
@@ -516,7 +774,7 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
                 </form>
 
                 {searchResults.length > 0 && !selectedAnime && (
-                  <div className="max-h-60 overflow-y-auto space-y-1.5 rounded-xl bg-black/30 p-2.5 border border-white/10">
+                  <div className="max-h-64 overflow-y-auto space-y-1.5 rounded-xl bg-black/30 p-2.5 border border-white/10 custom-scrollbar">
                     <span className="text-[11px] text-gray-400 px-2 block mb-1">
                       搜索到 {searchResults.length} 个结果，点击选择番剧：
                     </span>
@@ -524,12 +782,13 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
                       <button
                         key={item.animeId}
                         onClick={() => handleSelectAnime(item)}
-                        className="w-full text-left px-3 py-2.5 rounded-lg text-sm hover:bg-white/10 transition flex items-center justify-between group cursor-pointer"
+                        className="w-full text-left px-3 py-2.5 rounded-lg text-sm hover:bg-white/10 transition flex items-start justify-between gap-2 group cursor-pointer"
+                        title={item.animeTitle}
                       >
-                        <span className="truncate text-gray-200 group-hover:text-white font-medium">
+                        <span className="text-gray-200 group-hover:text-white font-medium line-clamp-2 leading-snug">
                           {item.animeTitle}
                         </span>
-                        <span className="text-xs text-primary/80 bg-primary/10 px-2 py-0.5 rounded-md flex-shrink-0 ml-2">
+                        <span className="text-[11px] text-primary/85 bg-primary/10 px-2 py-0.5 rounded-md shrink-0 mt-0.5">
                           {item.type || '番剧'}
                         </span>
                       </button>
@@ -539,16 +798,29 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
 
                 {selectedAnime && (
                   <div className="space-y-3 p-3.5 bg-black/40 rounded-xl border border-primary/30">
-                    <div className="flex items-center justify-between pb-2 border-b border-white/10">
-                      <div>
-                        <span className="text-xs text-gray-400 block">选择并绑定分集:</span>
-                        <span className="text-sm font-semibold text-primary">
+                    <div className="flex items-start justify-between gap-2 pb-2.5 border-b border-white/10">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-1.5 mb-1">
+                          <span className="text-[11px] text-gray-400">
+                            已选番剧{totalEpisodes > 0 ? ` · 共 ${totalEpisodes} 集` : ''}
+                          </span>
+                          {dominantPlatform && (
+                            <span className="px-1.5 py-0.5 rounded bg-sky-500/15 border border-sky-400/25 text-[10px] font-mono text-sky-300">
+                              来源: {dominantPlatform}
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-sm font-semibold text-primary leading-snug">
                           《{selectedAnime.animeTitle}》
-                        </span>
+                        </div>
                       </div>
                       <button
-                        onClick={() => setSelectedAnime(null)}
-                        className="px-2 py-1 rounded bg-white/5 hover:bg-white/10 text-xs text-gray-400 hover:text-white cursor-pointer"
+                        onClick={() => {
+                          animeLoadReqIdRef.current += 1;
+                          setLoadingEpisodes(false);
+                          setSelectedAnime(null);
+                        }}
+                        className="shrink-0 whitespace-nowrap px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-xs text-gray-300 hover:text-white transition border border-white/10 cursor-pointer"
                       >
                         重新选番
                       </button>
@@ -559,23 +831,276 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
                         <RefreshCw className="w-4 h-4 animate-spin text-primary" />
                         <span className="text-xs">正在获取分集列表...</span>
                       </div>
+                    ) : totalEpisodes === 0 ? (
+                      <div className="py-6 text-center text-xs text-gray-500">
+                        该番剧源暂无可用分集列表
+                      </div>
                     ) : (
-                      <div className="space-y-1.5">
-                        <span className="text-[11px] text-gray-400">
-                          点击分集立即拉取弹幕并绑定（同剧集后续分集自动延续）：
+                      <div className="space-y-2.5">
+                        <span className="text-[11px] text-gray-400 block leading-relaxed">
+                          {currentMatchedEpIndex >= 0 ? (
+                            <>
+                              已自动匹配至{' '}
+                              <span className="text-sky-300 font-semibold font-mono">
+                                {parsedEpisodes[currentMatchedEpIndex]?.parsed.badgeLabel}
+                              </span>
+                              ，点击分集立即拉取并绑定（同剧集后续自动延续）：
+                            </>
+                          ) : (
+                            '点击分集立即拉取弹幕并绑定（同剧集后续分集自动延续）：'
+                          )}
                         </span>
-                        <div className="grid grid-cols-3 gap-2 max-h-48 overflow-y-auto pt-1 pr-1">
-                          {selectedAnime.episodes?.map((ep) => (
+
+                        {/* 筛选、定位当前集与视图切换工具栏 */}
+                        <div className="flex items-center gap-1.5">
+                          <div className="relative flex-1 min-w-0">
+                            <Search className="w-3.5 h-3.5 text-gray-500 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                            <input
+                              type="text"
+                              value={episodeFilter}
+                              onChange={(e) => setEpisodeFilter(e.target.value)}
+                              placeholder="筛选集数/标题，如 188..."
+                              className="w-full bg-black/50 border border-white/10 rounded-lg pl-7 pr-6 py-1.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-primary"
+                            />
+                            {episodeFilter && (
+                              <button
+                                type="button"
+                                onClick={() => setEpisodeFilter('')}
+                                className="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white p-0.5 cursor-pointer"
+                                title="清空筛选"
+                              >
+                                <X className="w-3 h-3" />
+                              </button>
+                            )}
+                          </div>
+
+                          {currentMatchedEpIndex >= 0 && (
                             <button
-                              key={ep.episodeId}
-                              onClick={() => handleSelectEpisodeAndBind(ep)}
-                              className="px-2.5 py-2 bg-white/5 hover:bg-primary hover:text-white text-gray-200 text-xs rounded-lg transition text-left truncate border border-white/5 cursor-pointer"
-                              title={ep.episodeTitle}
+                              type="button"
+                              onClick={handleLocateCurrentEpisode}
+                              className="shrink-0 inline-flex items-center gap-1 px-2 py-1.5 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 text-sky-300 border border-sky-400/25 text-[11px] font-medium transition cursor-pointer whitespace-nowrap"
+                              title={`定位到当前播放集 (${parsedEpisodes[currentMatchedEpIndex]?.parsed.badgeLabel})`}
                             >
-                              {ep.episodeTitle}
+                              <LocateFixed className="w-3.5 h-3.5" />
+                              <span>定位</span>
                             </button>
-                          ))}
+                          )}
+
+                          <div className="shrink-0 flex items-center bg-black/50 p-0.5 rounded-lg border border-white/10">
+                            <button
+                              type="button"
+                              onClick={() => setEpisodeViewModeOverride('grid')}
+                              className={`p-1.5 rounded-md transition cursor-pointer ${
+                                episodeViewMode === 'grid'
+                                  ? 'bg-primary text-white'
+                                  : 'text-gray-400 hover:text-white'
+                              }`}
+                              title="集号网格视图"
+                            >
+                              <LayoutGrid className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEpisodeViewModeOverride('list')}
+                              className={`p-1.5 rounded-md transition cursor-pointer ${
+                                episodeViewMode === 'list'
+                                  ? 'bg-primary text-white'
+                                  : 'text-gray-400 hover:text-white'
+                              }`}
+                              title="分集列表视图"
+                            >
+                              <List className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         </div>
+
+                        {/* 超过 50 集时展示分段范围标签 */}
+                        {!trimmedEpisodeFilter && totalEpisodePages > 1 && (
+                          <div
+                            ref={rangeTabsContainerRef}
+                            className="flex items-center gap-1.5 overflow-x-auto pb-1 custom-scrollbar"
+                          >
+                            {Array.from({ length: totalEpisodePages }, (_, pageIdx) => {
+                              const startEp = pageIdx * EPISODES_PER_PAGE + 1;
+                              const endEp = Math.min(
+                                (pageIdx + 1) * EPISODES_PER_PAGE,
+                                totalEpisodes
+                              );
+                              const isActivePage = pageIdx === safeEpisodeRangePage;
+                              return (
+                                <button
+                                  key={pageIdx}
+                                  ref={(el) => {
+                                    rangeTabRefs.current[pageIdx] = el;
+                                  }}
+                                  type="button"
+                                  onClick={() => setEpisodeRangePage(pageIdx)}
+                                  className={`shrink-0 px-2.5 py-1 rounded-md text-[11px] font-mono font-medium transition cursor-pointer border ${
+                                    isActivePage
+                                      ? 'bg-primary/20 border-primary text-primary font-semibold'
+                                      : 'bg-white/5 border-white/10 text-gray-400 hover:text-white hover:bg-white/10'
+                                  }`}
+                                >
+                                  {startEp}-{endEp}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {filteredEpisodes.length === 0 ? (
+                          <div className="py-6 text-center text-xs text-gray-500">
+                            未找到匹配「{episodeFilter.trim()}」的分集
+                          </div>
+                        ) : episodeViewMode === 'list' ? (
+                          <div
+                            ref={episodeListContainerRef}
+                            className="space-y-1.5 max-h-72 overflow-y-auto pt-0.5 pr-1 custom-scrollbar"
+                          >
+                            {filteredEpisodes.map(({ ep, index, parsed }) => {
+                              const isBound =
+                                currentBinding?.episodeId !== undefined &&
+                                String(currentBinding.episodeId) === String(ep.episodeId);
+                              const isCurrentEp =
+                                effectiveEpisodeNumber !== undefined &&
+                                effectiveEpisodeNumber > 0 &&
+                                (parsed.episodeNumber === effectiveEpisodeNumber ||
+                                  (parsed.episodeNumber === undefined &&
+                                    index === effectiveEpisodeNumber - 1));
+                              const isBindingThis =
+                                bindingEpisodeId !== null &&
+                                String(bindingEpisodeId) === String(ep.episodeId);
+                              const hoverTitle = [
+                                parsed.badgeLabel,
+                                parsed.subTitle,
+                                ep.episodeTitle !== parsed.cleanTitle
+                                  ? `原始: ${ep.episodeTitle}`
+                                  : null,
+                              ]
+                                .filter(Boolean)
+                                .join(' · ');
+
+                              return (
+                                <button
+                                  key={ep.episodeId}
+                                  ref={(el) => {
+                                    episodeBtnRefs.current[String(ep.episodeId)] = el;
+                                  }}
+                                  disabled={bindingEpisodeId !== null}
+                                  onClick={() => handleSelectEpisodeAndBind(ep)}
+                                  title={hoverTitle}
+                                  className={`w-full px-2.5 py-2 rounded-lg border transition flex items-center gap-2 text-left group cursor-pointer disabled:cursor-wait ${
+                                    isBindingThis
+                                      ? 'bg-primary/25 border-primary text-white'
+                                      : isBound
+                                      ? 'bg-emerald-500/15 border-emerald-400/50 text-emerald-100'
+                                      : isCurrentEp
+                                      ? 'bg-sky-500/15 border-sky-400/50 text-sky-100'
+                                      : 'bg-white/5 hover:bg-primary/80 hover:border-primary/60 text-gray-200 border-white/10 disabled:opacity-60'
+                                  }`}
+                                >
+                                  <span
+                                    className={`shrink-0 min-w-[3.75rem] px-2 py-0.5 rounded text-[11px] font-mono font-bold tabular-nums text-center ${
+                                      isBound
+                                        ? 'bg-emerald-500/25 text-emerald-300'
+                                        : isCurrentEp
+                                        ? 'bg-sky-500/25 text-sky-300'
+                                        : 'bg-black/40 text-primary group-hover:bg-white/20 group-hover:text-white'
+                                    }`}
+                                  >
+                                    {parsed.badgeLabel}
+                                  </span>
+
+                                  <span className="flex-1 min-w-0 truncate text-xs text-gray-200 group-hover:text-white">
+                                    {parsed.subTitle || parsed.cleanTitle || ep.episodeTitle}
+                                  </span>
+
+                                  {!dominantPlatform && parsed.platform && (
+                                    <span className="shrink-0 text-[10px] font-mono text-gray-400 bg-black/35 px-1.5 py-0.5 rounded">
+                                      {parsed.platform}
+                                    </span>
+                                  )}
+
+                                  {isBindingThis ? (
+                                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-primary shrink-0" />
+                                  ) : isBound ? (
+                                    <span className="shrink-0 px-1.5 py-0.5 rounded bg-emerald-500/25 text-emerald-300 text-[10px] font-semibold">
+                                      已绑定
+                                    </span>
+                                  ) : isCurrentEp ? (
+                                    <span className="shrink-0 px-1.5 py-0.5 rounded bg-sky-500/25 text-sky-300 text-[10px] font-semibold">
+                                      当前集
+                                    </span>
+                                  ) : null}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div
+                            ref={episodeListContainerRef}
+                            className="grid grid-cols-4 sm:grid-cols-5 gap-1.5 max-h-72 overflow-y-auto pt-0.5 pr-1 custom-scrollbar"
+                          >
+                            {filteredEpisodes.map(({ ep, index, parsed }) => {
+                              const isBound =
+                                currentBinding?.episodeId !== undefined &&
+                                String(currentBinding.episodeId) === String(ep.episodeId);
+                              const isCurrentEp =
+                                effectiveEpisodeNumber !== undefined &&
+                                effectiveEpisodeNumber > 0 &&
+                                (parsed.episodeNumber === effectiveEpisodeNumber ||
+                                  (parsed.episodeNumber === undefined &&
+                                    index === effectiveEpisodeNumber - 1));
+                              const isBindingThis =
+                                bindingEpisodeId !== null &&
+                                String(bindingEpisodeId) === String(ep.episodeId);
+                              const hoverTitle = [
+                                parsed.badgeLabel,
+                                parsed.subTitle,
+                                ep.episodeTitle !== parsed.cleanTitle
+                                  ? `原始: ${ep.episodeTitle}`
+                                  : null,
+                                isBound ? '[已绑定]' : isCurrentEp ? '[当前播放集]' : null,
+                              ]
+                                .filter(Boolean)
+                                .join(' · ');
+
+                              return (
+                                <button
+                                  key={ep.episodeId}
+                                  ref={(el) => {
+                                    episodeBtnRefs.current[String(ep.episodeId)] = el;
+                                  }}
+                                  disabled={bindingEpisodeId !== null}
+                                  onClick={() => handleSelectEpisodeAndBind(ep)}
+                                  title={hoverTitle}
+                                  className={`relative px-1.5 py-2 rounded-lg text-xs font-mono font-semibold tabular-nums truncate text-center transition border cursor-pointer disabled:cursor-wait ${
+                                    isBindingThis
+                                      ? 'bg-primary/30 border-primary text-white'
+                                      : isBound
+                                      ? 'bg-emerald-500/20 border-emerald-400/60 text-emerald-200 hover:bg-emerald-500/35'
+                                      : isCurrentEp
+                                      ? 'bg-sky-500/20 border-sky-400/70 text-sky-200 ring-1 ring-sky-400/40 hover:bg-sky-500/35'
+                                      : 'bg-white/5 hover:bg-primary hover:text-white hover:border-primary text-gray-100 border-white/10 disabled:opacity-60'
+                                  }`}
+                                >
+                                  {isBindingThis ? (
+                                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-primary mx-auto" />
+                                  ) : (
+                                    parsed.shortLabel
+                                  )}
+                                  {!isBindingThis && (isBound || isCurrentEp) && (
+                                    <span
+                                      className={`absolute top-1 right-1 w-1.5 h-1.5 rounded-full ${
+                                        isBound ? 'bg-emerald-400' : 'bg-sky-400'
+                                      }`}
+                                    />
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

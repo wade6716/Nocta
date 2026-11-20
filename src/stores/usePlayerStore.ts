@@ -40,7 +40,11 @@ export interface SeriesDanmakuBinding {
   seriesId: string;
   animeId: string | number;
   animeTitle: string;
-  episodes: Array<{ episodeId: number | string; episodeTitle: string }>;
+  episodes: Array<{
+    episodeId: number | string;
+    episodeTitle: string;
+    episodeNumber?: string | number;
+  }>;
   boundAt: number;
 }
 
@@ -88,6 +92,19 @@ export interface SkipSettings {
   skipIntroEnabled: boolean;
   skipOutroEnabled: boolean;
   skipOutroAction: SkipOutroAction;
+}
+
+export interface PlayerOverlayStorePatch {
+  danmakuSettings?: DanmakuSettings;
+  playerPreferences?: PlayerPreferences;
+  videoLayouts?: Record<string, VideoLayoutConfig>;
+  itemOffsets?: Record<string, number>;
+  seriesOffsets?: Record<string, number>;
+  danmakuBindings?: Record<string, DanmakuBinding>;
+  seriesDanmakuBindings?: Record<string, SeriesDanmakuBinding>;
+  skipSegments?: Record<string, SkipSegments>;
+  skipSettings?: SkipSettings;
+  engineType?: 'mpv' | 'html5';
 }
 
 export const DEFAULT_SKIP_SETTINGS: SkipSettings = {
@@ -173,6 +190,7 @@ interface PlayerState {
   clearSkipSegment: (key: string, field: 'introEnd' | 'outroStart') => void;
   updateSkipSettings: (settings: Partial<SkipSettings>) => void;
   setEngineType: (type: 'mpv' | 'html5') => void;
+  applyRemoteStoreSnapshot: (patch: PlayerOverlayStorePatch, persist?: boolean) => void;
   resetPlayer: () => void;
   importPlayerConfigs: (
     configs: {
@@ -834,6 +852,55 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         skipSettings: nextSkipSettings,
         engineType: nextEngine,
       };
+    });
+  },
+
+  applyRemoteStoreSnapshot: (patch, shouldPersist = false) => {
+    set((state) => {
+      const next: Partial<PlayerState> = {};
+
+      if (patch.danmakuSettings !== undefined) {
+        next.danmakuSettings = patch.danmakuSettings;
+        if (shouldPersist) saveStorageDebounced(SETTINGS_KEY, patch.danmakuSettings);
+      }
+      if (patch.playerPreferences !== undefined) {
+        next.playerPreferences = patch.playerPreferences;
+        if (shouldPersist) saveStorageDebounced(PREFERENCES_KEY, patch.playerPreferences);
+      }
+      if (patch.videoLayouts !== undefined) {
+        next.videoLayouts = patch.videoLayouts;
+        if (shouldPersist) saveStorageDebounced(VIDEO_LAYOUTS_KEY, patch.videoLayouts);
+      }
+      if (patch.itemOffsets !== undefined) {
+        next.itemOffsets = patch.itemOffsets;
+        if (shouldPersist) saveStorageDebounced(OFFSETS_KEY, patch.itemOffsets);
+      }
+      if (patch.seriesOffsets !== undefined) {
+        next.seriesOffsets = patch.seriesOffsets;
+        if (shouldPersist) saveStorageDebounced(SERIES_OFFSETS_KEY, patch.seriesOffsets);
+      }
+      if (patch.danmakuBindings !== undefined) {
+        next.danmakuBindings = patch.danmakuBindings;
+        if (shouldPersist) saveStorageImmediate(BINDINGS_KEY, patch.danmakuBindings);
+      }
+      if (patch.seriesDanmakuBindings !== undefined) {
+        next.seriesDanmakuBindings = patch.seriesDanmakuBindings;
+        if (shouldPersist) saveStorageImmediate(SERIES_BINDINGS_KEY, patch.seriesDanmakuBindings);
+      }
+      if (patch.skipSegments !== undefined) {
+        next.skipSegments = patch.skipSegments;
+        if (shouldPersist) saveStorageDebounced(SKIP_SEGMENTS_KEY, patch.skipSegments);
+      }
+      if (patch.skipSettings !== undefined) {
+        next.skipSettings = patch.skipSettings;
+        if (shouldPersist) saveStorageDebounced(SKIP_SETTINGS_KEY, patch.skipSettings);
+      }
+      if (patch.engineType !== undefined) {
+        next.engineType = patch.engineType;
+        if (shouldPersist) saveStorageImmediate(ENGINE_TYPE_KEY, patch.engineType);
+      }
+
+      return Object.keys(next).length > 0 ? next : state;
     });
   },
 }));

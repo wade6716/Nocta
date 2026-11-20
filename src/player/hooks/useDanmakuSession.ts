@@ -4,6 +4,7 @@ import {
   autoMatchEpisode,
   computeDanmakuHeatmap,
   fetchCommentsById,
+  parseDanmuEpisodeInfo,
   RawDanmuComment,
   transformToDanmakuItems,
 } from '../../api/danmuClient';
@@ -176,9 +177,9 @@ export function useDanmakuSession({
       if (seriesBinding && seriesBinding.episodes?.length > 0 && item.IndexNumber !== undefined) {
         const epNum = item.IndexNumber;
         const matchedEp =
-          seriesBinding.episodes.find((ep) => {
-            const m = ep.episodeTitle.match(/(\d+)/);
-            return m && Number(m[1]) === epNum;
+          seriesBinding.episodes.find((ep, idx) => {
+            const parsed = parseDanmuEpisodeInfo(ep, idx);
+            return parsed.episodeNumber === epNum;
           }) || seriesBinding.episodes[epNum - 1];
 
         if (matchedEp) {

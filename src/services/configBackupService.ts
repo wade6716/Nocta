@@ -7,6 +7,9 @@ import {
   DanmakuSettings,
   DanmakuBinding,
   VideoLayoutConfig,
+  SkipSegments,
+  SkipSettings,
+  DEFAULT_SKIP_SETTINGS,
 } from '../stores/usePlayerStore';
 import { useMediaStore } from '../stores/useMediaStore';
 import { ProxyConfig, isTauriEnvironment } from '../api/http';
@@ -24,6 +27,8 @@ export interface NoctaConfigData {
   videoLayouts: Record<string, VideoLayoutConfig>;
   itemOffsets: Record<string, number>;
   danmakuBindings: Record<string, DanmakuBinding>;
+  skipSegments: Record<string, SkipSegments>;
+  skipSettings: SkipSettings;
 }
 
 export interface NoctaBackupPayload {
@@ -46,7 +51,7 @@ export interface ConfigStats {
   blockedWordCount: number;
 }
 
-const CLIENT_VERSION = '0.1.0-alpha.4';
+const CLIENT_VERSION = '0.1.0-alpha.8';
 
 function getOrCreateDeviceId(): string {
   try {
@@ -95,6 +100,8 @@ export function getLocalConfigSnapshot(options?: { includeSecrets?: boolean }): 
     videoLayouts: { ...playerState.videoLayouts },
     itemOffsets: { ...playerState.itemOffsets },
     danmakuBindings: { ...playerState.danmakuBindings },
+    skipSegments: { ...playerState.skipSegments },
+    skipSettings: { ...playerState.skipSettings },
   };
 }
 
@@ -241,7 +248,16 @@ export function mergeConfigData(local: NoctaConfigData, remote: NoctaConfigData)
   // 5. 画面排版偏好合并
   const mergedLayouts = { ...local.videoLayouts, ...(remote.videoLayouts || {}) };
 
-  // 6. 弹幕偏好与屏蔽词合并 (屏蔽词去重合并)
+  // 6. 片头片尾标记合并 (按 updatedAt 时间戳为准)
+  const mergedSkipSegments: Record<string, SkipSegments> = { ...(local.skipSegments || {}) };
+  Object.entries(remote.skipSegments || {}).forEach(([key, segments]) => {
+    const existing = mergedSkipSegments[key];
+    if (!existing || (segments.updatedAt || 0) >= (existing.updatedAt || 0)) {
+      mergedSkipSegments[key] = segments;
+    }
+  });
+
+  // 7. 弹幕偏好与屏蔽词合并 (屏蔽词去重合并)
   const mergedBlockedWords = Array.from(
     new Set([
       ...(local.danmakuSettings.blockedWords || []),
@@ -266,6 +282,12 @@ export function mergeConfigData(local: NoctaConfigData, remote: NoctaConfigData)
     videoLayouts: mergedLayouts,
     itemOffsets: mergedOffsets,
     danmakuBindings: mergedBindings,
+    skipSegments: mergedSkipSegments,
+    skipSettings: {
+      ...DEFAULT_SKIP_SETTINGS,
+      ...(local.skipSettings || {}),
+      ...(remote.skipSettings || {}),
+    },
   };
 }
 
@@ -299,6 +321,8 @@ export function applyConfigToStores(data: NoctaConfigData, mode: 'merge' | 'repl
       itemOffsets: data.itemOffsets,
       danmakuBindings: data.danmakuBindings,
       videoLayouts: data.videoLayouts,
+      skipSegments: data.skipSegments,
+      skipSettings: data.skipSettings,
       engineType: data.engineType,
     },
     mode

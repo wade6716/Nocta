@@ -382,6 +382,11 @@ pnpm tauri build
   - 自动根据目标平台与架构下载对应版本的 `libmpv-wrapper`（Windows/macOS/Linux）；
   - Windows 环境下自动下载解压 `libmpv-2.dll` 并写入 `src-tauri/lib/`；
   - 确保 Tauri 打包时 `resources: ["lib/**/*"]` 能够准确将内核打包入最终安装包。
+- **本地开发缺库误报**：
+  - 新克隆或重新拉取后 `src-tauri/lib/` 仅有 `.gitkeep` 时，`tauri-plugin-libmpv` 的搜索路径会全部落空并退化为裸库名，报错 `Failed to load libmpv-wrapper from 'libmpv-wrapper.dylib'` 且 dyld 列出一串 `no such file`；
+  - macOS 修复顺序：`pnpm install` -> `brew install mpv` -> `pnpm setup-mpv` -> 重启 `pnpm tauri dev`；仅补齐文件而不重启旧进程，预加载和 `Contents/MacOS`/开发目录软链不会重新建立；
+  - `setup-mpv` 已改为在 macOS 缺少 Homebrew `libmpv` 时直接失败，避免安装不完整却仍输出 `SUCCESS`。
+  - 开发模式会同时存在 `src-tauri/lib/` 与 Tauri 复制的 `target/debug/lib/`。若 `target/debug/libmpv.dylib` 旧软链仍指向 Homebrew，而 `init_macos_mpv_environment` 又未识别 `exe_dir/lib`，进程会先预载 Homebrew 原件、再由 wrapper 加载项目副本，形成两份同源 `libmpv` 并触发 Objective-C 重复类警告。修复方式是让 `ensure_unix_symlink` 比对并替换旧软链，同时在无 `resource_dir` 时优先探测 `exe_dir/lib`；用 `lsof -p <pid> | grep libmpv` 验证只剩一份。
 
 ### 15.2 Windows 下 DLL 依赖解析链修复（解决 126 错误码）
 - `tauri-plugin-libmpv` 通过 `LoadLibraryExW` 加载 `libmpv-wrapper.dll`；
@@ -460,6 +465,17 @@ pnpm tauri build
    - 插件在 `destroy()` 中调用 `mpv_wrapper_destroy` 后立即 `Box::from_raw(instance.event_userdata)` 释放内存，而后台 `event-client` 线程仍在并发派发 `Event::Shutdown` 并访问 `event_userdata`；
    - **修复**：将 `'main'` 窗口的 `mpv` 实例作为进程级持久单例复用（`MpvPlayerEngine.mpvInstanceCreated = true`），离开播放页时仅调用 `setProperty('pause', true)` + `command('stop')` 停止流解码，不销毁底层实例。
 
+### 19.2 macOS 播放窗口嵌入方案（避免弹出独立 mpv 窗口）
+- **根因**：mpv 的 `--wid` 文档与源码均只支持 X11、Win32、Android。macOS `CocoaCB` 会忽略 `wid`，自己创建 `NSWindow`，因此即使插件传入 NSView 指针也会出现独立播放器窗口，Nocta 的 WebView 被甩到后面。
+- **方案**：
+  - mpv 初始化时固定 `title=Nocta Video Surface`、`border=no`、`title-bar=no`、`auto-window-resize=no`、`focus-on=never`、`input-cursor-passthrough=yes`；
+  - 前端在 `file-loaded` / `playback-restart` 后轮询调用 `attach_mpv_window`；
+  - `mpv_embed_macos.m` 在主线程查找该标题的 `NSWindow`，设置为无边框、无阴影、忽略鼠标、`FullScreenAuxiliary`，通过 `addChildWindow:ordered:NSWindowBelow` 挂到 Tauri 主窗口下方，并每 200ms 同步父窗口 frame；
+  - Tauri 主窗口保持 transparent + WKWebView `drawsBackground=false`，因此下层视频可透出，上层 React OSD/弹幕继续工作；
+  - AppKit 操作必须通过 `window.run_on_main_thread`；离开播放页时 detach 并 orderOut，防止空闲 mpv 窗口残留。
+- **避坑**：`cursor-passthrough` 不是有效 mpv 选项，必须使用 `input-cursor-passthrough`；错误的选项名会让初始化直接失败。
+- **全屏**：`setSimpleFullscreen` 只是铺满屏幕的普通窗口，视觉上等同最大化，且 Tauri 会吞掉失败返回值。macOS 使用原生 `setFullscreen`；mpv 子窗口通过监听 `NSWindowDidEnterFullScreenNotification`、`NSWindowDidExitFullScreenNotification` 与 `NSWindowDidChangeScreenNotification`，在事件后同步 frame 并执行 `orderWindow:NSWindowBelow relativeTo:`，再由 200ms 定时器持续校正层级，保证原生全屏时视频在 WebView 下方。
+
 ### 19.3 macOS 报错（`FFI error: Failed to load libmpv-wrapper from 'libmpv-wrapper.dylib'`）根因与双重穿透修复
 1. **`tauri-plugin-libmpv` 原版寻址盲区与只读 Bundle 冲突**：
    - 官方插件原版 `desktop.rs` 的 `search_dirs` 仅写死检索 `exe_dir` (`Contents/MacOS`) 与 `exe_dir.join("lib")` (`Contents/MacOS/lib`)；
@@ -469,23 +485,69 @@ pnpm tauri build
    - **插件本地 Patch（Cargo `[patch.crates-io]`）**：在 `src-tauri/crates/tauri-plugin-libmpv` 中，将 `search_dirs` 扩充检索 `Contents/Resources/lib`、`Contents/Resources`、`Contents/Frameworks` 以及 `self.app.path().resource_dir()`，彻底消除裸库名退化，100% 传入绝对路径；
    - **Rust 全局预热预载（`init_macos_mpv_environment`）**：在应用入口使用 `libc::dlopen(..., RTLD_NOW | RTLD_GLOBAL)` 先行预热加载 `libmpv-wrapper.dylib` 与 `libmpv.dylib`，将动态库常驻进程全局符号表。
 
+## 20. macOS 原生交通灯与全屏语义 (Native Traffic Lights & Fullscreen)
+
+- macOS 不再使用 CSS 模拟红黄绿按钮。新增 `src-tauri/tauri.macos.conf.json`，覆盖为 `decorations: true`、`titleBarStyle: "Overlay"`、`trafficLightPosition: { x: 16, y: 18 }`、`hiddenTitle: true`，由 AppKit 渲染原生交通灯；主配置保持 `decorations: false` 供 Windows/Linux 使用。
+- `TitleBar` 仅保留 `pl-20` 为原生交通灯让位，不再渲染自绘圆点；标题栏继续作为拖拽区域。播放页 `PlayerOsd` 在 macOS 非全屏时使用 `pl-20` 避让交通灯，全屏后恢复 `pl-5`。
+- 所有全屏入口统一使用原生 `setFullscreen`，移除 `setSimpleFullscreen` 与 `simpleFullscreenRef`；`maximize` 只代表最大化窗口，不再以“全屏”命名。
+- 原生全屏切换时，`mpv_embed_macos.m` 通过全屏与屏幕变化通知重新同步 mpv 子窗口 frame，并反复执行 `orderWindow:NSWindowBelow relativeTo:`，防止 `FullScreenAuxiliary` 子窗口覆盖 WebView 和 OSD。
+
+## 21. macOS 原生全屏 OSD 独立浮层 (Fullscreen OSD Overlay)
+
+- **问题现象**：改为原生全屏后，视频正常但底部进度条/控制栏消失。排查确认不是 React 显隐逻辑或 CSS，而是原生全屏 Space 中 mpv 的 `FullScreenAuxiliary` 子窗口被 Window Server 抬到主窗口之上，WebView 的 OSD/弹幕被整块视频遮挡；`NSWindowBelow` 排序与定时校正无法改变全屏合成器的层级。
+- **架构选择**：macOS + MPV + 原生全屏时，启用第二个透明 Tauri 窗口 `osd-overlay` 作为交互浮层：
+  - 通过 `tauri::WebviewWindowBuilder` 创建 `index.html?osd=1`，透明、无边框、无阴影、`always_on_top`、初始隐藏；
+  - 原生侧设置 `NSStatusWindowLevel` 与 `NSWindowCollectionBehaviorFullScreenAuxiliary | IgnoresCycle`，使其加入全屏 Space 并压在 mpv 窗口之上；
+  - 首次收到状态后调用 `show_osd_overlay`，重新应用层级并 `orderFrontRegardless` + `setFocus`，避免窗口 show 时被系统重置排序。
+- **状态桥接**：`src/player/osdOverlaySync.ts` 定义 `osd:sync` / `osd:comments` / `osd:ready` / `osd:command` 四个事件；主窗口每 200ms 推送播放状态，弹幕列表变化时推送全量列表；浮层的所有操作均以命令形式回传 `PlayerPage`，由主窗口调用引擎与 Emby API，保证单一事实来源。
+- **弹幕**：浮层内独立创建 `MpvDanmakuBridge`，用同步到的 `currentTime / paused / playbackRate / offset` 驱动 `DanmakuLayer` 的 120Hz 插值时钟，避免跨窗口传输高频帧。
+- **交互取舍**：`PlayerOsd` 新增 `overlayMode`，隐藏依赖主窗口 DOM 的弹幕设置、画质调校、分集、多版本片源、播放信息与窗口模式按钮；保留播放、进度、音量、倍速、音字幕轨、弹幕开关与退出全屏。浮层自行处理鼠标闲置显隐、单击播放/暂停、双击退出全屏与键盘快捷键。
+- **平台隔离**：Windows/Linux 的 `--wid` 穿透方案与 HTML5 播放路径完全不变，`canUseMacOsdOverlay` 仅在 macOS + mpv 引擎下为真。
+- **验证状态**：`pnpm build`、`cargo check`、`pnpm tauri build --debug --bundles app` 均通过；待真机验证全屏下进度条、弹幕与控制栏可见且可交互。
+
+## 22. 片头片尾标记与自动跳过 (Intro/Outro Skip Segments)
+
+### 22.1 功能设计
+- 播放器 OSD 新增 `Crosshair` 标记面板（与“下一集”图标区分），用户可在一集的任意时刻点击“标记当前”记录：
+  - `introEnd`：片头结束时间，下次起播若记忆进度仍落在片头内，则直接跳到该点；
+  - `outroStart`：片尾开始时间，播放到该点时弹出 8 秒片尾轻提示。
+- 剧集条目按 `series_<SeriesId>` 共享标记，电影/无剧集条目按 `item_<Id>` 独立存储；标记附带 `updatedAt` 供多端合并。
+- 片尾提示提供“取消”和“跳过片尾”：取消后本次播放会话不再提示；跳过则定位到结尾前 0.25 秒，让播放器自然结束并触发现有的完播上报。
+- 设置页新增三个选项：自动跳过片头（默认开）、片尾跳过提示（默认开）、倒计时结束行为（默认 `ask` 仅提示；可选 `auto` 自动跳过）。
+
+### 22.2 关键实现
+- **起播跳过**：`PlayerPage` 在 `engine.load()` 前调用 `resolveInitialPlaybackTime(initialTime)`，用 store 内的最新标记计算 effective initial time；MPV 与 HTML5 都复用既有 `initialTime` 链路。`initialTimeRef` 更新为实际起播秒数，继续参与“首跳完成前保持加载层”的黑屏防护。
+- **片尾检测**：检测点位于引擎无关的 `onTimeUpdate`，通过 `usePlayerStore.getState()` 读取实时标记与设置，避免闭包陈旧；`outroToastShownRef` 保证一次播放只弹一次，`outroDismissedRef` 保证取消后不再弹。
+- **倒计时**：主窗口用 `deadline` + 200ms tick 维护 `outroRemainingMs`；倒计时归零时根据 `skipOutroAction` 决定关闭提示或调用 `skipOutroRef.current()`。视频 `ended` 时必须清理 Toast。
+- **标记校验**：片头至少 1 秒且不超过片长 95%；片尾至少第 5 秒、早于结尾 2 秒；两者冲突（`introEnd >= outroStart - 1`）时拒绝写入并提示。
+- **OSD/浮层同步**：`OsdSyncPayload` 增加 `skipSegments`、`outroToast`、`skipOutroAction`、`skipNotice`；`OsdOverlayPage` 渲染相同的 `PlayerOsd` 标记面板与 `OutroSkipToast`，所有写操作通过 `osd:command` 回传主窗口，保证 macOS 全屏下可用且单一事实来源。
+- **持久化与备份**：localStorage key 为 `nocta_skip_segments` / `nocta_skip_settings`；`usePlayerStore.importPlayerConfigs` 与 `configBackupService` 的导出/导入/智能合并全部纳入，按 `updatedAt` 新者优先，旧备份缺字段时保留本机数据。
+
+### 22.3 涉及文件
+- `src/stores/usePlayerStore.ts`：`SkipSegments` / `SkipSettings` / `getSkipKey` 与持久化 actions；
+- `src/pages/PlayerPage.tsx`：起播跳片头、片尾检测、倒计时、标记命令与 Toast；
+- `src/components/player/PlayerOsd.tsx`：标记入口与面板；
+- `src/components/player/OutroSkipToast.tsx`、`SkipNoticeToast.tsx`：片尾倒计时与操作提示；
+- `src/pages/OsdOverlayPage.tsx`、`src/player/osdOverlaySync.ts`：macOS 全屏浮层同步；
+- `src/pages/SettingsPage.tsx`、`src/services/configBackupService.ts`：设置项与多端同步。
+
 ---
 
-## 20. 播放器沉浸体验重构与三大定位协同架构 (Immersive Player UX: Hardware Decode + Danmaku + Live Proxy)
+## 23. 播放器沉浸体验重构与三大定位协同架构 (Immersive Player UX: Hardware Decode + Danmaku + Live Proxy)
 
-### 20.1 专注非阻断式浮层体系与桌面交互升级
+### 23.1 专注非阻断式浮层体系与桌面交互升级
 1. **组件解耦**：
-   - [`PlayerOsd.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/PlayerOsd.tsx)：修复无边框顶栏拖拽区 `pointer-events` 失效问题；重塑高能多维进度条（本地 Scrub 防抖、`demuxer-cache-time` 缓冲条、SVG 弹幕热度波峰曲线、Emby 章节标记与 A-B 循环区间）；顶栏新增实时时钟、硬解状态徽章与窗口置顶 Pin。
+   - [`PlayerOsd.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/PlayerOsd.tsx)：修复无边框顶栏拖拽区 `pointer-events` 失效问题；重塑高能多维进度条（本地 Scrub 防抖、`demuxer-cache-time` 缓冲条、SVG 弹幕热度波峰曲线、Emby 章节标记与 A-B 循环区间）；顶栏新增实时时钟、硬解状态徽章与窗口置顶 Pin；与 macOS 全屏浮层 `overlayMode` 及片头片尾标记面板全面兼容。
    - [`MiniActionHud.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/MiniActionHud.tsx)：屏幕轻量反馈胶囊（音量含 >100% 软件增益变色、连按快进累加、长按 `→` 临时 2.5x 倍速胶囊、无损 PNG 截图带「打开目录」按钮），按键调节不再强行拉起整套上下大工具栏。
    - [`PlayerContextMenu.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/PlayerContextMenu.tsx) & [`ShortcutsModal.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/ShortcutsModal.tsx)：原生感暗色毛玻璃右键菜单、桌面滚轮/Shift+滚轮手势与 `?` 键快捷键指南。
 2. **追番闭环与多版本源切换**：
-   - [`EpisodeDrawer.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/EpisodeDrawer.tsx) & [`UpNextOverlay.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/UpNextOverlay.tsx)：支持季/集抽屉选集、原地无缝切集（不销毁底层 `mpv` 单例）、Emby 多版本片源原画直连切换、自动连播倒计时以及 Emby `Chapters`（`IntroStart`/`IntroEnd`/OP 启发式）跳过片头胶囊。
+   - [`EpisodeDrawer.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/EpisodeDrawer.tsx) & [`UpNextOverlay.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/UpNextOverlay.tsx)：支持季/集抽屉选集、原地无缝切集（不销毁底层 `mpv` 单例）、Emby 多版本片源原画直连切换、自动连播倒计时以及 Emby `Chapters`（`IntroStart`/`IntroEnd`/OP 启发式）与手动标记相结合的跳过片头体验。
 
-### 20.2 libmpv 硬解深度能力与真实遥测
+### 23.2 libmpv 硬解深度能力与真实遥测
 - [`VideoProPanel.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/VideoProPanel.tsx)：集中承载硬解策略 (`auto-safe`/`auto`/`auto-copy`/`no`)、画面比例/填充、宽银幕贴底（从弹幕抽屉迁移并保留每剧记忆）、HDR 色调映射 (`tone-mapping`)、动画去色带 (`deband`)、亮度/对比度/饱和度/伽马调校、双语次字幕 (`secondary-sid`)、拖放本地外挂字幕 (`onDragDropEvent`)、软件音量 200% 增益、夜间人声动态均衡 (`dynaudnorm`)、音频/字幕延迟与无损截图 (`get_screenshot_dir`)。
 - [`PlaybackInfoModal.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/PlaybackInfoModal.tsx)：修复 `audio-<Index>` 匹配 Emby 音轨元数据失效的问题，并实时呈现 `hwdec-current`、实时 FPS、丢帧数、缓冲量与流代理路由详情。
 
-### 20.3 零闪烁智能弹幕与透明代理热切
+### 23.3 零闪烁智能弹幕与透明代理热切
 - **零闪烁渲染与防刷屏**：[`PlayerPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/PlayerPage.tsx) 拆分 `formattedComments` 精确 `useMemo` 依赖，根治调整透明度/速度/行数/区域时 Canvas 重建闪烁的问题；[`danmuClient.ts`](file:///d:/wade/code/emby-tauri-player/src/api/danmuClient.ts) 实现 3 秒窗口重复弹幕智能合并防刷屏 (`×N`) 与高能热力密度曲线 `computeDanmakuHeatmap`；[`DanmakuDrawer.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/DanmakuDrawer.tsx) 支持同剧延续绑定 (`seriesDanmakuBindings`)、整剧偏移应用、按时长差一键对齐与「弹幕列表」检索跳转。
 - **代理路由透明化与热切换**：[`NetworkProxyPopover.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/NetworkProxyPopover.tsx) 结合 `resolveMpvProxyDetailed` 展示 30 秒实时网速折线、缓冲指标、系统/手动/LAN/直连路由及 `SOCKS5` 回退直连说明，支持「跟随配置 / 强制直连 / 强制走代理」以及修改代理弹窗保存后立即保留当前进度秒数原地热重载媒体流。
 

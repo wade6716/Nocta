@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default capabilities for emby-tauri-player",
-  "windows": ["main"],
+  "windows": ["main", "osd-overlay"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",

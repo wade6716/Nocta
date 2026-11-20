@@ -75,6 +75,31 @@ export interface PlayerPreferences {
   preferredSubLang?: string;
 }
 
+export type SkipOutroAction = 'ask' | 'auto';
+
+export interface SkipSegments {
+  itemId: string;
+  introEnd?: number;
+  outroStart?: number;
+  updatedAt: number;
+}
+
+export interface SkipSettings {
+  skipIntroEnabled: boolean;
+  skipOutroEnabled: boolean;
+  skipOutroAction: SkipOutroAction;
+}
+
+export const DEFAULT_SKIP_SETTINGS: SkipSettings = {
+  skipIntroEnabled: true,
+  skipOutroEnabled: true,
+  skipOutroAction: 'ask',
+};
+
+export function getSkipKey(item: { Id: string; SeriesId?: string }): string {
+  return item.SeriesId ? `series_${item.SeriesId}` : `item_${item.Id}`;
+}
+
 interface PlayerState {
   // 播放项信息
   item: EmbyItem | null;
@@ -107,6 +132,8 @@ interface PlayerState {
   seriesDanmakuBindings: Record<string, SeriesDanmakuBinding>; // seriesId -> SeriesDanmakuBinding
   videoLayouts: Record<string, VideoLayoutConfig>; // seriesId/itemId -> VideoLayoutConfig
   playerPreferences: PlayerPreferences;
+  skipSegments: Record<string, SkipSegments>; // series_key/item_key -> SkipSegments
+  skipSettings: SkipSettings;
   engineType: 'mpv' | 'html5';
 
   // Actions
@@ -139,6 +166,12 @@ interface PlayerState {
   resetVideoLayout: (key: string) => void;
   updatePlayerPreferences: (prefs: Partial<PlayerPreferences>) => void;
   resetVideoEnhancements: () => void;
+  setSkipSegment: (
+    key: string,
+    patch: { itemId?: string; introEnd?: number; outroStart?: number }
+  ) => void;
+  clearSkipSegment: (key: string, field: 'introEnd' | 'outroStart') => void;
+  updateSkipSettings: (settings: Partial<SkipSettings>) => void;
   setEngineType: (type: 'mpv' | 'html5') => void;
   resetPlayer: () => void;
   importPlayerConfigs: (
@@ -147,6 +180,8 @@ interface PlayerState {
       itemOffsets?: Record<string, number>;
       danmakuBindings?: Record<string, DanmakuBinding>;
       videoLayouts?: Record<string, VideoLayoutConfig>;
+      skipSegments?: Record<string, SkipSegments>;
+      skipSettings?: Partial<SkipSettings>;
       engineType?: 'mpv' | 'html5';
     },
     mode?: 'merge' | 'replace'
@@ -159,6 +194,8 @@ const SERIES_OFFSETS_KEY = 'nocta_series_danmaku_offsets';
 const BINDINGS_KEY = 'emby_danmaku_bindings';
 const SERIES_BINDINGS_KEY = 'nocta_series_danmaku_bindings';
 const VIDEO_LAYOUTS_KEY = 'emby_video_layout_configs';
+const SKIP_SEGMENTS_KEY = 'nocta_skip_segments';
+const SKIP_SETTINGS_KEY = 'nocta_skip_settings';
 const ENGINE_TYPE_KEY = 'emby_player_engine_type';
 const VOLUME_KEY = 'nocta_player_volume';
 const PREFERENCES_KEY = 'nocta_player_preferences';
@@ -230,6 +267,29 @@ function loadVideoLayouts(): Record<string, VideoLayoutConfig> {
     return raw ? JSON.parse(raw) : {};
   } catch {
     return {};
+  }
+}
+
+function loadSkipSegments(): Record<string, SkipSegments> {
+  try {
+    const raw = localStorage.getItem(SKIP_SEGMENTS_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function loadSkipSettings(): SkipSettings {
+  try {
+    const raw = localStorage.getItem(SKIP_SETTINGS_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return {
+      ...DEFAULT_SKIP_SETTINGS,
+      ...parsed,
+      skipOutroAction: parsed.skipOutroAction === 'auto' ? 'auto' : 'ask',
+    };
+  } catch {
+    return { ...DEFAULT_SKIP_SETTINGS };
   }
 }
 
@@ -343,6 +403,8 @@ export const usePlayerStore = create<PlayerState>((set) => ({
   seriesDanmakuBindings: loadSeriesBindings(),
   videoLayouts: loadVideoLayouts(),
   playerPreferences: loadPlayerPreferences(),
+  skipSegments: loadSkipSegments(),
+  skipSettings: loadSkipSettings(),
   engineType: loadEngineType(),
 
   setPlaybackContext: (payload) => {
@@ -600,6 +662,60 @@ export const usePlayerStore = create<PlayerState>((set) => ({
     });
   },
 
+  setSkipSegment: (key, patch) => {
+    set((state) => {
+      const prev = state.skipSegments[key];
+      const next: SkipSegments = {
+        ...(prev || { itemId: patch.itemId || '', updatedAt: 0 }),
+        ...patch,
+        updatedAt: Date.now(),
+      };
+      const updated = { ...state.skipSegments, [key]: next };
+      try {
+        localStorage.setItem(SKIP_SEGMENTS_KEY, JSON.stringify(updated));
+      } catch (e) {
+        console.error(e);
+      }
+      return { skipSegments: updated };
+    });
+  },
+
+  clearSkipSegment: (key, field) => {
+    set((state) => {
+      const prev = state.skipSegments[key];
+      if (!prev) return state;
+
+      const next: SkipSegments = { ...prev, updatedAt: Date.now() };
+      delete next[field];
+
+      const updated = { ...state.skipSegments };
+      if (next.introEnd === undefined && next.outroStart === undefined) {
+        delete updated[key];
+      } else {
+        updated[key] = next;
+      }
+
+      try {
+        localStorage.setItem(SKIP_SEGMENTS_KEY, JSON.stringify(updated));
+      } catch (e) {
+        console.error(e);
+      }
+      return { skipSegments: updated };
+    });
+  },
+
+  updateSkipSettings: (settings) => {
+    set((state) => {
+      const updated = { ...state.skipSettings, ...settings };
+      try {
+        localStorage.setItem(SKIP_SETTINGS_KEY, JSON.stringify(updated));
+      } catch (e) {
+        console.error(e);
+      }
+      return { skipSettings: updated };
+    });
+  },
+
   setEngineType: (type) => {
     try {
       localStorage.setItem(ENGINE_TYPE_KEY, type);
@@ -635,6 +751,8 @@ export const usePlayerStore = create<PlayerState>((set) => ({
       let nextOffsets = state.itemOffsets;
       let nextBindings = state.danmakuBindings;
       let nextLayouts = state.videoLayouts;
+      let nextSkipSegments = state.skipSegments;
+      let nextSkipSettings = state.skipSettings;
       let nextEngine = state.engineType;
 
       if (mode === 'replace') {
@@ -644,6 +762,10 @@ export const usePlayerStore = create<PlayerState>((set) => ({
         nextOffsets = configs.itemOffsets ?? {};
         nextBindings = configs.danmakuBindings ?? {};
         nextLayouts = configs.videoLayouts ?? {};
+        nextSkipSegments = configs.skipSegments ?? {};
+        nextSkipSettings = configs.skipSettings
+          ? { ...DEFAULT_SKIP_SETTINGS, ...configs.skipSettings }
+          : { ...DEFAULT_SKIP_SETTINGS };
         if (configs.engineType) {
           nextEngine = configs.engineType;
         }
@@ -681,6 +803,20 @@ export const usePlayerStore = create<PlayerState>((set) => ({
           nextLayouts = { ...state.videoLayouts, ...configs.videoLayouts };
         }
 
+        if (configs.skipSegments) {
+          nextSkipSegments = { ...state.skipSegments };
+          Object.entries(configs.skipSegments).forEach(([key, segments]) => {
+            const existing = nextSkipSegments[key];
+            if (!existing || (segments.updatedAt || 0) >= (existing.updatedAt || 0)) {
+              nextSkipSegments[key] = segments;
+            }
+          });
+        }
+
+        if (configs.skipSettings) {
+          nextSkipSettings = { ...state.skipSettings, ...configs.skipSettings };
+        }
+
         if (configs.engineType) {
           nextEngine = configs.engineType;
         }
@@ -691,6 +827,8 @@ export const usePlayerStore = create<PlayerState>((set) => ({
         localStorage.setItem(OFFSETS_KEY, JSON.stringify(nextOffsets));
         localStorage.setItem(BINDINGS_KEY, JSON.stringify(nextBindings));
         localStorage.setItem(VIDEO_LAYOUTS_KEY, JSON.stringify(nextLayouts));
+        localStorage.setItem(SKIP_SEGMENTS_KEY, JSON.stringify(nextSkipSegments));
+        localStorage.setItem(SKIP_SETTINGS_KEY, JSON.stringify(nextSkipSettings));
         localStorage.setItem(ENGINE_TYPE_KEY, nextEngine);
       } catch (e) {
         console.error('Failed to save imported player configs:', e);
@@ -701,6 +839,8 @@ export const usePlayerStore = create<PlayerState>((set) => ({
         itemOffsets: nextOffsets,
         danmakuBindings: nextBindings,
         videoLayouts: nextLayouts,
+        skipSegments: nextSkipSegments,
+        skipSettings: nextSkipSettings,
         engineType: nextEngine,
       };
     });

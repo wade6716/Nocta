@@ -72,7 +72,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
   return (
     <header
       data-tauri-drag-region
-      className={`h-12 flex-shrink-0 bg-[#0B0E17]/95 backdrop-blur-2xl border-b border-white/[0.06] flex items-center justify-between px-4 select-none z-40 w-full ${
+      className={`relative h-12 flex-shrink-0 bg-[#0B0E17] border-b border-white/[0.06] flex items-center justify-between px-4 select-none z-40 w-full ${
         isMac ? 'pl-20' : ''
       }`}
     >

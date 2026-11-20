@@ -39,6 +39,7 @@ import {
   ArrowUpDown,
   FolderOpen,
   X,
+  SkipForward,
 } from 'lucide-react';
 import { useAuthStore, SavedServer } from '../stores/useAuthStore';
 import { useDanmuStore, DanmuServerEntry } from '../stores/useDanmuStore';
@@ -113,6 +114,8 @@ export const SettingsPage: React.FC = () => {
     updateDanmakuSettings,
     engineType,
     setEngineType,
+    skipSettings,
+    updateSkipSettings,
   } = usePlayerStore();
 
   // Emby 编辑/新增状态
@@ -1159,6 +1162,114 @@ export const SettingsPage: React.FC = () => {
                 </div>
               </div>
 
+              {/* 片头片尾自动跳过 */}
+              <div className="p-4 bg-white/5 border border-white/10 rounded-xl space-y-4">
+                <div className="flex items-start gap-2.5">
+                  <div className="w-8 h-8 flex-shrink-0 rounded-xl bg-primary/15 border border-primary/25 text-primary flex items-center justify-center">
+                    <SkipForward className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-xs font-semibold text-white">片头片尾自动跳过</h3>
+                    <p className="text-[11px] text-gray-400 mt-0.5">
+                      在播放器中标记时间点后，下次播放会自动生效
+                    </p>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-4 p-3 rounded-lg bg-black/20 border border-white/5">
+                    <div>
+                      <p className="text-xs font-medium text-gray-200">自动跳过片头</p>
+                      <p className="text-[11px] text-gray-500 mt-0.5">
+                        起播进度位于片头区间时，自动定位到片头结束
+                      </p>
+                    </div>
+                    <button
+                      role="switch"
+                      aria-checked={skipSettings.skipIntroEnabled}
+                      onClick={() =>
+                        updateSkipSettings({
+                          skipIntroEnabled: !skipSettings.skipIntroEnabled,
+                        })
+                      }
+                      className={`relative w-11 h-6 flex-shrink-0 rounded-full transition cursor-pointer ${
+                        skipSettings.skipIntroEnabled ? 'bg-primary' : 'bg-white/15'
+                      }`}
+                      title="自动跳过片头"
+                    >
+                      <span
+                        className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
+                          skipSettings.skipIntroEnabled ? 'translate-x-5' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-4 p-3 rounded-lg bg-black/20 border border-white/5">
+                    <div>
+                      <p className="text-xs font-medium text-gray-200">片尾跳过提示</p>
+                      <p className="text-[11px] text-gray-500 mt-0.5">
+                        到达片尾标记时弹出提示，可随时取消
+                      </p>
+                    </div>
+                    <button
+                      role="switch"
+                      aria-checked={skipSettings.skipOutroEnabled}
+                      onClick={() =>
+                        updateSkipSettings({
+                          skipOutroEnabled: !skipSettings.skipOutroEnabled,
+                        })
+                      }
+                      className={`relative w-11 h-6 flex-shrink-0 rounded-full transition cursor-pointer ${
+                        skipSettings.skipOutroEnabled ? 'bg-primary' : 'bg-white/15'
+                      }`}
+                      title="片尾跳过提示"
+                    >
+                      <span
+                        className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
+                          skipSettings.skipOutroEnabled ? 'translate-x-5' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-[11px] font-semibold text-gray-300 block">
+                    片尾倒计时结束后
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {[
+                      {
+                        id: 'ask' as const,
+                        label: '仅提示',
+                        desc: '倒计时结束不自动跳过',
+                      },
+                      {
+                        id: 'auto' as const,
+                        label: '自动跳过',
+                        desc: '倒计时结束跳到结尾',
+                      },
+                    ].map((option) => (
+                      <button
+                        key={option.id}
+                        onClick={() => updateSkipSettings({ skipOutroAction: option.id })}
+                        className={`p-3 rounded-lg border text-left transition cursor-pointer ${
+                          skipSettings.skipOutroAction === option.id
+                            ? 'bg-primary/15 border-primary/50 text-white'
+                            : 'bg-black/20 border-white/5 text-gray-300 hover:border-white/15'
+                        }`}
+                      >
+                        <span className="text-xs font-semibold block">{option.label}</span>
+                        <span className="text-[10px] text-gray-500 mt-0.5 block">
+                          {option.desc}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
               {/* 宽银幕贴底技术说明 */}
               <div className="p-4 bg-white/5 border border-white/10 rounded-xl space-y-2">
                 <div className="flex items-center space-x-2 text-xs font-semibold text-gray-200">
@@ -1334,7 +1445,7 @@ export const SettingsPage: React.FC = () => {
                       </div>
 
                       <p className="text-xs text-gray-400">
-                        将 Emby 服务器列表、弹幕 API 节点、弹幕偏好、手动匹配绑定及画面布局导出为标准备份文件。
+                        将 Emby 服务器列表、弹幕 API 节点、弹幕偏好、手动匹配绑定、画面布局及片头片尾标记导出为标准备份文件。
                       </p>
 
                       <div className="p-2.5 rounded-lg bg-black/30 border border-white/5 space-y-1.5 text-[11px] text-gray-400">
@@ -2096,7 +2207,7 @@ export const SettingsPage: React.FC = () => {
                   <h2 className="text-xl font-bold text-white flex items-center space-x-2">
                     <span>Nocta · 夜幕</span>
                     <span className="text-xs px-2 py-0.5 rounded-full bg-white/10 text-gray-300 font-mono font-normal">
-                      v0.1.0-alpha.7
+                      v0.1.0-alpha.8
                     </span>
                   </h2>
                   <p className="text-xs text-gray-400 mt-1">

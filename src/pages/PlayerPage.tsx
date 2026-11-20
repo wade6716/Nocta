@@ -13,7 +13,7 @@ import {
   Wifi,
 } from 'lucide-react';
 import { useAuthStore } from '../stores/useAuthStore';
-import { usePlayerStore } from '../stores/usePlayerStore';
+import { usePlayerStore, getSkipKey } from '../stores/usePlayerStore';
 import { useDanmuStore } from '../stores/useDanmuStore';
 import {
   EmbyChapter,
@@ -47,6 +47,7 @@ import {
   transformToDanmakuItems,
   computeDanmakuHeatmap,
   RawDanmuComment,
+  FormattedDanmakuItem,
 } from '../api/danmuClient';
 import { isTauriEnvironment } from '../api/http';
 import { MpvDanmakuBridge } from '../components/player/MpvDanmakuBridge';
@@ -62,9 +63,20 @@ import { VideoProPanel } from '../components/player/VideoProPanel';
 import { NetworkProxyPopover } from '../components/player/NetworkProxyPopover';
 import { UpNextOverlay } from '../components/player/UpNextOverlay';
 import { NetworkProxyModal } from '../components/settings/NetworkProxyModal';
+import { OutroSkipToast } from '../components/player/OutroSkipToast';
+import { SkipNoticeToast } from '../components/player/SkipNoticeToast';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
+import { emit, listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
+import {
+  OSD_OVERLAY_COMMENTS_EVENT,
+  OSD_OVERLAY_COMMAND_EVENT,
+  OSD_OVERLAY_READY_EVENT,
+  OSD_OVERLAY_SYNC_EVENT,
+  OsdCommand,
+  OsdSyncPayload,
+} from '../player/osdOverlaySync';
 
 type ActivePanelType =
   | 'none'
@@ -74,6 +86,9 @@ type ActivePanelType =
   | 'network'
   | 'info'
   | 'shortcuts';
+
+const IS_MACOS = /Macintosh|Mac OS X/i.test(navigator.userAgent);
+const OUTRO_TOAST_MS = 8000;
 
 export const PlayerPage: React.FC = () => {
   const { itemId } = useParams<{ itemId: string }>();
@@ -107,6 +122,8 @@ export const PlayerPage: React.FC = () => {
     seriesDanmakuBindings,
     videoLayouts,
     playerPreferences,
+    skipSegments,
+    skipSettings,
     engineType,
     setEngineType,
     setPlaybackContext,
@@ -122,6 +139,8 @@ export const PlayerPage: React.FC = () => {
     setItemOffset,
     setVideoLayout,
     updatePlayerPreferences,
+    setSkipSegment,
+    clearSkipSegment,
     resetPlayer,
   } = usePlayerStore();
 
@@ -162,15 +181,35 @@ export const PlayerPage: React.FC = () => {
   const networkSpeedRef = useRef(0);
   const handleVideoErrorRef = useRef<(errMsg?: string) => void>(() => {});
   const proxyOverrideRef = useRef<StreamProxyOverride>('follow');
-
-  useEffect(() => {
-    initialTimeRef.current = initialTime;
-    lastValidTimeRef.current = initialTime;
-  }, [initialTime, itemId]);
+  const outroDismissedRef = useRef(false);
+  const outroToastShownRef = useRef(false);
+  const initialSkipNoticeKeyRef = useRef('');
 
   useEffect(() => {
     proxyOverrideRef.current = proxyOverride;
   }, [proxyOverride]);
+
+  const resolveInitialPlaybackTime = useCallback((rawTime: number) => {
+    const state = usePlayerStore.getState();
+    const currentItem = state.item;
+    if (!currentItem || !state.skipSettings.skipIntroEnabled) {
+      return { seconds: rawTime, skipped: false };
+    }
+
+    const segments = state.skipSegments[getSkipKey(currentItem)];
+    const introEnd = segments?.introEnd;
+    const runtime = ticksToSeconds(currentItem.RunTimeTicks || 0);
+    if (
+      introEnd === undefined ||
+      introEnd <= 1 ||
+      (runtime > 0 && introEnd >= runtime - 5) ||
+      rawTime >= introEnd - 1
+    ) {
+      return { seconds: rawTime, skipped: false };
+    }
+
+    return { seconds: introEnd, skipped: true };
+  }, []);
 
   // Player Engine and Container refs
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -194,6 +233,9 @@ export const PlayerPage: React.FC = () => {
   const [matchedTitle, setMatchedTitle] = useState<string>('');
   const [sourceDuration, setSourceDuration] = useState<number | undefined>();
   const [danmuToast, setDanmuToast] = useState<string | null>(null);
+  const [skipNotice, setSkipNotice] = useState<string | null>(null);
+  const [outroToast, setOutroToast] = useState<{ deadline: number } | null>(null);
+  const [outroRemainingMs, setOutroRemainingMs] = useState(OUTRO_TOAST_MS);
   const [durationAlert, setDurationAlert] = useState<string | null>(null);
 
   // 互斥面板 & 弹窗状态
@@ -220,10 +262,16 @@ export const PlayerPage: React.FC = () => {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
   const [isPinned, setIsPinned] = useState(false);
+  const [osdOverlayActive, setOsdOverlayActive] = useState(false);
   const [centerIcon, setCenterIcon] = useState<'play' | 'pause' | null>(null);
   const centerIconTimerRef = useRef<number | null>(null);
   const clickTimerRef = useRef<number | null>(null);
   const hideTimerRef = useRef<number | null>(null);
+  const osdSyncPayloadRef = useRef<OsdSyncPayload | null>(null);
+  const osdCommentsRef = useRef<FormattedDanmakuItem[]>([]);
+  const osdCommandHandlerRef = useRef<(cmd: OsdCommand) => void>(() => {});
+  const skipNoticeTimerRef = useRef<number | null>(null);
+  const skipOutroRef = useRef<() => void>(() => {});
 
   // Current item offset (单集偏移优先，否则继承整剧偏移)
   const savedOffset =
@@ -232,6 +280,9 @@ export const PlayerPage: React.FC = () => {
       : item?.SeriesId
       ? seriesOffsets[item.SeriesId]
       : 0) || 0;
+  const skipKey = item ? getSkipKey(item) : '';
+  const currentSkipSegments = skipKey ? skipSegments[skipKey] : undefined;
+  const videoDuration = duration || (item ? ticksToSeconds(item.RunTimeTicks || 0) : 0);
 
   const isAnyPanelOpen =
     activePanel !== 'none' || isProxyModalOpen || contextMenu.visible;
@@ -250,6 +301,49 @@ export const PlayerPage: React.FC = () => {
     []
   );
 
+  const showSkipNotice = useCallback((message: string) => {
+    setSkipNotice(message);
+    if (skipNoticeTimerRef.current) {
+      window.clearTimeout(skipNoticeTimerRef.current);
+    }
+    skipNoticeTimerRef.current = window.setTimeout(() => {
+      setSkipNotice(null);
+      skipNoticeTimerRef.current = null;
+    }, 3000);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (skipNoticeTimerRef.current) {
+        window.clearTimeout(skipNoticeTimerRef.current);
+      }
+    };
+  }, []);
+
+  // 切换影片/剧集时重置片尾会话级状态
+  useEffect(() => {
+    outroDismissedRef.current = false;
+    outroToastShownRef.current = false;
+    initialSkipNoticeKeyRef.current = '';
+    setOutroToast(null);
+    setOutroRemainingMs(OUTRO_TOAST_MS);
+  }, [item?.Id]);
+
+  // 起播阶段统一处理记忆进度与自动跳过片头
+  useEffect(() => {
+    const resolved = resolveInitialPlaybackTime(initialTime);
+    initialTimeRef.current = resolved.seconds;
+    lastValidTimeRef.current = resolved.seconds;
+
+    if (resolved.skipped && item) {
+      const noticeKey = `${item.Id}:${resolved.seconds}`;
+      if (initialSkipNoticeKeyRef.current !== noticeKey) {
+        initialSkipNoticeKeyRef.current = noticeKey;
+        showSkipNotice(`已跳过片头 → ${formatTime(resolved.seconds)}`);
+      }
+    }
+  }, [initialTime, item?.Id, itemId, resolveInitialPlaybackTime, showSkipNotice]);
+
   // Sync streamUrl when store changes
   useEffect(() => {
     if (streamUrl) {
@@ -263,6 +357,9 @@ export const PlayerPage: React.FC = () => {
       hasInitialSeekedRef.current = false;
       autoSwitchedItemIdRef.current = null;
       appliedPrefTrackUrlRef.current = null;
+      outroDismissedRef.current = false;
+      outroToastShownRef.current = false;
+      setOutroToast(null);
     }
   }, [streamUrl]);
 
@@ -330,6 +427,23 @@ export const PlayerPage: React.FC = () => {
       setIsLoadingVideo(false);
       updateTime(cur, dur);
       bridge.onMpvTimePos(cur);
+
+      const state = usePlayerStore.getState();
+      if (
+        state.skipSettings.skipOutroEnabled &&
+        !outroDismissedRef.current &&
+        !outroToastShownRef.current
+      ) {
+        const currentItem = state.item;
+        const segments = currentItem ? state.skipSegments[getSkipKey(currentItem)] : undefined;
+        const outroStart = segments?.outroStart;
+        const total = dur || (currentItem ? ticksToSeconds(currentItem.RunTimeTicks || 0) : 0);
+        if (outroStart !== undefined && cur >= outroStart && (!total || outroStart < total - 2)) {
+          outroToastShownRef.current = true;
+          setOutroRemainingMs(OUTRO_TOAST_MS);
+          setOutroToast({ deadline: Date.now() + OUTRO_TOAST_MS });
+        }
+      }
     });
 
     const unlistenState = engine.onStateChange((st) => {
@@ -366,6 +480,8 @@ export const PlayerPage: React.FC = () => {
         case 'ended':
           setIsLoadingVideo(false);
           setPaused(true);
+          setOutroToast(null);
+          setOutroRemainingMs(0);
           bridge.onMpvPauseChange(true);
           break;
       }
@@ -443,13 +559,46 @@ export const PlayerPage: React.FC = () => {
     };
   }, [engineType]);
 
+  // 片尾轻提示倒计时：仅提示或按设置自动跳过
+  useEffect(() => {
+    if (!outroToast) return;
+
+    let completed = false;
+    const tick = () => {
+      if (completed) return;
+      const remaining = Math.max(0, outroToast.deadline - Date.now());
+      setOutroRemainingMs(remaining);
+
+      if (remaining <= 0) {
+        completed = true;
+        setOutroToast(null);
+        if (usePlayerStore.getState().skipSettings.skipOutroAction === 'auto') {
+          skipOutroRef.current();
+        }
+      }
+    };
+
+    tick();
+    const timer = window.setInterval(tick, 200);
+    return () => window.clearInterval(timer);
+  }, [outroToast]);
+
+  useEffect(() => {
+    if (!skipSettings.skipOutroEnabled) {
+      setOutroToast(null);
+      setOutroRemainingMs(0);
+    }
+  }, [skipSettings.skipOutroEnabled]);
+
   // Sync streamUrl / reloadToken into active engine
   useEffect(() => {
     if (currentStreamUrl && engineRef.current) {
+      const resolved = resolveInitialPlaybackTime(initialTimeRef.current);
+      initialTimeRef.current = resolved.seconds;
       engineRef.current
         .load({
           url: currentStreamUrl,
-          initialTime: initialTimeRef.current,
+          initialTime: resolved.seconds,
           title: item?.Name,
           proxyOverride: proxyOverrideRef.current,
         })
@@ -457,7 +606,7 @@ export const PlayerPage: React.FC = () => {
           applyAllPreferencesToEngine(engineRef.current);
         });
     }
-  }, [currentStreamUrl, reloadToken]);
+  }, [currentStreamUrl, reloadToken, resolveInitialPlaybackTime]);
 
   // 响应 Pro 画质/字幕/音频偏好实时变化
   useEffect(() => {
@@ -893,8 +1042,8 @@ export const PlayerPage: React.FC = () => {
     if (!currentServer || !item || !mediaSource || !playSessionId) return;
 
     const sessionKey = `${item.Id}_${playSessionId}`;
-    const startSec = initialTime > 0 ? initialTime : lastValidTimeRef.current;
-
+    const startSec =
+      initialTimeRef.current > 0 ? initialTimeRef.current : lastValidTimeRef.current;
     reportPlaybackStart(
       currentServer.url,
       {
@@ -1185,6 +1334,7 @@ export const PlayerPage: React.FC = () => {
           const [fs, max] = await Promise.all([win.isFullscreen(), win.isMaximized()]);
           setIsFullscreen(fs);
           setIsMaximized(max);
+          if (fs) setIsOsdVisible(true);
         } catch (e) {
           console.warn(e);
         }
@@ -1192,6 +1342,7 @@ export const PlayerPage: React.FC = () => {
 
       return () => {
         unlistenPromise.then((unlisten) => unlisten());
+        win.setFullscreen(false).catch(() => {});
       };
     } catch (e) {
       console.warn(e);
@@ -1262,6 +1413,100 @@ export const PlayerPage: React.FC = () => {
       ).catch(console.error);
     }
   };
+
+  const handleMarkIntroEnd = (secondsOverride?: number) => {
+    if (!item || !skipKey) return;
+
+    const state = usePlayerStore.getState();
+    const seconds = Math.max(
+      0,
+      secondsOverride ?? lastValidTimeRef.current ?? engineRef.current?.currentTime ?? state.currentTime ?? 0
+    );
+    const total = duration || ticksToSeconds(item.RunTimeTicks || 0);
+
+    if (seconds < 1) {
+      showSkipNotice('当前进度太靠前，无法标记片头');
+      return;
+    }
+    if (total > 0 && seconds > total * 0.95) {
+      showSkipNotice('片头结束时间不能超过片长的 95%');
+      return;
+    }
+
+    const existingOutro = state.skipSegments[skipKey]?.outroStart;
+    if (existingOutro !== undefined && seconds >= existingOutro - 1) {
+      showSkipNotice('片头结束必须早于已标记的片尾开始');
+      return;
+    }
+
+    const rounded = Math.round(seconds);
+    setSkipSegment(skipKey, { itemId: item.Id, introEnd: rounded });
+    showSkipNotice(`片头结束已标记：${formatTime(rounded)}`);
+  };
+
+  const handleMarkOutroStart = (secondsOverride?: number) => {
+    if (!item || !skipKey) return;
+
+    const state = usePlayerStore.getState();
+    const seconds = Math.max(
+      0,
+      secondsOverride ?? lastValidTimeRef.current ?? engineRef.current?.currentTime ?? state.currentTime ?? 0
+    );
+    const total = duration || ticksToSeconds(item.RunTimeTicks || 0);
+
+    if (seconds < 5) {
+      showSkipNotice('片尾开始时间必须晚于第 5 秒');
+      return;
+    }
+    if (total > 0 && seconds > total - 2) {
+      showSkipNotice('片尾开始时间过于接近视频结尾');
+      return;
+    }
+
+    const existingIntro = state.skipSegments[skipKey]?.introEnd;
+    if (existingIntro !== undefined && seconds <= existingIntro + 1) {
+      showSkipNotice('片尾开始必须晚于已标记的片头结束');
+      return;
+    }
+
+    const rounded = Math.round(seconds);
+    setSkipSegment(skipKey, { itemId: item.Id, outroStart: rounded });
+    outroToastShownRef.current = false;
+    outroDismissedRef.current = false;
+    showSkipNotice(`片尾开始已标记：${formatTime(rounded)}`);
+  };
+
+  const handleClearSkipSegment = (field: 'introEnd' | 'outroStart') => {
+    if (!skipKey) return;
+    clearSkipSegment(skipKey, field);
+    if (field === 'outroStart') {
+      outroToastShownRef.current = false;
+      outroDismissedRef.current = false;
+      setOutroToast(null);
+      setOutroRemainingMs(0);
+    }
+    showSkipNotice(field === 'introEnd' ? '已清除片头标记' : '已清除片尾标记');
+  };
+
+  const handleSkipOutro = () => {
+    outroDismissedRef.current = true;
+    setOutroToast(null);
+    setOutroRemainingMs(0);
+
+    const total = videoDuration || ticksToSeconds(item?.RunTimeTicks || 0);
+    if (total > 0) {
+      handleSeek(Math.max(0, total - 0.25));
+      showSkipNotice('已跳过片尾');
+    }
+  };
+
+  const handleCancelOutro = () => {
+    outroDismissedRef.current = true;
+    setOutroToast(null);
+    setOutroRemainingMs(0);
+  };
+
+  skipOutroRef.current = handleSkipOutro;
 
   // 轻量无打扰 Seek（显示 Mini HUD 而不弹出整套大控制栏）
   const handleSeekDelta = useCallback(
@@ -1437,7 +1682,15 @@ export const PlayerPage: React.FC = () => {
   };
 
   const handleSkipIntro = () => {
-    if (introRange) {
+    const manualIntroEnd = currentSkipSegments?.introEnd;
+    if (manualIntroEnd && currentTime < manualIntroEnd - 1) {
+      handleSeek(manualIntroEnd);
+      showMiniHud({
+        icon: 'seek-forward',
+        label: '已跳至标记片头结束',
+        subLabel: formatTime(manualIntroEnd),
+      });
+    } else if (introRange) {
       handleSeek(introRange.end);
       showMiniHud({
         icon: 'seek-forward',
@@ -1486,6 +1739,7 @@ export const PlayerPage: React.FC = () => {
           const max = await win.isMaximized();
           setIsMaximized(max);
         }
+        resetHideTimer();
       } catch (e) {
         console.warn(e);
       }
@@ -1515,6 +1769,7 @@ export const PlayerPage: React.FC = () => {
           const max = await win.isMaximized();
           setIsMaximized(max);
         }
+        resetHideTimer();
       } catch (e) {
         console.warn(e);
       }
@@ -1900,6 +2155,83 @@ export const PlayerPage: React.FC = () => {
     handleVideoErrorRef.current = handleVideoError;
   }, [handleVideoError]);
 
+  // macOS 原生全屏时，mpv 窗口会盖住 WebView；改用独立透明浮层承载 OSD 与弹幕。
+  // 其他平台与窗口模式完全沿用原有单窗口渲染路径。
+  const canUseMacOsdOverlay = isTauriEnvironment() && IS_MACOS && engineType === 'mpv';
+
+  useEffect(() => {
+    if (!canUseMacOsdOverlay) {
+      setOsdOverlayActive(false);
+      return;
+    }
+
+    let cancelled = false;
+    if (isFullscreen && !videoError) {
+      invoke('open_osd_overlay')
+        .then(() => {
+          if (cancelled) {
+            invoke('close_osd_overlay').catch(() => {});
+            return;
+          }
+          setOsdOverlayActive(true);
+        })
+        .catch((err) => {
+          console.warn('[OSD Overlay] open failed:', err);
+          setOsdOverlayActive(false);
+        });
+    } else {
+      invoke('close_osd_overlay').catch(() => {});
+      setOsdOverlayActive(false);
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [canUseMacOsdOverlay, isFullscreen, videoError]);
+
+  useEffect(() => {
+    if (!canUseMacOsdOverlay) return;
+    return () => {
+      invoke('close_osd_overlay').catch(() => {});
+    };
+  }, [canUseMacOsdOverlay]);
+
+  useEffect(() => {
+    if (!osdOverlayActive) return;
+
+    const pushSync = () => {
+      const payload = osdSyncPayloadRef.current;
+      if (payload) void emit(OSD_OVERLAY_SYNC_EVENT, payload);
+    };
+
+    pushSync();
+    const timer = window.setInterval(pushSync, 200);
+    const unlistenReady = listen(OSD_OVERLAY_READY_EVENT, () => {
+      pushSync();
+      void emit(OSD_OVERLAY_COMMENTS_EVENT, osdCommentsRef.current);
+    });
+
+    return () => {
+      window.clearInterval(timer);
+      unlistenReady.then((unlisten) => unlisten());
+    };
+  }, [osdOverlayActive]);
+
+  useEffect(() => {
+    if (!osdOverlayActive) return;
+    void emit(OSD_OVERLAY_COMMENTS_EVENT, formattedComments);
+  }, [osdOverlayActive, formattedComments]);
+
+  useEffect(() => {
+    if (!osdOverlayActive) return;
+    const unlisten = listen<OsdCommand>(OSD_OVERLAY_COMMAND_EVENT, (event) => {
+      osdCommandHandlerRef.current(event.payload);
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [osdOverlayActive]);
+
   const handleRetryDirect = (overrideMode?: StreamProxyOverride) => {
     if (!currentServer || !item || !mediaSource || !playSessionId) return;
     if (overrideMode) {
@@ -1909,6 +2241,11 @@ export const PlayerPage: React.FC = () => {
     setIsLoadingVideo(true);
     setVideoError(null);
     hasInitialSeekedRef.current = false;
+    outroDismissedRef.current = false;
+    outroToastShownRef.current = false;
+    setOutroToast(null);
+    const resolved = resolveInitialPlaybackTime(initialTimeRef.current);
+    initialTimeRef.current = resolved.seconds;
     const directUrl =
       engineType === 'mpv' && isTauriEnvironment()
         ? buildNativeDirectStreamUrl(
@@ -1934,6 +2271,95 @@ export const PlayerPage: React.FC = () => {
     setIsLoadingVideo(true);
     hasInitialSeekedRef.current = false;
     setEngineType('mpv');
+  };
+
+  osdCommentsRef.current = formattedComments;
+  osdSyncPayloadRef.current = item
+    ? {
+        title: item.Name,
+        subtitle: item.SeriesName
+          ? `${item.SeriesName} · 第 ${item.IndexNumber || 1} 集`
+          : undefined,
+        paused,
+        currentTime,
+        duration: duration || ticksToSeconds(item.RunTimeTicks || 0),
+        volume,
+        playbackRate,
+        networkSpeed,
+        danmakuVisible: danmakuSettings.visible,
+        danmakuCount: rawComments.length,
+        danmakuOffset: savedOffset,
+        matchedTitle,
+        audioTracks,
+        subtitleTracks,
+        selectedAudioId,
+        selectedSubtitleId,
+        danmakuStyle: {
+          speed: danmakuSettings.speed,
+          opacity: danmakuSettings.opacity,
+          area: danmakuSettings.area,
+          maxLines: danmakuSettings.maxLines,
+          bottomMargin: danmakuSettings.bottomMargin,
+        },
+        isLoading: isLoadingVideo,
+        skipSegments: currentSkipSegments || null,
+        outroToast: {
+          visible: Boolean(outroToast),
+          remainingMs: outroRemainingMs,
+          totalMs: OUTRO_TOAST_MS,
+        },
+        skipNotice,
+        skipOutroAction: skipSettings.skipOutroAction,
+      }
+    : null;
+  osdCommandHandlerRef.current = (cmd: OsdCommand) => {
+    switch (cmd.type) {
+      case 'toggle-play':
+        handleTogglePlay();
+        break;
+      case 'seek':
+        handleSeek(cmd.seconds);
+        break;
+      case 'volume':
+        handleVolumeChange(cmd.volume);
+        break;
+      case 'rate':
+        handleRateChange(cmd.rate);
+        break;
+      case 'toggle-danmaku':
+        updateDanmakuSettings({ visible: !danmakuSettings.visible });
+        break;
+      case 'toggle-fullscreen':
+        handleToggleFullscreen();
+        break;
+      case 'back':
+        handleBack();
+        break;
+      case 'home':
+        handleHome();
+        break;
+      case 'select-audio':
+        handleSelectAudioTrack(cmd.id);
+        break;
+      case 'select-subtitle':
+        handleSelectSubtitleTrack(cmd.id);
+        break;
+      case 'mark-intro-end':
+        handleMarkIntroEnd(cmd.seconds);
+        break;
+      case 'mark-outro-start':
+        handleMarkOutroStart(cmd.seconds);
+        break;
+      case 'clear-skip':
+        handleClearSkipSegment(cmd.field);
+        break;
+      case 'skip-outro':
+        handleSkipOutro();
+        break;
+      case 'cancel-outro':
+        handleCancelOutro();
+        break;
+    }
   };
 
   if (!item) {
@@ -1995,7 +2421,9 @@ export const PlayerPage: React.FC = () => {
       )}
 
       {/* 无打扰 Mini HUD & 长按倍速顶部胶囊 */}
-      <MiniActionHud hud={miniHud} fastForwardRate={fastForwardRate} />
+      {!osdOverlayActive && (
+        <MiniActionHud hud={miniHud} fastForwardRate={fastForwardRate} />
+      )}
 
       {/* 底层：原生视频表面穿透层与交互层 */}
       <div
@@ -2124,7 +2552,7 @@ export const PlayerPage: React.FC = () => {
       <DanmakuLayer
         bridge={bridge}
         comments={formattedComments}
-        visible={danmakuSettings.visible}
+        visible={danmakuSettings.visible && !osdOverlayActive}
         speed={danmakuSettings.speed}
         opacity={danmakuSettings.opacity}
         area={danmakuSettings.area}
@@ -2133,24 +2561,26 @@ export const PlayerPage: React.FC = () => {
       />
 
       {/* 跳过片头胶囊 & 下一集自动连播倒计时浮窗 */}
-      <UpNextOverlay
-        showSkipIntro={showSkipIntro}
-        onSkipIntro={handleSkipIntro}
-        nextEpisode={nextEpisode}
-        serverUrl={currentServer?.url}
-        countdownSeconds={autoNextCountdown}
-        onPlayNextNow={() => nextEpisode && switchToEpisode(nextEpisode)}
-        onCancelAutoNext={() => {
-          setCancelAutoNext(true);
-          setAutoNextCountdown(null);
-        }}
-      />
+      {!osdOverlayActive && (
+        <UpNextOverlay
+          showSkipIntro={showSkipIntro}
+          onSkipIntro={handleSkipIntro}
+          nextEpisode={nextEpisode}
+          serverUrl={currentServer?.url}
+          countdownSeconds={outroToast ? null : autoNextCountdown}
+          onPlayNextNow={() => nextEpisode && switchToEpisode(nextEpisode)}
+          onCancelAutoNext={() => {
+            setCancelAutoNext(true);
+            setAutoNextCountdown(null);
+          }}
+        />
+      )}
 
       {/* 顶层：播放器 OSD 控制栏 */}
       <PlayerOsd
         title={item.Name}
         subtitle={item.SeriesName ? `${item.SeriesName} · 第 ${item.IndexNumber || 1} 集` : undefined}
-        visible={isOsdVisible || isLoadingVideo || !!videoError}
+        visible={!osdOverlayActive && (isOsdVisible || isLoadingVideo || !!videoError)}
         paused={paused}
         currentTime={currentTime}
         duration={effectiveDuration}
@@ -2179,6 +2609,7 @@ export const PlayerPage: React.FC = () => {
         danmakuCount={rawComments.length}
         danmakuOffset={savedOffset}
         matchedTitle={matchedTitle}
+        skipSegments={currentSkipSegments}
         audioTracks={audioTracks}
         subtitleTracks={subtitleTracks}
         selectedAudioId={selectedAudioId}
@@ -2222,6 +2653,9 @@ export const PlayerPage: React.FC = () => {
         onCloseWindow={() => getCurrentWindow().close().catch(() => {})}
         onToggleWindowMode={handleToggleWindowMode}
         onToggleFullscreen={handleToggleFullscreen}
+        onMarkIntroEnd={() => handleMarkIntroEnd()}
+        onMarkOutroStart={() => handleMarkOutroStart()}
+        onClearSkipSegment={handleClearSkipSegment}
         onVideoClick={handleVideoClick}
         onVideoDoubleClick={handleVideoDoubleClick}
       />
@@ -2266,6 +2700,15 @@ export const PlayerPage: React.FC = () => {
         onOpenShortcuts={() => setActivePanel('shortcuts')}
       />
 
+      <OutroSkipToast
+        visible={Boolean(outroToast) && !osdOverlayActive}
+        remainingMs={outroRemainingMs}
+        totalMs={OUTRO_TOAST_MS}
+        defaultAction={skipSettings.skipOutroAction}
+        onSkip={handleSkipOutro}
+        onCancel={handleCancelOutro}
+      />
+
       {/* 弹幕加载或绑定提示 Toast */}
       {danmuToast && (
         <div className="fixed top-20 right-6 z-40 max-w-md bg-black/85 backdrop-blur-md border border-primary/40 text-white text-xs px-4 py-2.5 rounded-xl shadow-2xl flex items-center space-x-2.5 animate-in fade-in slide-in-from-top-2">
@@ -2273,6 +2716,8 @@ export const PlayerPage: React.FC = () => {
           <span className="font-medium truncate">{danmuToast}</span>
         </div>
       )}
+
+      <SkipNoticeToast message={osdOverlayActive ? null : skipNotice} />
 
       {/* 时长偏差提示 Banner */}
       {durationAlert && (

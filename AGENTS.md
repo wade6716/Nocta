@@ -165,6 +165,11 @@
 ### 12. libmpv / libmpv-wrapper 打包与 Windows DLL 依赖链加载规范 (Dynamic Library Bundling & Windows DLL Search Path)
 - **CI/CD 打包前置依赖注入**：
   - Git 仓库基于体积考虑排除了 `src-tauri/lib/*.dll`, `*.so`, `*.dylib`；因此在 GitHub Actions CI 流水线中，打包动作前必须运行 `scripts/setup-mpv.mjs --platform <platform> --arch <arch>` 自动拉取与目标平台架构严格匹配的 `libmpv-wrapper`（以及 Windows 专属的 `libmpv-2.dll`），避免安装包遗漏内核导致冷启动崩溃；
+- **本地开发环境前置检查**：
+  - 新克隆仓库、切换机器或拉取代码后发现 `src-tauri/lib/` 只有 `.gitkeep` 时，必须先执行 `pnpm install`、安装平台内核（macOS：`brew install mpv`；Windows/Linux 按 README 指引），再执行 `pnpm setup-mpv`；
+  - `pnpm setup-mpv` 在 macOS 找不到 Homebrew `libmpv` 时必须直接失败并提示 `brew install mpv`，不得输出 `SUCCESS` 掩盖缺库；同步动态库后必须重启 `pnpm tauri dev`，否则 Rust 进程不会重新执行 `init_macos_mpv_environment` 的预加载与软链建立；
+  - 典型误报：`Failed to load libmpv-wrapper from 'libmpv-wrapper.dylib'` 且搜索路径全部显示 `no such file`，优先检查 `src-tauri/lib/libmpv-wrapper.dylib` 与 `src-tauri/lib/libmpv.dylib` 是否存在且架构匹配（`file` / `otool -L`），不要先怀疑 Bundle 寻址补丁；
+  - **禁止同时装载两份同源 `libmpv`**：`ensure_unix_symlink` 若发现目标软链已存在但指向旧路径（如 Homebrew `libmpv`），必须删除并重建为当前资源副本，不能因 `dst.exists()` 直接跳过；开发模式下 `init_macos_mpv_environment(None)` 还必须识别 `current_exe().parent()/lib/`（即 `target/debug/lib`）作为资源目录。否则进程会既预载 Homebrew 原件又由 wrapper 加载项目副本，触发 Objective-C `Class ... is implemented in both ...` 重复类警告甚至崩溃；可通过 `lsof -p <nocta-pid> | grep libmpv` 验证只映射一份。
 - **Windows 下 DLL 依赖链加载与 126 错误码修复**：
   - 在 Windows 下，`tauri-plugin-libmpv` 会调用 `LoadLibraryExW` 加载 `libmpv-wrapper.dll`，而该 DLL 的导入表强依赖同目录下的 `libmpv-2.dll`；
   - Windows 系统加载器在解析二级依赖 DLL 时，默认仅检索主程序 `.exe` 所在目录和系统目录，不会自动将子目录 `lib/` 纳入解析链，从而抛出 `LoadLibraryExW code 126 ("找不到指定的模块。")`；
@@ -229,8 +234,49 @@
     - **上游插件硬编码路径缺陷**：`tauri-plugin-libmpv` 原版 `desktop.rs` 仅检查 `current_exe().parent()` (`Contents/MacOS`) 与 `exe_dir.join("lib")` (`Contents/MacOS/lib`)。在 macOS Bundle 体系中，Tauri 的 `"resources": ["lib/**/*"]` 必然打入 `Contents/Resources/lib/`。若在只读 DMG（`EROFS`）或签名后的 `/Applications` 运行时，动态在 `Contents/MacOS` 建立软链会失败，导致 `valid_lib_path` 退化为裸文件名 `"libmpv-wrapper.dylib"`，继而触发 dyld 报错：`dlopen(libmpv-wrapper.dylib, 0x0005): tried: 'libmpv-wrapper.dylib' (no such file)...`；
     - **解决方案 1（插件原生路径补丁）**：通过 Cargo `[patch.crates-io]` 本地重写 `src-tauri/crates/tauri-plugin-libmpv`，在 `search_dirs` 中显式扩展 `contents_dir.join("Resources").join("lib")`、`contents_dir.join("Resources")`、`contents_dir.join("Frameworks")` 及 `self.app.path().resource_dir()`，确保绝对路径 100% 精准寻址；
     - **解决方案 2（Rust 进程全局预热 Pre-loading）**：在 `init_macos_mpv_environment` 中，使用 `libc::dlopen(..., RTLD_NOW | RTLD_GLOBAL)` 先行预热加载 `libmpv-wrapper.dylib` 与 `libmpv.dylib`，将动态库镜像常驻进程内存，使后续任何裸库名 dlopen 均能瞬间命中内存缓存。
+  - **macOS 播放窗口必须嵌入 Nocta 主窗口（禁止独立 mpv 窗口体验）**：
+    - mpv 官方 `--wid` 仅支持 X11、Win32、Android，macOS 的 `CocoaCB` 会忽略 `wid` 并自行创建 `NSWindow`；不能通过插件传入 NSView 指针实现嵌入；
+    - 当前方案：mpv 启动参数使用固定标题 `Nocta Video Surface`、`border=no`、`title-bar=no`、`auto-window-resize=no`、`focus-on=never`、`input-cursor-passthrough=yes`；前端在 `file-loaded` / `playback-restart` 后调用 `attach_mpv_window`；
+    - Rust 侧 `src-tauri/src/mpv_embed_macos.m` 在主线程枚举 `NSApp.windows`，找到固定标题窗口后设置为无边框、透明背景、忽略鼠标事件、`FullScreenAuxiliary`，并通过 `addChildWindow:ordered:NSWindowBelow` 放在 Nocta 主窗口下方；WebView 保持上层，弹幕、OSD 和控制栏继续由 React 渲染；
+    - `NSWindow` / AppKit 操作必须经 `window.run_on_main_thread(...)`，绝不能在 Tauri IPC 线程直接调用；离开播放页时调用 `detach_mpv_window` 将子窗口移除并 `orderOut`；
+    - 选项名避坑：mpv 实际选项为 `input-cursor-passthrough`，写成 `cursor-passthrough` 会使 `mpv_set_option_string` 返回错误，导致内核初始化失败。
+    - **macOS 全屏使用原生 `setFullscreen`**：`setSimpleFullscreen` 本质仍是铺满屏幕的普通窗口，会被用户感知为“只是最大化”，且 Tauri 会吞掉底层失败返回值。进入原生全屏后必须依靠 `mpv_embed_macos.m` 的 `NSWindowDidEnterFullScreenNotification` / `NSWindowDidExitFullScreenNotification` / `NSWindowDidChangeScreenNotification` 监听，在事件后同步子窗口 frame 并执行 `orderWindow:NSWindowBelow relativeTo:`，重新把 mpv 压回 WebView 下方；200ms 同步定时器也要持续校正层级。
 
-### 17. 播放器沉浸体验、零闪烁弹幕与透明代理热切规范 (Player UX, Zero-Flicker Danmaku & Live Proxy Switching)
+### 17. macOS 原生交通灯与标题栏 Overlay 规范 (Native Traffic Lights & Overlay Title Bar)
+- **禁止在 macOS 用 CSS 模拟交通灯**：12px 圆点经过 WebView 合成必然存在模糊与语义偏差（绿色按钮无法正确进入原生全屏）。macOS 必须使用 AppKit 原生交通灯。
+- 通过 `src-tauri/tauri.macos.conf.json` 做平台覆盖：`decorations: true`、`titleBarStyle: "Overlay"`、`trafficLightPosition: { x: 16, y: 18 }`、`hiddenTitle: true`；主 `tauri.conf.json` 保持 `decorations: false`，供 Windows/Linux 使用自定义右侧窗口按钮。
+- 原生交通灯覆盖在 48px 自定义标题栏左上角，`TitleBar` 保留 `pl-20` 让位，但不得再渲染红黄绿 CSS 按钮；标题栏自身仍使用 `data-tauri-drag-region`。播放页的 `PlayerOsd` 在 macOS 非全屏时使用 `pl-20` 避让原生交通灯，全屏时恢复 `pl-5`。
+- 全屏入口统一调用原生 `setFullscreen`，绿色交通灯、OSD 全屏按钮、`F` 与 `Escape` 必须使用同一状态来源 `isFullscreen()`；“最大化”只能是独立操作，禁止再用“窗口全屏”文案混淆。
+
+### 18. macOS 原生全屏 OSD 独立浮层规范 (Fullscreen OSD Overlay Window)
+- **根因认知**：进入 macOS 原生全屏 Space 后，mpv 的 `FullScreenAuxiliary` 子窗口会被系统抬到主窗口之上，WebView 内渲染的 OSD、弹幕与进度条被视频画面遮挡。这不是 CSS `z-index` 问题，`orderWindow:NSWindowBelow` 与 200ms 层级校正也无法穿透全屏合成器；因此不要在全屏时继续单窗口渲染 OSD。
+- **方案**：仅当 `macOS + engineType === 'mpv' + 原生全屏` 时，由 `PlayerPage` 调用 `open_osd_overlay` 创建第二个 Tauri 窗口 `osd-overlay`（`index.html?osd=1`），透明、无边框、`always_on_top`，并在主线程配置 `NSStatusWindowLevel` + `NSWindowCollectionBehaviorFullScreenAuxiliary`，承载 `PlayerOsd` 与 `DanmakuLayer`；主窗口同时隐藏自身 OSD 与弹幕，退出全屏或离开播放页立即 `close_osd_overlay`。
+- **状态同步协议**（`src/player/osdOverlaySync.ts`）：主窗口每 200ms 广播 `osd:sync`（播放进度、音量、倍速、网速、音字幕轨、弹幕设置等），弹幕列表变化时广播 `osd:comments`，浮层挂载后发 `osd:ready`，浮层操作通过 `osd:command` 回传主窗口统一执行。禁止在浮层里直接操作引擎或 Emby API。
+- **浮层交互**：浮层是 key window，必须自行接管 `Space / ← → / ↑ ↓ / D / F / Esc` 快捷键；`PlayerOsd` 的 `overlayMode` 下隐藏弹幕设置抽屉、画质调校、分集、多版本片源、播放信息与窗口模式按钮（这些 UI 仍挂在主窗口，全屏时不可见）。OSD 隐藏时顶部胶囊必须同步 `pointer-events-none`，否则不可见区域会吞掉视频点击。
+- **窗口生命周期**：`WebviewUrl::App("index.html?osd=1")` 由 Tauri 通过 `Url::join` 解析；创建后、`show()` 后都要重新应用原生 level/collectionBehavior，防止显示时排序被重置。React StrictMode 会并发触发创建，Rust 侧遇到 `label already exists` 必须视为成功返回。
+- **平台隔离红线**：该浮层只允许 macOS + mpv 引擎启用；Windows/Linux 的 `--wid` 嵌入与 HTML5 引擎必须保持原单窗口渲染路径，禁止无条件调用 `open_osd_overlay`。
+
+### 19. 片头片尾标记与自动跳过规范 (Intro/Outro Skip Segments)
+- **数据模型与共享粒度**：
+  - `SkipSegments` 仅存储 `introEnd`（片头结束秒数）、`outroStart`（片尾开始秒数）与 `updatedAt`；不要存“片头开始”，起播永远从 0 或用户记忆进度开始判断；
+  - `getSkipKey(item)` 对带 `SeriesId` 的剧集统一使用 `series_<SeriesId>`（标一集全剧生效），电影/无剧集条目使用 `item_<Id>`；跨集继承时必须额外校验 `introEnd < runtime - 5`、`outroStart < runtime - 2`，避免不同时长剧集误触发；
+- **起播自动跳片头**：
+  - 必须在 `PlayerPage` 内、`engine.load()` 前把记忆进度解析为 effective initial time；满足 `skipIntroEnabled && rawTime < introEnd - 1` 时以 `introEnd` 作为 `initialTime` 传给引擎；
+  - MPV 与 HTML5 引擎都复用既有 `initialTime` 链路（MPV 的 `start` 预设、HTML5 的首帧 seek），禁止在 `loadfile` 后同步追加 `seek`；`initialTimeRef` 必须更新为实际起播秒数，继续参与首跳黑屏防护；
+- **片尾轻提示与取消**：
+  - 检测点放在引擎无关的 `onTimeUpdate`，用 `usePlayerStore.getState()` 读取最新标记与设置，禁止依赖首次挂载闭包；每次播放/每次切换条目仅触发一次 `outroToastShownRef`；
+  - 8 秒倒计时由主窗口统一维护，`cancel` 设置 `outroDismissedRef`（本次会话不再提示），`skip` 执行 `seek(total - 0.25)` 让播放器自然派发 ended；默认行为为 `ask`（倒计时结束仅关闭提示），可选 `auto`；
+  - 片尾提示独立于 OSD 显隐渲染（`z-40`），即使进度条因鼠标闲置淡出也必须保持可见；
+- **OSD 标记面板**：
+  - 控制栏使用 `Crosshair` 标记入口（与下一集 `SkipForward` 区分），面板提供“标记片头结束/片尾开始”、点击已标记时间跳转校验与清除操作；标记必须校验 `seconds >= 1`、片头不超过片长 95%、片头结束早于片尾开始、片尾开始晚于片头结束且早于结尾 2 秒；
+- **macOS 全屏浮层同步**：
+  - `osd:sync` 载荷必须携带 `skipSegments / outroToast{visible,remainingMs,totalMs} / skipOutroAction / skipNotice`；浮层渲染同一套标记面板、片尾 Toast 与操作提示；
+  - 浮层的标记、清除、跳过、取消全部通过 `osd:command` 回传主窗口执行，禁止浮层直接写 store 或操作引擎；
+- **持久化与多端同步**：
+  - localStorage 使用 `nocta_skip_segments` / `nocta_skip_settings`；备份与多端合并时按 `updatedAt` 取新者，导入旧版本备份必须容忍字段缺失并保留本机已有数据（replace 模式除外）；
+  - 设置页提供“自动跳过片头 / 片尾跳过提示 / 倒计时结束仅提示或自动跳过”三项，默认全部开启且采用 `ask`，避免错过片尾彩蛋。
+
+### 20. 播放器沉浸体验、零闪烁弹幕与透明代理热切规范 (Player UX, Zero-Flicker Danmaku & Live Proxy Switching)
 - **严禁因视觉参数变更触发 `DanmakuLayer` 重建 Canvas（消除闪烁红线）**：
   - `DanmakuLayer` 监听 `[bridge, comments]` 引用重建实例。因此 `PlayerPage` 构造 `formattedComments` 的 `useMemo` **只能依赖实际改变弹幕内容的字段**（`rawComments`, `fontSize`, `fontWeight`, `strokeWidth`, `colorMode`, `blockScroll`, `blockTop`, `blockBottom`, `blockColor`, `blockedWords`, `mergeDuplicates`）；
   - **绝不能将 `visible` / `opacity` / `speed` / `area` / `maxLines` / `bottomMargin` / `showHeatmap` 放入 `useMemo` 依赖**，否则拖动滑块调参时会造成满屏弹幕销毁重绘闪烁。
@@ -238,10 +284,9 @@
   - `PlayerOsd` 的进度条 `<input type="range">` 拖动过程中只更新本地 `scrubTime`（借助 `isScrubbingRef` + `scrubTimeRef`），仅在 `onPointerUp` / `onTouchEnd` / `onKeyUp` 释放时才调用 `onSeek`；
   - 在播放页内原地切集或切换多版本片源时，必须先用 `lastValidTimeRef.current` 上报当前会话的 `reportPlaybackStopped` 并记录 `reportedStoppedSessionRef`，防止 `useEffect` 清理函数在引擎 `load()` 重置 `_currentTime = 0` 后误将 Emby 播放进度冲刷归零。
 - **无边框播放窗顶部拖拽区交互规范**：
-  - `PlayerOsd` 顶部栏外层必须使用在 `visible` 状态下具备 `pointer-events-auto` 与 `data-tauri-drag-region` 的有限高度容器，两侧毛玻璃胶囊内部通过 `stopPropagation` 防止事件干扰，才可确保无边框窗口态可平滑拖拽与双击最大化。
+  - `PlayerOsd` 顶部栏外层必须使用在 `visible` 状态下具备 `pointer-events-auto` 与 `data-tauri-drag-region`（`overlayMode` 下禁用）的有限高度容器，两侧毛玻璃胶囊内部通过 `stopPropagation` 防止事件干扰，才可确保无边框窗口态可平滑拖拽与双击最大化。
 - **`libmpv` 真实硬解遥测与透明 `socks5` 路由提示**：
   - 真实硬解状态 (`hwdec-current`)、帧率 (`estimated-vf-fps`)、丢帧数 (`frame-drop-count`)、前向缓冲 (`demuxer-cache-duration`, `demuxer-cache-time`, `fw-bytes`) 全部通过 `OBSERVED_PROPERTIES` + 节流事件推送获取，延续「绝不调用 `getProperty(..., 'node')`」红线；
   - `resolveMpvProxyDetailed` 明确区分系统 HTTP 代理、手动 HTTP 代理、局域网直通旁路、直连以及 `socks5_fallback_direct`——当用户配置 `socks5://` 时透明展示说明并引导使用混合端口，同时支持通过 `StreamProxyOverride`（`follow` / `direct` / `proxy`）在不退出播放页的前提下原地保留精确秒数热重连媒体流。
 - **快捷键无打扰 Mini HUD 规范**：
   - 键盘调音量、快进/快退（支持 800ms 内连按累加显示）、倍速、长按 `→` 临时 2.5x 倍速快进（注意忽略 `e.repeat` 并处理 `blur` 恢复）、弹幕/字幕偏移均只呼出 `MiniActionHud` 轻量反馈胶囊，绝不拉起完整上下 OSD 工具栏，最大化沉浸观影体验。
-

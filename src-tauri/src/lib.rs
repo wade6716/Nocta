@@ -1,6 +1,53 @@
 mod proxy;
 mod sync;
 mod system;
+mod osd_overlay;
+#[cfg(target_os = "macos")]
+mod mpv_embed;
+
+const MPV_EMBED_WINDOW_TITLE: &str = "Nocta Video Surface";
+
+#[tauri::command]
+async fn attach_mpv_window(window: tauri::WebviewWindow) -> Result<bool, String> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::time::Duration;
+
+        let parent = window.ns_window().map_err(|e| e.to_string())? as usize;
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        window
+            .run_on_main_thread(move || {
+                let attached =
+                    mpv_embed::attach(parent as *mut std::ffi::c_void, MPV_EMBED_WINDOW_TITLE);
+                let _ = tx.send(attached);
+            })
+            .map_err(|e| e.to_string())?;
+
+        tauri::async_runtime::spawn_blocking(move || {
+            rx.recv_timeout(Duration::from_secs(2))
+                .map_err(|e| e.to_string())?
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = window;
+        Ok(false)
+    }
+}
+
+#[tauri::command]
+fn detach_mpv_window(window: tauri::WebviewWindow) {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = window.run_on_main_thread(mpv_embed::detach);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = window;
+    }
+}
 
 #[cfg(windows)]
 fn init_windows_dll_directories() {
@@ -37,12 +84,15 @@ fn init_windows_dll_directories() {
 
 #[cfg(target_os = "macos")]
 fn ensure_unix_symlink(src: &std::path::Path, dst: &std::path::Path) {
-    if dst.symlink_metadata().is_ok() {
-        // 若目标已是有效文件或有效软链则跳过；若是失效软链则先清理重建
-        if dst.exists() {
+    if let Ok(metadata) = dst.symlink_metadata() {
+        if metadata.file_type().is_symlink() {
+            if std::fs::read_link(dst).is_ok_and(|target| target == src) {
+                return;
+            }
+            let _ = std::fs::remove_file(dst);
+        } else {
             return;
         }
-        let _ = std::fs::remove_file(dst);
     }
     let _ = std::os::unix::fs::symlink(src, dst);
 }
@@ -55,13 +105,19 @@ fn init_macos_mpv_environment(resource_dir: Option<std::path::PathBuf>) {
         .ok()
         .and_then(|p| p.parent().map(|p| p.to_path_buf()));
 
-    let res_lib = resource_dir
-        .map(|r| r.join("lib"))
-        .or_else(|| {
-            exe_dir
-                .as_ref()
-                .and_then(|d| d.parent().map(|contents| contents.join("Resources").join("lib")))
-        });
+    let res_lib = resource_dir.map(|r| r.join("lib")).or_else(|| {
+        exe_dir.as_ref().and_then(|edir| {
+            let bundle_lib = edir
+                .parent()
+                .map(|contents| contents.join("Resources").join("lib"));
+            let dev_lib = edir.join("lib");
+            match bundle_lib {
+                Some(ref path) if path.exists() => Some(path.clone()),
+                _ if dev_lib.exists() => Some(dev_lib),
+                other => other,
+            }
+        })
+    });
 
     let home_lib = std::env::var_os("HOME").map(|h| PathBuf::from(h).join("lib"));
     if let Some(ref hlib) = home_lib {
@@ -227,6 +283,11 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_libmpv::init())
         .invoke_handler(tauri::generate_handler![
+            attach_mpv_window,
+            detach_mpv_window,
+            osd_overlay::open_osd_overlay,
+            osd_overlay::show_osd_overlay,
+            osd_overlay::close_osd_overlay,
             proxy::get_system_proxy,
             sync::sync_smb_test,
             sync::sync_smb_read,

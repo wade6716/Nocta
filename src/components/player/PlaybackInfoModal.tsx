@@ -10,12 +10,12 @@ import {
   Cpu,
   HardDrive,
   Activity,
-  Server,
-  Layers,
   Sparkles,
+  Globe,
 } from 'lucide-react';
 import { EmbyItem, EmbyMediaSource, MappedTrack } from '../../api/embyClient';
-import { formatNetworkSpeed } from './PlayerOsd';
+import { PlayerTelemetry, ResolvedStreamProxyInfo } from '../../player/types';
+import { formatNetworkSpeed, formatTime } from './PlayerOsd';
 
 interface PlaybackInfoModalProps {
   isOpen: boolean;
@@ -36,6 +36,8 @@ interface PlaybackInfoModalProps {
   danmakuCount?: number;
   danmakuOffset?: number;
   networkSpeed?: number;
+  telemetry?: PlayerTelemetry;
+  proxyInfo?: ResolvedStreamProxyInfo | null;
 }
 
 function formatBytes(bytes?: number): string {
@@ -54,16 +56,21 @@ function formatBitrate(bps?: number): string {
   return `${kbps} kbps`;
 }
 
-function formatTime(seconds: number): string {
-  if (isNaN(seconds) || seconds < 0) return '00:00';
-  const total = Math.floor(seconds);
-  const h = Math.floor(total / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = total % 60;
-  if (h > 0) {
-    return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+function formatProxyLabel(info?: ResolvedStreamProxyInfo | null): string {
+  if (!info) return '直连';
+  switch (info.mode) {
+    case 'system_http':
+      return `系统 HTTP 代理 (${info.effectiveProxy})`;
+    case 'manual_http':
+      return `手动 HTTP 代理 (${info.effectiveProxy})`;
+    case 'lan_bypass':
+      return '局域网自动旁路直连';
+    case 'socks5_fallback_direct':
+      return `SOCKS5 已配置 (${info.configuredProxy}) · 视频流直连`;
+    case 'direct':
+    default:
+      return info.overrideMode === 'direct' ? '强制直连' : '直连';
   }
-  return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
 }
 
 export const PlaybackInfoModal: React.FC<PlaybackInfoModalProps> = ({
@@ -71,7 +78,6 @@ export const PlaybackInfoModal: React.FC<PlaybackInfoModalProps> = ({
   onClose,
   item,
   mediaSource,
-  streamUrl,
   engineType,
   currentTime,
   duration,
@@ -85,23 +91,29 @@ export const PlaybackInfoModal: React.FC<PlaybackInfoModalProps> = ({
   danmakuCount,
   danmakuOffset,
   networkSpeed,
+  telemetry,
+  proxyInfo,
 }) => {
   const [copied, setCopied] = useState(false);
 
   if (!isOpen || !item) return null;
 
-  // 提取视频流与音频流元数据
-  const videoStream = mediaSource?.MediaStreams?.find((s) => s.Type === 'Video');
-  const activeAudioStream = mediaSource?.MediaStreams?.find(
-    (s) => s.Type === 'Audio' && (selectedAudioId ? String(s.Index) === selectedAudioId : s.IsDefault)
-  );
+  // 精确匹配当前选中音轨对应的 Emby MediaStream (修复 audio-<Index> 前缀错位 Bug)
   const currentAudioTrack = audioTracks.find((t) => t.id === selectedAudioId) || audioTracks[0];
+  const activeAudioStream = mediaSource?.MediaStreams?.find(
+    (s) =>
+      s.Type === 'Audio' &&
+      (currentAudioTrack
+        ? s.Index === currentAudioTrack.originalIndex
+        : selectedAudioId
+        ? `audio-${s.Index}` === selectedAudioId || String(s.Index) === selectedAudioId
+        : s.IsDefault)
+  );
+  const videoStream = mediaSource?.MediaStreams?.find((s) => s.Type === 'Video');
   const currentSubtitleTrack = subtitleTracks.find((t) => t.id === selectedSubtitleId);
 
-  // 进度计算
   const progressPercent = duration > 0 ? Math.round((currentTime / duration) * 100) : 0;
 
-  // 规格推断
   const resolutionLabel =
     videoStream?.Width && videoStream?.Height
       ? `${videoStream.Width} × ${videoStream.Height}`
@@ -114,20 +126,32 @@ export const PlaybackInfoModal: React.FC<PlaybackInfoModalProps> = ({
     videoStream?.VideoRange ||
     (videoStream?.BitDepth && videoStream.BitDepth >= 10 ? 'HDR' : 'SDR');
 
-  // 一键复制播放统计信息文本
+  const hwdecLabel =
+    engineType !== 'mpv'
+      ? '浏览器默认解码'
+      : telemetry?.hwdecCurrent && telemetry.hwdecCurrent !== 'no'
+      ? `已激活 (${telemetry.hwdecCurrent.toUpperCase()})`
+      : telemetry?.hwdecCurrent === 'no'
+      ? 'CPU 软解回退 (no)'
+      : '探测中 (auto-safe)';
+
   const handleCopyInfo = async () => {
     const lines = [
       `【Nocta 播放详细信息】`,
       `媒体标题: ${item.Name}`,
       item.SeriesName ? `剧集归属: ${item.SeriesName} (第 ${item.IndexNumber || 1} 集)` : null,
       `来源服务器: ${currentServerName || item.ServerName || '当前服务器'}`,
+      `网络代理路线: ${formatProxyLabel(proxyInfo)}`,
       `实时网速: ${formatNetworkSpeed(networkSpeed)}`,
-      `播放内核: ${engineType === 'mpv' ? 'libmpv (原生 GPU 硬解加速)' : 'HTML5 Video'}`,
+      `前向缓冲: ${telemetry?.cacheDuration !== undefined ? `${telemetry.cacheDuration.toFixed(1)}s` : '-'} (${formatBytes(telemetry?.cacheForwardBytes)})`,
+      `播放内核: ${engineType === 'mpv' ? 'libmpv (原生渲染)' : 'HTML5 Video'}`,
+      `实时硬件解码: ${hwdecLabel}`,
+      `实时渲染帧率: ${telemetry?.fps ? `${telemetry.fps.toFixed(2)} fps` : '-'} (丢帧: ${telemetry?.droppedFrames ?? 0})`,
       `播放进度: ${formatTime(currentTime)} / ${formatTime(duration)} (${progressPercent}%) · ${playbackRate}x 倍速`,
       `--- 视频流 ---`,
-      `视频编码: ${videoStream?.Codec?.toUpperCase() || '-'}`,
+      `视频编码: ${(telemetry?.videoCodec || videoStream?.Codec)?.toUpperCase() || '-'}`,
       `分辨率: ${resolutionLabel} (${videoStream?.AspectRatio || '-'})`,
-      `帧率: ${videoStream?.RealFrameRate || videoStream?.AverageFrameRate || '-'} fps`,
+      `源标称帧率: ${videoStream?.RealFrameRate || videoStream?.AverageFrameRate || '-'} fps`,
       `色深与范围: ${videoStream?.BitDepth ? `${videoStream.BitDepth}-bit` : '-'} · ${dynamicRange}`,
       `色彩空间: ${videoStream?.ColorSpace || videoStream?.ColorPrimaries || '-'}`,
       `Profile: ${videoStream?.Profile || '-'} (Level ${videoStream?.Level || '-'})`,
@@ -177,7 +201,7 @@ export const PlaybackInfoModal: React.FC<PlaybackInfoModalProps> = ({
             </div>
             <div>
               <div className="flex items-center space-x-2">
-                <h3 className="text-sm font-bold text-white tracking-tight">播放详细信息</h3>
+                <h3 className="text-sm font-bold text-white tracking-tight">实时硬解与媒体技术信息</h3>
                 <span
                   className={`text-[10px] px-2 py-0.5 rounded-full font-medium border flex items-center space-x-1 ${
                     engineType === 'mpv'
@@ -190,7 +214,7 @@ export const PlaybackInfoModal: React.FC<PlaybackInfoModalProps> = ({
                       engineType === 'mpv' ? 'bg-emerald-400 animate-pulse' : 'bg-primary'
                     }`}
                   />
-                  <span>{engineType === 'mpv' ? 'libmpv 硬解直出' : 'HTML5 引擎'}</span>
+                  <span>{engineType === 'mpv' ? 'DirectPlay 原画直出' : 'HTML5 引擎'}</span>
                 </span>
               </div>
               <p className="text-[11px] text-slate-400 mt-0.5 truncate max-w-md">
@@ -223,39 +247,46 @@ export const PlaybackInfoModal: React.FC<PlaybackInfoModalProps> = ({
           </div>
         </div>
 
-        {/* Body content with smooth scroll */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar text-xs">
-          {/* 1. 播放概览卡片 */}
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto p-6 space-y-5 custom-scrollbar text-xs">
+          {/* 1. 播放概览与网络代理状态 */}
           <div className="p-4 rounded-xl bg-white/[0.03] border border-white/[0.06] space-y-3">
             <div className="flex items-center space-x-2 text-slate-300 font-semibold text-xs border-b border-white/[0.04] pb-2">
               <Activity className="w-3.5 h-3.5 text-sky-400" />
-              <span>当前播放状态</span>
+              <span>当前播放与缓冲状态</span>
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-slate-300">
               <div>
                 <span className="text-slate-500 block text-[11px]">播放进度</span>
-                <span className="font-mono text-white font-medium text-xs">
+                <span className="font-mono text-white font-medium text-xs tabular-nums">
                   {formatTime(currentTime)} / {formatTime(duration)}
                 </span>
                 <span className="text-[10px] text-slate-500 ml-1 font-mono">({progressPercent}%)</span>
               </div>
 
               <div>
-                <span className="text-slate-500 block text-[11px]">当前倍速</span>
-                <span className="font-mono text-white font-medium text-xs">{playbackRate}x</span>
-              </div>
-
-              <div>
-                <span className="text-slate-500 block text-[11px]">传输协议</span>
-                <span className="text-emerald-400 font-medium text-xs">DirectStream 直链</span>
+                <span className="text-slate-500 block text-[11px]">前向缓冲</span>
+                <span className="font-mono text-emerald-300 font-medium text-xs tabular-nums">
+                  {telemetry?.cacheDuration !== undefined ? `${telemetry.cacheDuration.toFixed(1)}s` : '-'}
+                </span>
+                {telemetry?.cacheForwardBytes !== undefined && telemetry.cacheForwardBytes > 0 && (
+                  <span className="text-[10px] text-slate-500 ml-1 font-mono">
+                    ({formatBytes(telemetry.cacheForwardBytes)})
+                  </span>
+                )}
               </div>
 
               <div>
                 <span className="text-slate-500 block text-[11px]">实时网速</span>
-                <span className="font-mono text-sky-400 font-medium text-xs">
+                <span className="font-mono text-sky-400 font-medium text-xs tabular-nums">
                   {formatNetworkSpeed(networkSpeed)}
                 </span>
+              </div>
+
+              <div>
+                <span className="text-slate-500 block text-[11px]">倍速</span>
+                <span className="font-mono text-white font-medium text-xs">{playbackRate}x</span>
               </div>
 
               <div>
@@ -265,9 +296,69 @@ export const PlaybackInfoModal: React.FC<PlaybackInfoModalProps> = ({
                 </span>
               </div>
             </div>
+
+            <div className="pt-2 border-t border-white/[0.04] flex items-center space-x-2 text-[11px] text-slate-300">
+              <Globe className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              <span className="text-slate-500 shrink-0">网络代理路线:</span>
+              <span className="font-mono text-emerald-300 truncate">{formatProxyLabel(proxyInfo)}</span>
+            </div>
           </div>
 
-          {/* 2. 视频流参数 */}
+          {/* 2. 实时解码遥测与内核 */}
+          <div className="p-4 rounded-xl bg-white/[0.03] border border-white/[0.06] space-y-3">
+            <div className="flex items-center space-x-2 text-slate-300 font-semibold text-xs border-b border-white/[0.04] pb-2">
+              <Cpu className="w-3.5 h-3.5 text-emerald-400" />
+              <span>实时解码引擎遥测 (Hardware Telemetry)</span>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-y-3 gap-x-4">
+              <div>
+                <span className="text-slate-500 block text-[11px]">硬件解码 (HWDEC)</span>
+                <span
+                  className={`font-mono font-semibold ${
+                    telemetry?.hwdecCurrent && telemetry.hwdecCurrent !== 'no'
+                      ? 'text-emerald-400'
+                      : 'text-amber-300'
+                  }`}
+                >
+                  {hwdecLabel}
+                </span>
+              </div>
+
+              <div>
+                <span className="text-slate-500 block text-[11px]">实时渲染帧率</span>
+                <span className="font-mono text-white font-semibold tabular-nums">
+                  {telemetry?.fps !== undefined ? `${telemetry.fps.toFixed(2)} fps` : '-'}
+                </span>
+              </div>
+
+              <div>
+                <span className="text-slate-500 block text-[11px]">累计丢帧数</span>
+                <span className="font-mono text-white font-semibold tabular-nums">
+                  {telemetry?.droppedFrames ?? 0}
+                </span>
+              </div>
+
+              <div className="col-span-2 sm:col-span-3">
+                <span className="text-slate-500 block text-[11px]">弹幕源绑定</span>
+                <span className="text-sky-300 font-medium">
+                  {danmakuMatchedTitle ? (
+                    <span className="flex items-center space-x-1.5">
+                      <Sparkles className="w-3 h-3 text-sky-400" />
+                      <span>
+                        {danmakuMatchedTitle} ({danmakuCount || 0} 条弹幕
+                        {danmakuOffset ? ` · 偏移 ${danmakuOffset > 0 ? `+${danmakuOffset}` : danmakuOffset}s` : ''})
+                      </span>
+                    </span>
+                  ) : (
+                    '未绑定弹幕库'
+                  )}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* 3. 视频流参数 */}
           <div className="p-4 rounded-xl bg-white/[0.03] border border-white/[0.06] space-y-3">
             <div className="flex items-center space-x-2 text-slate-300 font-semibold text-xs border-b border-white/[0.04] pb-2">
               <Film className="w-3.5 h-3.5 text-primary" />
@@ -292,7 +383,9 @@ export const PlaybackInfoModal: React.FC<PlaybackInfoModalProps> = ({
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-y-3 gap-x-4">
               <div>
                 <span className="text-slate-500 block text-[11px]">编码格式</span>
-                <span className="font-mono text-white font-semibold">{videoStream?.Codec?.toUpperCase() || '-'}</span>
+                <span className="font-mono text-white font-semibold">
+                  {(telemetry?.videoCodec || videoStream?.Codec)?.toUpperCase() || '-'}
+                </span>
               </div>
 
               <div>
@@ -303,7 +396,7 @@ export const PlaybackInfoModal: React.FC<PlaybackInfoModalProps> = ({
               </div>
 
               <div>
-                <span className="text-slate-500 block text-[11px]">帧率</span>
+                <span className="text-slate-500 block text-[11px]">源标称帧率</span>
                 <span className="font-mono text-white">
                   {videoStream?.RealFrameRate || videoStream?.AverageFrameRate || '-'} fps
                 </span>
@@ -344,7 +437,7 @@ export const PlaybackInfoModal: React.FC<PlaybackInfoModalProps> = ({
             </div>
           </div>
 
-          {/* 3. 音频流参数 */}
+          {/* 4. 音频流参数 */}
           <div className="p-4 rounded-xl bg-white/[0.03] border border-white/[0.06] space-y-3">
             <div className="flex items-center space-x-2 text-slate-300 font-semibold text-xs border-b border-white/[0.04] pb-2">
               <Volume2 className="w-3.5 h-3.5 text-amber-400" />
@@ -389,123 +482,48 @@ export const PlaybackInfoModal: React.FC<PlaybackInfoModalProps> = ({
             </div>
           </div>
 
-          {/* 4. 字幕配置 */}
-          <div className="p-4 rounded-xl bg-white/[0.03] border border-white/[0.06] space-y-3">
-            <div className="flex items-center space-x-2 text-slate-300 font-semibold text-xs border-b border-white/[0.04] pb-2">
-              <Subtitles className="w-3.5 h-3.5 text-rose-400" />
-              <span>当前字幕属性 (Subtitles)</span>
-            </div>
-
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-y-3 gap-x-4">
-              <div className="col-span-2">
-                <span className="text-slate-500 block text-[11px]">字幕名称</span>
-                <span className="text-white font-medium truncate block">
-                  {currentSubtitleTrack ? currentSubtitleTrack.title : '未开启 / 关闭字幕'}
-                </span>
+          {/* 5. 字幕与存储容器 */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="p-4 rounded-xl bg-white/[0.03] border border-white/[0.06] space-y-2.5">
+              <div className="flex items-center space-x-2 text-slate-300 font-semibold text-xs border-b border-white/[0.04] pb-2">
+                <Subtitles className="w-3.5 h-3.5 text-rose-400" />
+                <span>当前字幕</span>
               </div>
-
-              <div>
-                <span className="text-slate-500 block text-[11px]">字幕格式</span>
-                <span className="font-mono text-white">
-                  {currentSubtitleTrack?.codec?.toUpperCase() || '-'}
-                </span>
+              <div className="text-white font-medium truncate">
+                {currentSubtitleTrack ? currentSubtitleTrack.title : '未开启 / 关闭字幕'}
               </div>
-
-              <div>
-                <span className="text-slate-500 block text-[11px]">载入方式</span>
-                <span className="text-white">
-                  {currentSubtitleTrack
-                    ? currentSubtitleTrack.isExternal
-                      ? '外部外挂字幕'
-                      : '容器内嵌字幕'
-                    : '-'}
-                </span>
+              <div className="text-[11px] text-slate-400">
+                格式: {currentSubtitleTrack?.codec?.toUpperCase() || '-'} ·{' '}
+                {currentSubtitleTrack
+                  ? currentSubtitleTrack.isExternal
+                    ? '外部外挂'
+                    : '容器内嵌'
+                  : '-'}
               </div>
             </div>
-          </div>
 
-          {/* 5. 播放内核与弹幕状态 */}
-          <div className="p-4 rounded-xl bg-white/[0.03] border border-white/[0.06] space-y-3">
-            <div className="flex items-center space-x-2 text-slate-300 font-semibold text-xs border-b border-white/[0.04] pb-2">
-              <Cpu className="w-3.5 h-3.5 text-emerald-400" />
-              <span>播放内核与弹幕状态 (Engine & Danmaku)</span>
-            </div>
-
-            <div className="grid grid-cols-2 gap-y-3 gap-x-4">
-              <div>
-                <span className="text-slate-500 block text-[11px]">渲染架构</span>
-                <span className="text-white font-medium">
-                  {engineType === 'mpv'
-                    ? 'Native libmpv 2.0 (Direct3D11 / Vulkan 硬件表面)'
-                    : 'HTML5 Video (Web Audio API)'}
-                </span>
+            <div className="p-4 rounded-xl bg-white/[0.03] border border-white/[0.06] space-y-2.5">
+              <div className="flex items-center space-x-2 text-slate-300 font-semibold text-xs border-b border-white/[0.04] pb-2">
+                <HardDrive className="w-3.5 h-3.5 text-slate-400" />
+                <span>容器与文件体积</span>
               </div>
-
-              <div>
-                <span className="text-slate-500 block text-[11px]">硬件解码 (HWDEC)</span>
-                <span className="text-emerald-400 font-medium">
-                  {engineType === 'mpv' ? '已启用 (auto-safe)' : '浏览器默认'}
-                </span>
+              <div className="font-mono text-white font-semibold">
+                {mediaSource?.Container?.toUpperCase() || '-'} · {formatBytes(mediaSource?.Size)}
               </div>
-
-              <div className="col-span-2">
-                <span className="text-slate-500 block text-[11px]">弹幕源绑定</span>
-                <span className="text-sky-300 font-medium">
-                  {danmakuMatchedTitle ? (
-                    <span className="flex items-center space-x-1.5">
-                      <Sparkles className="w-3 h-3 text-sky-400" />
-                      <span>
-                        {danmakuMatchedTitle} ({danmakuCount || 0} 条弹幕
-                        {danmakuOffset ? ` · 偏移 ${danmakuOffset > 0 ? `+${danmakuOffset}` : danmakuOffset}s` : ''})
-                      </span>
-                    </span>
-                  ) : (
-                    '未绑定弹幕库'
-                  )}
-                </span>
+              <div className="text-[11px] text-slate-400 font-mono">
+                总比特率: {formatBitrate(mediaSource?.Bitrate)}
               </div>
             </div>
           </div>
 
-          {/* 6. 文件与服务器 */}
-          <div className="p-4 rounded-xl bg-white/[0.03] border border-white/[0.06] space-y-3">
-            <div className="flex items-center space-x-2 text-slate-300 font-semibold text-xs border-b border-white/[0.04] pb-2">
-              <HardDrive className="w-3.5 h-3.5 text-slate-400" />
-              <span>存储与文件详情 (Storage & Source)</span>
+          {mediaSource?.Path && (
+            <div className="p-3 rounded-xl bg-black/30 border border-white/5">
+              <span className="text-slate-500 block text-[10px] mb-1">服务器物理路径</span>
+              <p className="font-mono text-[11px] text-slate-300 break-all select-text">
+                {mediaSource.Path}
+              </p>
             </div>
-
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-y-3 gap-x-4">
-              <div>
-                <span className="text-slate-500 block text-[11px]">容器格式</span>
-                <span className="font-mono text-white font-semibold">
-                  {mediaSource?.Container?.toUpperCase() || '-'}
-                </span>
-              </div>
-
-              <div>
-                <span className="text-slate-500 block text-[11px]">文件体积</span>
-                <span className="font-mono text-white font-semibold">
-                  {formatBytes(mediaSource?.Size)}
-                </span>
-              </div>
-
-              <div>
-                <span className="text-slate-500 block text-[11px]">总比特率</span>
-                <span className="font-mono text-white">
-                  {formatBitrate(mediaSource?.Bitrate)}
-                </span>
-              </div>
-
-              {mediaSource?.Path && (
-                <div className="col-span-2 sm:col-span-3">
-                  <span className="text-slate-500 block text-[11px]">服务器物理路径</span>
-                  <p className="font-mono text-[11px] text-slate-300 break-all bg-black/30 p-2 rounded-lg border border-white/5 select-text">
-                    {mediaSource.Path}
-                  </p>
-                </div>
-              )}
-            </div>
-          </div>
+          )}
         </div>
       </div>
     </div>

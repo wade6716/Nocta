@@ -8,9 +8,19 @@ import {
   MpvObservableProperty,
 } from 'tauri-plugin-libmpv-api';
 import { UnlistenFn } from '@tauri-apps/api/event';
-import { IPlayerEngine, PlayerLoadOptions, PlayerState } from './types';
+import {
+  HwdecMode,
+  IPlayerEngine,
+  PlayerLoadOptions,
+  PlayerState,
+  PlayerTelemetry,
+  ResolvedStreamProxyInfo,
+  StreamProxyOverride,
+  ToneMappingMode,
+  VideoAspectPreset,
+} from './types';
 import { MappedTrack } from '../api/embyClient';
-import { resolveEffectiveProxy } from '../api/http';
+import { resolveEffectiveProxyDetailed } from '../api/http';
 
 const OBSERVED_PROPERTIES = [
   ['pause', 'flag'],
@@ -24,6 +34,13 @@ const OBSERVED_PROPERTIES = [
   ['track-list', 'node', 'none'],
   ['cache-speed', 'int64', 'none'],
   ['demuxer-cache-state', 'node', 'none'],
+  // 真实硬件解码状态与缓冲/帧率标量遥测（全部通过事件推送，严禁调用 getProperty(..., 'node')）
+  ['hwdec-current', 'string', 'none'],
+  ['video-codec', 'string', 'none'],
+  ['estimated-vf-fps', 'double', 'none'],
+  ['frame-drop-count', 'int64', 'none'],
+  ['demuxer-cache-duration', 'double', 'none'],
+  ['demuxer-cache-time', 'double', 'none'],
 ] as const satisfies readonly MpvObservableProperty[];
 
 function isLanOrLoopbackUrl(rawUrl?: string): boolean {
@@ -54,21 +71,60 @@ function isLanOrLoopbackUrl(rawUrl?: string): boolean {
   }
 }
 
-async function resolveMpvHttpProxy(targetUrl?: string): Promise<string> {
-  if (targetUrl && isLanOrLoopbackUrl(targetUrl)) {
-    return '';
+async function resolveMpvProxyDetailed(
+  targetUrl?: string,
+  override: StreamProxyOverride = 'follow'
+): Promise<ResolvedStreamProxyInfo> {
+  if (override === 'direct') {
+    return { mode: 'direct', effectiveProxy: '', overrideMode: 'direct' };
   }
+
+  if (override === 'follow' && targetUrl && isLanOrLoopbackUrl(targetUrl)) {
+    return { mode: 'lan_bypass', effectiveProxy: '', overrideMode: 'follow' };
+  }
+
   try {
-    const proxy = await resolveEffectiveProxy();
-    if (!proxy) return '';
-    // libmpv 的 http-proxy 仅支持 http:// 或 https:// 协议代理
-    if (/^https?:\/\//i.test(proxy.trim())) {
-      return proxy.trim();
+    const detail = await resolveEffectiveProxyDetailed();
+    if (!detail.url) {
+      return {
+        mode: 'direct',
+        effectiveProxy: '',
+        overrideMode: override,
+        notice:
+          override === 'proxy' ? '当前未检测到可用系统或手动代理，已回退直连' : undefined,
+      };
     }
-    return '';
+
+    const trimmed = detail.url.trim();
+    if (/^https?:\/\//i.test(trimmed)) {
+      return {
+        mode: detail.source === 'system' ? 'system_http' : 'manual_http',
+        effectiveProxy: trimmed,
+        configuredProxy: trimmed,
+        overrideMode: override,
+      };
+    }
+
+    if (/^socks/i.test(trimmed)) {
+      return {
+        mode: 'socks5_fallback_direct',
+        effectiveProxy: '',
+        configuredProxy: trimmed,
+        overrideMode: override,
+        notice:
+          'libmpv 视频流仅支持 HTTP 代理，检测到当前配置为 SOCKS5，视频流已自动直连；建议使用代理工具的 HTTP/混合端口（如 Clash 7890）',
+      };
+    }
+
+    return {
+      mode: 'direct',
+      effectiveProxy: '',
+      configuredProxy: trimmed,
+      overrideMode: override,
+    };
   } catch (e) {
     console.warn('[MpvEngine Resolve Proxy Warning]', e);
-    return '';
+    return { mode: 'direct', effectiveProxy: '', overrideMode: override };
   }
 }
 
@@ -98,6 +154,10 @@ export class MpvPlayerEngine implements IPlayerEngine {
   private _videoHeight = 0;
   private _networkSpeed = 0;
   private lastSpeedUpdateAt = 0;
+  private _telemetry: PlayerTelemetry = {};
+  private _lastProxyInfo: ResolvedStreamProxyInfo | null = null;
+  private telemetryTimer: number | null = null;
+  private telemetryDirty = false;
 
   private timeUpdateListeners: Set<(currentTime: number, duration: number) => void> = new Set();
   private stateChangeListeners: Set<(state: PlayerState) => void> = new Set();
@@ -105,6 +165,8 @@ export class MpvPlayerEngine implements IPlayerEngine {
   private videoDimensionsListeners: Set<(width: number, height: number) => void> = new Set();
   private tracksLoadedListeners: Set<(audio: MappedTrack[], subtitles: MappedTrack[]) => void> = new Set();
   private networkSpeedListeners: Set<(speed: number) => void> = new Set();
+  private telemetryListeners: Set<(telemetry: PlayerTelemetry) => void> = new Set();
+  private proxyResolvedListeners: Set<(info: ResolvedStreamProxyInfo) => void> = new Set();
   private speedPollTimer: number | null = null;
 
   get state(): PlayerState {
@@ -133,7 +195,8 @@ export class MpvPlayerEngine implements IPlayerEngine {
     const task = MpvPlayerEngine.lifecycleQueue.then(async () => {
       if (this.isDestroyed || this.isInitialized) return;
 
-      const effectiveProxy = await resolveMpvHttpProxy();
+      const proxyInfo = await resolveMpvProxyDetailed();
+      const effectiveProxy = proxyInfo.effectiveProxy;
 
       if (!MpvPlayerEngine.mpvInstanceCreated) {
         // initialOptions 仅保留跨平台 100% 兼容的核心参数，避免因个别平台不识别辅助选项导致 mpv_wrapper_create 返回 NULL
@@ -191,6 +254,10 @@ export class MpvPlayerEngine implements IPlayerEngine {
       await setProperty('input-default-bindings', 'no').catch(() => {});
       await setProperty('input-vo-keyboard', 'no').catch(() => {});
       await setProperty('panscan', 0.0).catch(() => {});
+      await setProperty('volume-max', 200).catch(() => {});
+      await setProperty('screenshot-format', 'png').catch(() => {});
+      await setProperty('screenshot-high-bit-depth', 'yes').catch(() => {});
+      await setProperty('target-peak', 'auto').catch(() => {});
       if (effectiveProxy) {
         await setProperty('http-proxy', effectiveProxy).catch(() => {});
       }
@@ -336,6 +403,51 @@ export class MpvPlayerEngine implements IPlayerEngine {
                   this.networkSpeedListeners.forEach((cb) => cb(this._networkSpeed));
                 }
               }
+              const fwBytes = (data as any)['fw-bytes'];
+              if (typeof fwBytes === 'number' && !Number.isNaN(fwBytes) && fwBytes >= 0) {
+                this._telemetry.cacheForwardBytes = fwBytes;
+                this.emitTelemetryThrottled();
+              }
+            }
+            break;
+          }
+          case 'hwdec-current': {
+            this._telemetry.hwdecCurrent = typeof data === 'string' && data ? data : 'no';
+            this.emitTelemetryThrottled();
+            break;
+          }
+          case 'video-codec': {
+            if (typeof data === 'string' && data) {
+              this._telemetry.videoCodec = data;
+              this.emitTelemetryThrottled();
+            }
+            break;
+          }
+          case 'estimated-vf-fps': {
+            if (typeof data === 'number' && !Number.isNaN(data) && data >= 0) {
+              this._telemetry.fps = data;
+              this.emitTelemetryThrottled();
+            }
+            break;
+          }
+          case 'frame-drop-count': {
+            if (typeof data === 'number' && !Number.isNaN(data) && data >= 0) {
+              this._telemetry.droppedFrames = data;
+              this.emitTelemetryThrottled();
+            }
+            break;
+          }
+          case 'demuxer-cache-duration': {
+            if (typeof data === 'number' && !Number.isNaN(data) && data >= 0) {
+              this._telemetry.cacheDuration = data;
+              this.emitTelemetryThrottled();
+            }
+            break;
+          }
+          case 'demuxer-cache-time': {
+            if (typeof data === 'number' && !Number.isNaN(data) && data >= 0) {
+              this._telemetry.bufferedEnd = data;
+              this.emitTelemetryThrottled();
             }
             break;
           }
@@ -482,13 +594,30 @@ export class MpvPlayerEngine implements IPlayerEngine {
 
     if (this.isDestroyed || currentEpoch !== this.loadEpoch) return;
 
-    // 根据目标 URL 是否为局域网动态设置代理
+    // 解析并应用播放流网络代理路线，并向 UI 广播透明代理诊断状态
+    let resolvedProxyInfo: ResolvedStreamProxyInfo = {
+      mode: 'direct',
+      effectiveProxy: '',
+      overrideMode: options.proxyOverride ?? 'follow',
+    };
     try {
-      const effectiveProxy = await resolveMpvHttpProxy(options.url);
-      await setProperty('http-proxy', effectiveProxy);
+      resolvedProxyInfo = await resolveMpvProxyDetailed(options.url, options.proxyOverride ?? 'follow');
+      this._lastProxyInfo = resolvedProxyInfo;
+      this.proxyResolvedListeners.forEach((cb) => cb(resolvedProxyInfo));
+      await setProperty('http-proxy', resolvedProxyInfo.effectiveProxy);
     } catch (e) {
       console.warn('[MpvEngine Sync Proxy Warning]', e);
     }
+
+    // 重置流级别遥测数据（保留硬解器名称，待新流事件刷新）
+    this._telemetry = {
+      hwdecCurrent: this._telemetry.hwdecCurrent,
+      droppedFrames: 0,
+      cacheDuration: 0,
+      bufferedEnd: 0,
+      cacheForwardBytes: 0,
+    };
+    this.emitTelemetryThrottled();
 
     // 每次加载媒体流时，显式保证流可定点 Seek、范围检索 (HTTP Range) 与解码器跳转丢帧保护
     await setProperty('force-seekable', 'yes').catch(() => {});
@@ -498,6 +627,7 @@ export class MpvPlayerEngine implements IPlayerEngine {
     this.setState('loading');
     this.pendingSeekTime = options.initialTime && options.initialTime > 0 ? options.initialTime : null;
     this._currentTime = 0;
+    this._duration = 0;
 
     try {
       // 关键修复：切勿在 loadfile 后同步调用 command('seek')，因为文件尚未完成 demux 打开，
@@ -518,6 +648,7 @@ export class MpvPlayerEngine implements IPlayerEngine {
           this.isInitialized = false;
           MpvPlayerEngine.mpvInstanceCreated = false;
           await this.init(null);
+          await setProperty('http-proxy', resolvedProxyInfo.effectiveProxy).catch(() => {});
           if (this.pendingSeekTime && this.pendingSeekTime > 0) {
             await setProperty('start', `+${Math.floor(this.pendingSeekTime)}`).catch(() => {});
           }
@@ -581,7 +712,7 @@ export class MpvPlayerEngine implements IPlayerEngine {
   }
 
   async setVolume(volume: number): Promise<void> {
-    this._volume = Math.max(0, Math.min(100, volume));
+    this._volume = Math.max(0, Math.min(200, volume));
     if (!this.isInitialized || this.isDestroyed) return;
     try {
       await setProperty('volume', this._volume);
@@ -654,6 +785,144 @@ export class MpvPlayerEngine implements IPlayerEngine {
     }
   }
 
+  // ==================== Pro 硬解 / 画质 / 音字幕调校接口 ====================
+
+  async setHwdecMode(mode: HwdecMode): Promise<void> {
+    if (!this.isInitialized || this.isDestroyed) return;
+    await setProperty('hwdec', mode).catch(() => {});
+  }
+
+  async setVideoAspect(preset: VideoAspectPreset): Promise<void> {
+    if (!this.isInitialized || this.isDestroyed) return;
+    if (preset === 'fill') {
+      await setProperty('video-aspect-override', '-1').catch(() => {});
+      await setProperty('panscan', 1.0).catch(() => {});
+    } else if (preset === 'auto') {
+      await setProperty('video-aspect-override', '-1').catch(() => {});
+      await setProperty('panscan', 0.0).catch(() => {});
+    } else {
+      await setProperty('video-aspect-override', preset).catch(() => {});
+      await setProperty('panscan', 0.0).catch(() => {});
+    }
+  }
+
+  async setVideoEnhancement(opts: {
+    toneMapping?: ToneMappingMode;
+    deband?: boolean;
+    brightness?: number;
+    contrast?: number;
+    saturation?: number;
+    gamma?: number;
+  }): Promise<void> {
+    if (!this.isInitialized || this.isDestroyed) return;
+    if (opts.toneMapping !== undefined) {
+      await setProperty('tone-mapping', opts.toneMapping).catch(() => {});
+    }
+    if (opts.deband !== undefined) {
+      await setProperty('deband', opts.deband ? 'yes' : 'no').catch(() => {});
+    }
+    if (opts.brightness !== undefined) {
+      await setProperty('brightness', opts.brightness).catch(() => {});
+    }
+    if (opts.contrast !== undefined) {
+      await setProperty('contrast', opts.contrast).catch(() => {});
+    }
+    if (opts.saturation !== undefined) {
+      await setProperty('saturation', opts.saturation).catch(() => {});
+    }
+    if (opts.gamma !== undefined) {
+      await setProperty('gamma', opts.gamma).catch(() => {});
+    }
+  }
+
+  async setAudioEnhancement(opts: {
+    audioDelay?: number;
+    nightMode?: boolean;
+    volumeMax?: number;
+  }): Promise<void> {
+    if (!this.isInitialized || this.isDestroyed) return;
+    if (opts.volumeMax !== undefined) {
+      await setProperty('volume-max', opts.volumeMax).catch(() => {});
+    }
+    if (opts.audioDelay !== undefined) {
+      await setProperty('audio-delay', opts.audioDelay).catch(() => {});
+    }
+    if (opts.nightMode !== undefined) {
+      await setProperty('af', opts.nightMode ? 'lavfi=[dynaudnorm=f=150:g=15]' : '').catch(() => {});
+    }
+  }
+
+  async setSubtitleStyle(opts: { delay?: number; scale?: number; pos?: number }): Promise<void> {
+    if (!this.isInitialized || this.isDestroyed) return;
+    if (opts.delay !== undefined) {
+      await setProperty('sub-delay', opts.delay).catch(() => {});
+    }
+    if (opts.scale !== undefined) {
+      await setProperty('sub-scale', opts.scale).catch(() => {});
+    }
+    if (opts.pos !== undefined) {
+      await setProperty('sub-pos', opts.pos).catch(() => {});
+    }
+  }
+
+  async selectSecondarySubtitleTrack(trackId: string | null): Promise<void> {
+    if (!this.isInitialized || this.isDestroyed) return;
+    try {
+      if (!trackId) {
+        await setProperty('secondary-sid', 'no');
+        return;
+      }
+      const numericMatch = String(trackId).match(/(\d+)/);
+      const sidValue = numericMatch ? Number(numericMatch[1]) : trackId;
+      await setProperty('secondary-sid', sidValue);
+    } catch (err) {
+      console.warn('[MpvEngine SelectSecondarySubtitleTrack Error]', err);
+    }
+  }
+
+  async addExternalSubtitle(pathOrUrl: string): Promise<void> {
+    if (!this.isInitialized || this.isDestroyed) return;
+    await command('sub-add', [pathOrUrl, 'select']);
+  }
+
+  async frameStep(direction: 'forward' | 'backward'): Promise<void> {
+    if (!this.isInitialized || this.isDestroyed) return;
+    try {
+      await command(direction === 'forward' ? 'frame-step' : 'frame-back-step');
+    } catch (err) {
+      console.warn('[MpvEngine FrameStep Error]', err);
+    }
+  }
+
+  async setAbLoop(point: 'a' | 'b' | 'clear', seconds?: number): Promise<void> {
+    if (!this.isInitialized || this.isDestroyed) return;
+    if (point === 'clear') {
+      await setProperty('ab-loop-a', 'no').catch(() => {});
+      await setProperty('ab-loop-b', 'no').catch(() => {});
+      return;
+    }
+    const target = seconds ?? this._currentTime;
+    await setProperty(point === 'a' ? 'ab-loop-a' : 'ab-loop-b', target).catch(() => {});
+  }
+
+  async takeScreenshot(directory: string, mode: 'subtitles' | 'video' = 'subtitles'): Promise<void> {
+    if (!this.isInitialized || this.isDestroyed) return;
+    await setProperty('screenshot-directory', directory).catch(() => {});
+    await command('screenshot', [mode]);
+  }
+
+  private emitTelemetryThrottled() {
+    this.telemetryDirty = true;
+    if (this.telemetryTimer !== null) return;
+    this.telemetryTimer = window.setTimeout(() => {
+      this.telemetryTimer = null;
+      if (this.isDestroyed || !this.telemetryDirty) return;
+      this.telemetryDirty = false;
+      const snapshot = { ...this._telemetry };
+      this.telemetryListeners.forEach((cb) => cb(snapshot));
+    }, 400);
+  }
+
   async destroy(): Promise<void> {
     this.isDestroyed = true;
     this.loadEpoch++;
@@ -670,6 +939,10 @@ export class MpvPlayerEngine implements IPlayerEngine {
       } catch {}
       this.unlistenEvents = null;
     }
+    if (this.telemetryTimer !== null) {
+      window.clearTimeout(this.telemetryTimer);
+      this.telemetryTimer = null;
+    }
 
     this.stopSpeedPolling();
     this.timeUpdateListeners.clear();
@@ -678,6 +951,8 @@ export class MpvPlayerEngine implements IPlayerEngine {
     this.videoDimensionsListeners.clear();
     this.tracksLoadedListeners.clear();
     this.networkSpeedListeners.clear();
+    this.telemetryListeners.clear();
+    this.proxyResolvedListeners.clear();
     this._networkSpeed = 0;
     this._state = 'idle';
 
@@ -734,5 +1009,21 @@ export class MpvPlayerEngine implements IPlayerEngine {
     this.networkSpeedListeners.add(cb);
     cb(this._networkSpeed);
     return () => this.networkSpeedListeners.delete(cb);
+  }
+
+  onTelemetry(cb: (telemetry: PlayerTelemetry) => void): () => void {
+    this.telemetryListeners.add(cb);
+    if (Object.keys(this._telemetry).length > 0) {
+      cb({ ...this._telemetry });
+    }
+    return () => this.telemetryListeners.delete(cb);
+  }
+
+  onProxyResolved(cb: (info: ResolvedStreamProxyInfo) => void): () => void {
+    this.proxyResolvedListeners.add(cb);
+    if (this._lastProxyInfo) {
+      cb(this._lastProxyInfo);
+    }
+    return () => this.proxyResolvedListeners.delete(cb);
   }
 }

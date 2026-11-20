@@ -102,25 +102,40 @@ export async function fetchSystemProxy(forceRefresh = false): Promise<SystemProx
   return fallback;
 }
 
+export async function resolveEffectiveProxyDetailed(config?: ProxyConfig): Promise<{
+  url?: string;
+  source: 'direct' | 'system' | 'manual';
+}> {
+  const targetConfig = config || (activeProxyGetter ? activeProxyGetter() : undefined);
+  if (!targetConfig) {
+    return { source: 'direct' };
+  }
+
+  if (targetConfig.type === 'direct') {
+    return { source: 'direct' };
+  }
+
+  if (targetConfig.type === 'system') {
+    const sys = await fetchSystemProxy();
+    return sys.enabled && sys.url
+      ? { url: sys.url, source: 'system' }
+      : { source: 'direct' };
+  }
+
+  // manual / http / socks5
+  return {
+    url: formatProxyUrl(targetConfig),
+    source: 'manual',
+  };
+}
+
 /**
  * 计算当前应该生效的代理 URL 字符串
  * @param config 若传入特定配置则优先解析，否则解析全局/当前活动配置
  */
 export async function resolveEffectiveProxy(config?: ProxyConfig): Promise<string | undefined> {
-  const targetConfig = config || (activeProxyGetter ? activeProxyGetter() : undefined);
-  if (!targetConfig) return undefined;
-
-  if (targetConfig.type === 'direct') {
-    return undefined;
-  }
-
-  if (targetConfig.type === 'system') {
-    const sys = await fetchSystemProxy();
-    return sys.enabled && sys.url ? sys.url : undefined;
-  }
-
-  // manual / http / socks5
-  return formatProxyUrl(targetConfig);
+  const detail = await resolveEffectiveProxyDetailed(config);
+  return detail.url;
 }
 
 /**

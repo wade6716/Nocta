@@ -469,3 +469,23 @@ pnpm tauri build
    - **插件本地 Patch（Cargo `[patch.crates-io]`）**：在 `src-tauri/crates/tauri-plugin-libmpv` 中，将 `search_dirs` 扩充检索 `Contents/Resources/lib`、`Contents/Resources`、`Contents/Frameworks` 以及 `self.app.path().resource_dir()`，彻底消除裸库名退化，100% 传入绝对路径；
    - **Rust 全局预热预载（`init_macos_mpv_environment`）**：在应用入口使用 `libc::dlopen(..., RTLD_NOW | RTLD_GLOBAL)` 先行预热加载 `libmpv-wrapper.dylib` 与 `libmpv.dylib`，将动态库常驻进程全局符号表。
 
+---
+
+## 20. 播放器沉浸体验重构与三大定位协同架构 (Immersive Player UX: Hardware Decode + Danmaku + Live Proxy)
+
+### 20.1 专注非阻断式浮层体系与桌面交互升级
+1. **组件解耦**：
+   - [`PlayerOsd.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/PlayerOsd.tsx)：修复无边框顶栏拖拽区 `pointer-events` 失效问题；重塑高能多维进度条（本地 Scrub 防抖、`demuxer-cache-time` 缓冲条、SVG 弹幕热度波峰曲线、Emby 章节标记与 A-B 循环区间）；顶栏新增实时时钟、硬解状态徽章与窗口置顶 Pin。
+   - [`MiniActionHud.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/MiniActionHud.tsx)：屏幕轻量反馈胶囊（音量含 >100% 软件增益变色、连按快进累加、长按 `→` 临时 2.5x 倍速胶囊、无损 PNG 截图带「打开目录」按钮），按键调节不再强行拉起整套上下大工具栏。
+   - [`PlayerContextMenu.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/PlayerContextMenu.tsx) & [`ShortcutsModal.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/ShortcutsModal.tsx)：原生感暗色毛玻璃右键菜单、桌面滚轮/Shift+滚轮手势与 `?` 键快捷键指南。
+2. **追番闭环与多版本源切换**：
+   - [`EpisodeDrawer.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/EpisodeDrawer.tsx) & [`UpNextOverlay.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/UpNextOverlay.tsx)：支持季/集抽屉选集、原地无缝切集（不销毁底层 `mpv` 单例）、Emby 多版本片源原画直连切换、自动连播倒计时以及 Emby `Chapters`（`IntroStart`/`IntroEnd`/OP 启发式）跳过片头胶囊。
+
+### 20.2 libmpv 硬解深度能力与真实遥测
+- [`VideoProPanel.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/VideoProPanel.tsx)：集中承载硬解策略 (`auto-safe`/`auto`/`auto-copy`/`no`)、画面比例/填充、宽银幕贴底（从弹幕抽屉迁移并保留每剧记忆）、HDR 色调映射 (`tone-mapping`)、动画去色带 (`deband`)、亮度/对比度/饱和度/伽马调校、双语次字幕 (`secondary-sid`)、拖放本地外挂字幕 (`onDragDropEvent`)、软件音量 200% 增益、夜间人声动态均衡 (`dynaudnorm`)、音频/字幕延迟与无损截图 (`get_screenshot_dir`)。
+- [`PlaybackInfoModal.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/PlaybackInfoModal.tsx)：修复 `audio-<Index>` 匹配 Emby 音轨元数据失效的问题，并实时呈现 `hwdec-current`、实时 FPS、丢帧数、缓冲量与流代理路由详情。
+
+### 20.3 零闪烁智能弹幕与透明代理热切
+- **零闪烁渲染与防刷屏**：[`PlayerPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/PlayerPage.tsx) 拆分 `formattedComments` 精确 `useMemo` 依赖，根治调整透明度/速度/行数/区域时 Canvas 重建闪烁的问题；[`danmuClient.ts`](file:///d:/wade/code/emby-tauri-player/src/api/danmuClient.ts) 实现 3 秒窗口重复弹幕智能合并防刷屏 (`×N`) 与高能热力密度曲线 `computeDanmakuHeatmap`；[`DanmakuDrawer.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/DanmakuDrawer.tsx) 支持同剧延续绑定 (`seriesDanmakuBindings`)、整剧偏移应用、按时长差一键对齐与「弹幕列表」检索跳转。
+- **代理路由透明化与热切换**：[`NetworkProxyPopover.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/NetworkProxyPopover.tsx) 结合 `resolveMpvProxyDetailed` 展示 30 秒实时网速折线、缓冲指标、系统/手动/LAN/直连路由及 `SOCKS5` 回退直连说明，支持「跟随配置 / 强制直连 / 强制走代理」以及修改代理弹窗保存后立即保留当前进度秒数原地热重载媒体流。
+

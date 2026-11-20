@@ -123,3 +123,21 @@ pub fn show_in_file_manager(path: String) -> Result<(), String> {
     };
     open_directory_in_file_manager(&target_dir)
 }
+
+/// 获取并确保播放器截图输出目录存在（Pictures/Nocta -> Downloads/Nocta -> Desktop/Nocta）
+#[tauri::command]
+pub async fn get_screenshot_dir(app: tauri::AppHandle) -> Result<String, String> {
+    let base_dir = app
+        .path()
+        .picture_dir()
+        .or_else(|_| app.path().download_dir())
+        .or_else(|_| app.path().desktop_dir())
+        .map_err(|e| format!("无法定位系统图片或下载目录: {}", e))?;
+
+    let target_dir = base_dir.join("Nocta");
+    if !target_dir.exists() {
+        fs::create_dir_all(&target_dir).map_err(|e| format!("创建截图目录失败: {}", e))?;
+    }
+
+    Ok(target_dir.to_string_lossy().to_string())
+}

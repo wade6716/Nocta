@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   X,
   Search,
@@ -17,8 +17,9 @@ import {
   Unlink,
   BookmarkCheck,
   AlertTriangle,
-  ArrowDownToLine,
-  Globe,
+  ListFilter,
+  ShieldBan,
+  Flame,
 } from 'lucide-react';
 import {
   DanmuAnimeSearchResult,
@@ -32,7 +33,6 @@ import { MpvDanmakuBridge } from './MpvDanmakuBridge';
 import { usePlayerStore, DanmakuColorMode } from '../../stores/usePlayerStore';
 import { useDanmuStore } from '../../stores/useDanmuStore';
 import { DanmuServerModal } from '../danmu/DanmuServerModal';
-import { NetworkProxyModal } from '../settings/NetworkProxyModal';
 
 interface DanmakuDrawerProps {
   isOpen: boolean;
@@ -42,19 +42,27 @@ interface DanmakuDrawerProps {
   seriesId?: string;
   itemTitle?: string;
   seriesName?: string;
-  layoutKey?: string;
-  videoAspectRatio?: number;
-  isWidescreen?: boolean;
   currentMatchedTitle?: string;
   sourceCommentCount?: number;
   sourceDuration?: number;
   videoDuration?: number;
+  rawComments?: RawDanmuComment[];
+  currentTime?: number;
+  onSeekToTime?: (seconds: number) => void;
   onCommentsLoaded: (
     comments: RawDanmuComment[],
     sourceDuration?: number,
     meta?: { animeTitle: string; episodeTitle: string; episodeId: number | string }
   ) => void;
   onReAutoMatch?: () => void;
+}
+
+function formatSec(sec?: number): string {
+  if (sec === undefined || Number.isNaN(sec)) return '--:--';
+  const total = Math.max(0, Math.floor(sec));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
 export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
@@ -65,22 +73,21 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
   seriesId,
   itemTitle = '',
   seriesName = '',
-  layoutKey,
-  videoAspectRatio,
-  isWidescreen = false,
   currentMatchedTitle,
   sourceCommentCount = 0,
   sourceDuration,
   videoDuration,
+  rawComments = [],
+  currentTime = 0,
+  onSeekToTime,
   onCommentsLoaded,
   onReAutoMatch,
 }) => {
-  const [activeTab, setActiveTab] = useState<'match' | 'time' | 'style'>('match');
+  const [activeTab, setActiveTab] = useState<'match' | 'time' | 'style' | 'list'>('match');
   const [isServerModalOpen, setIsServerModalOpen] = useState(false);
-  const [isProxyModalOpen, setIsProxyModalOpen] = useState(false);
 
   // Danmu servers store
-  const { servers, activeServerId, getActiveServer } = useDanmuStore();
+  const { getActiveServer } = useDanmuStore();
   const activeServer = getActiveServer();
 
   // Search state
@@ -94,35 +101,61 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
   const [loadingUrl, setLoadingUrl] = useState(false);
   const [bindSuccessToast, setBindSuccessToast] = useState<string | null>(null);
 
+  // List filter state
+  const [listQuery, setListQuery] = useState('');
+  const [nearCurrentOnly, setNearCurrentOnly] = useState(false);
+
   // Store
   const danmakuSettings = usePlayerStore((s) => s.danmakuSettings);
   const updateDanmakuSettings = usePlayerStore((s) => s.updateDanmakuSettings);
   const setItemOffset = usePlayerStore((s) => s.setItemOffset);
+  const setSeriesOffset = usePlayerStore((s) => s.setSeriesOffset);
   const itemOffsets = usePlayerStore((s) => s.itemOffsets);
+  const seriesOffsets = usePlayerStore((s) => s.seriesOffsets);
   const danmakuBindings = usePlayerStore((s) => s.danmakuBindings);
+  const seriesDanmakuBindings = usePlayerStore((s) => s.seriesDanmakuBindings);
   const bindDanmaku = usePlayerStore((s) => s.bindDanmaku);
   const unbindDanmaku = usePlayerStore((s) => s.unbindDanmaku);
-  const videoLayouts = usePlayerStore((s) => s.videoLayouts);
-  const setVideoLayout = usePlayerStore((s) => s.setVideoLayout);
-  const resetVideoLayout = usePlayerStore((s) => s.resetVideoLayout);
-  const engineType = usePlayerStore((s) => s.engineType);
-  const setEngineType = usePlayerStore((s) => s.setEngineType);
-
-  const effectiveLayoutKey = layoutKey || (seriesId ? `series_${seriesId}` : `item_${itemId}`);
-  const currentLayout = videoLayouts[effectiveLayoutKey] || { bottomAlign: false, verticalOffset: 100 };
+  const bindSeriesDanmaku = usePlayerStore((s) => s.bindSeriesDanmaku);
 
   const currentBinding = danmakuBindings[itemId];
-  const currentOffset = itemOffsets[itemId] ?? 0;
+  const currentSeriesBinding = seriesId ? seriesDanmakuBindings[seriesId] : undefined;
+  const currentOffset =
+    itemOffsets[itemId] ?? (seriesId ? seriesOffsets[seriesId] : undefined) ?? 0;
   const [newBlockedWord, setNewBlockedWord] = useState('');
 
   // Update default search keyword when item changes
   useEffect(() => {
-    if (defaultKeyword && !searchKeyword) {
+    if (defaultKeyword) {
       setSearchKeyword(defaultKeyword);
     }
   }, [defaultKeyword]);
 
+  // 弹幕列表索引与检索
+  const parsedDanmuList = useMemo(() => {
+    if (!isOpen || activeTab !== 'list' || rawComments.length === 0) return [];
+    const q = listQuery.trim().toLowerCase();
+    const list: { cid: number; time: number; text: string }[] = [];
+
+    for (let i = 0; i < rawComments.length; i++) {
+      const c = rawComments[i];
+      if (!c.m || !c.p) continue;
+      const t = parseFloat(c.p.split(',')[0]) || 0;
+      if (nearCurrentOnly && Math.abs(t - currentTime) > 120) continue;
+      if (q && !c.m.toLowerCase().includes(q)) continue;
+      list.push({ cid: c.cid || i, time: t, text: c.m });
+    }
+
+    list.sort((a, b) => a.time - b.time);
+    return list.slice(0, 200);
+  }, [isOpen, activeTab, rawComments, listQuery, nearCurrentOnly, currentTime]);
+
   if (!isOpen) return null;
+
+  const showToast = (msg: string) => {
+    setBindSuccessToast(msg);
+    setTimeout(() => setBindSuccessToast(null), 3500);
+  };
 
   // Manual search anime
   const handleSearch = async (e: React.FormEvent) => {
@@ -156,16 +189,20 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
     }
   };
 
-  // Load comments from specific episode & bind to current itemId
-  const handleSelectEpisodeAndBind = async (ep: { episodeId: number | string; episodeTitle: string }) => {
+  // Load comments from specific episode & bind to current itemId + seriesId
+  const handleSelectEpisodeAndBind = async (ep: {
+    episodeId: number | string;
+    episodeTitle: string;
+  }) => {
     if (!selectedAnime) return;
     try {
       setLoadingEpisodes(true);
       const res = await fetchCommentsById(activeServer, ep.episodeId);
 
-      // Persist binding
+      // Persist item binding
       bindDanmaku(itemId, {
         itemId,
+        seriesId,
         animeTitle: selectedAnime.animeTitle,
         episodeId: ep.episodeId,
         episodeTitle: ep.episodeTitle,
@@ -174,14 +211,27 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
         sourceDuration: res.videoDuration,
       });
 
+      // Persist series continuation binding so next episodes auto-match seamlessly
+      if (seriesId && selectedAnime.episodes && selectedAnime.episodes.length > 0) {
+        bindSeriesDanmaku(seriesId, {
+          seriesId,
+          animeId: selectedAnime.animeId,
+          animeTitle: selectedAnime.animeTitle,
+          episodes: selectedAnime.episodes,
+        });
+      }
+
       onCommentsLoaded(res.comments, res.videoDuration, {
         animeTitle: selectedAnime.animeTitle,
         episodeTitle: ep.episodeTitle,
         episodeId: ep.episodeId,
       });
 
-      setBindSuccessToast(`已成功绑定《${selectedAnime.animeTitle}》${ep.episodeTitle}`);
-      setTimeout(() => setBindSuccessToast(null), 3500);
+      showToast(
+        seriesId
+          ? `已绑定《${selectedAnime.animeTitle}》${ep.episodeTitle}（同剧后续分集将自动延续）`
+          : `已成功绑定《${selectedAnime.animeTitle}》${ep.episodeTitle}`
+      );
     } catch (err: any) {
       alert(`加载弹幕失败: ${err.message}`);
     } finally {
@@ -192,11 +242,8 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
   // Unbind current episode
   const handleUnbind = () => {
     unbindDanmaku(itemId);
-    setBindSuccessToast('已解除绑定，恢复自动匹配');
-    setTimeout(() => setBindSuccessToast(null), 3000);
-    if (onReAutoMatch) {
-      onReAutoMatch();
-    }
+    showToast('已解除绑定，恢复自动匹配');
+    onReAutoMatch?.();
   };
 
   // Load comments via third-party web page URL
@@ -212,8 +259,7 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
         episodeId: directUrl,
       });
       setDirectUrl('');
-      setBindSuccessToast('已成功提取网页弹幕');
-      setTimeout(() => setBindSuccessToast(null), 3000);
+      showToast('已成功提取网页弹幕');
     } catch (err: any) {
       alert(`解析网页弹幕失败: ${err.message}`);
     } finally {
@@ -233,6 +279,12 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
     setItemOffset(itemId, 0);
   };
 
+  const applyOffsetToWholeSeries = () => {
+    if (!seriesId) return;
+    setSeriesOffset(seriesId, currentOffset);
+    showToast(`已将 ${currentOffset >= 0 ? `+${currentOffset}` : currentOffset}s 偏移应用到整部剧集`);
+  };
+
   // Blocked word add/remove
   const handleAddBlockedWord = (e: React.FormEvent) => {
     e.preventDefault();
@@ -244,31 +296,30 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
     setNewBlockedWord('');
   };
 
+  const handleQuickBlockText = (text: string) => {
+    const snippet = text.trim();
+    if (!snippet || danmakuSettings.blockedWords.includes(snippet)) return;
+    updateDanmakuSettings({
+      blockedWords: [...danmakuSettings.blockedWords, snippet],
+    });
+    showToast(`已屏蔽关键词: ${snippet}`);
+  };
+
   const handleRemoveBlockedWord = (word: string) => {
     updateDanmakuSettings({
       blockedWords: danmakuSettings.blockedWords.filter((w) => w !== word),
     });
   };
 
-  // Format seconds to mm:ss
-  const formatSec = (sec?: number) => {
-    if (!sec || isNaN(sec)) return '--:--';
-    const m = Math.floor(sec / 60);
-    const s = Math.floor(sec % 60);
-    return `${m}:${s.toString().padStart(2, '0')}`;
-  };
-
   const durationDiff =
     sourceDuration && videoDuration ? Math.round(Math.abs(sourceDuration - videoDuration)) : null;
+  const suggestedSignedOffset =
+    sourceDuration && videoDuration ? Math.round(sourceDuration - videoDuration) : null;
 
   return (
     <>
-      {/* 遮罩背景：全透明点击层，避免黑罩遮挡底层视频实时调参 */}
-      <div
-        className="fixed inset-0 z-20 bg-transparent"
-        onClick={onClose}
-      />
-      <div className="fixed top-16 bottom-24 right-6 z-30 w-80 md:w-96 rounded-2xl bg-[#0B0E17]/85 backdrop-blur-2xl border border-white/[0.12] shadow-[0_20px_50px_rgba(0,0,0,0.7)] flex flex-col text-gray-200 select-none animate-in slide-in-from-right duration-200 overflow-hidden">
+      <div className="fixed inset-0 z-20 bg-transparent" onClick={onClose} />
+      <div className="fixed top-16 bottom-24 right-6 z-30 w-80 md:w-96 rounded-2xl bg-[#0B0E17]/88 backdrop-blur-2xl border border-white/[0.12] shadow-[0_20px_50px_rgba(0,0,0,0.75)] flex flex-col text-gray-200 select-none animate-in slide-in-from-right duration-200 overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-white/10 bg-white/[0.02]">
           <div className="flex items-center space-x-2">
@@ -277,7 +328,6 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
           </div>
 
           <div className="flex items-center space-x-2">
-            {/* Danmu Server Indicator & Switcher */}
             <button
               onClick={() => setIsServerModalOpen(true)}
               className="flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-xs text-gray-300 hover:text-white transition border border-white/5 cursor-pointer"
@@ -297,7 +347,7 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
           </div>
         </div>
 
-        {/* Bind Success Toast */}
+        {/* Toast */}
         {bindSuccessToast && (
           <div className="mx-4 mt-3 p-2.5 bg-green-500/15 border border-green-500/30 rounded-xl text-xs text-green-300 flex items-center space-x-2 animate-fadeIn">
             <CheckCircle2 className="w-4 h-4 flex-shrink-0 text-green-400" />
@@ -305,47 +355,58 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
           </div>
         )}
 
-        {/* Segmented Control Tabs (匹配换源 / 时间校准 / 样式屏蔽) */}
+        {/* 4-Tab Segmented Control */}
         <div className="p-3 border-b border-white/10 bg-white/[0.01]">
-          <div className="flex bg-white/5 p-1 rounded-xl border border-white/5 text-xs font-medium">
+          <div className="grid grid-cols-4 bg-white/5 p-1 rounded-xl border border-white/5 text-xs font-medium gap-1">
             <button
               onClick={() => setActiveTab('match')}
-              className={`flex-1 py-1.5 rounded-lg transition flex items-center justify-center space-x-1 cursor-pointer ${
+              className={`py-1.5 rounded-lg transition flex items-center justify-center space-x-1 cursor-pointer ${
                 activeTab === 'match'
                   ? 'bg-primary text-white font-semibold shadow-md'
                   : 'text-gray-400 hover:text-white'
               }`}
             >
               <Tv className="w-3.5 h-3.5" />
-              <span>匹配换源</span>
+              <span>换源</span>
             </button>
             <button
               onClick={() => setActiveTab('time')}
-              className={`flex-1 py-1.5 rounded-lg transition flex items-center justify-center space-x-1 cursor-pointer ${
+              className={`py-1.5 rounded-lg transition flex items-center justify-center space-x-1 cursor-pointer ${
                 activeTab === 'time'
                   ? 'bg-primary text-white font-semibold shadow-md'
                   : 'text-gray-400 hover:text-white'
               }`}
             >
               <Clock className="w-3.5 h-3.5" />
-              <span>时间校准</span>
+              <span>校准</span>
             </button>
             <button
               onClick={() => setActiveTab('style')}
-              className={`flex-1 py-1.5 rounded-lg transition flex items-center justify-center space-x-1 cursor-pointer ${
+              className={`py-1.5 rounded-lg transition flex items-center justify-center space-x-1 cursor-pointer ${
                 activeTab === 'style'
                   ? 'bg-primary text-white font-semibold shadow-md'
                   : 'text-gray-400 hover:text-white'
               }`}
             >
               <Palette className="w-3.5 h-3.5" />
-              <span>样式屏蔽</span>
+              <span>样式</span>
+            </button>
+            <button
+              onClick={() => setActiveTab('list')}
+              className={`py-1.5 rounded-lg transition flex items-center justify-center space-x-1 cursor-pointer ${
+                activeTab === 'list'
+                  ? 'bg-primary text-white font-semibold shadow-md'
+                  : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              <ListFilter className="w-3.5 h-3.5" />
+              <span>列表</span>
             </button>
           </div>
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-5">
+        <div className="flex-1 overflow-y-auto p-4 space-y-5 custom-scrollbar">
           {activeTab === 'match' && (
             <div className="space-y-6">
               {/* Current Bound / Matched Source Card */}
@@ -362,7 +423,7 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
                   ) : currentMatchedTitle ? (
                     <span className="px-2 py-0.5 rounded-full bg-primary/20 text-primary text-[11px] font-semibold flex items-center space-x-1">
                       <Sparkles className="w-3 h-3" />
-                      <span>自动智能匹配</span>
+                      <span>{currentSeriesBinding ? '同剧延续匹配' : '自动智能匹配'}</span>
                     </span>
                   ) : (
                     <span className="px-2 py-0.5 rounded-full bg-yellow-500/20 text-yellow-400 text-[11px] font-semibold">
@@ -390,7 +451,7 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
                       </span>
                       <button
                         onClick={handleUnbind}
-                        className="px-2.5 py-1 bg-red-500/15 hover:bg-red-500/25 text-red-400 rounded-lg text-xs font-medium transition flex items-center space-x-1"
+                        className="px-2.5 py-1 bg-red-500/15 hover:bg-red-500/25 text-red-400 rounded-lg text-xs font-medium transition flex items-center space-x-1 cursor-pointer"
                       >
                         <Unlink className="w-3 h-3" />
                         <span>解除绑定</span>
@@ -406,12 +467,11 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
                       <div className="text-xs text-gray-400">已载入 {sourceCommentCount} 条弹幕</div>
                     )}
                     <p className="text-[11px] text-gray-500">
-                      若自动匹配不准确，请在下方搜索栏输入正确的番剧/影视名进行手动搜索并绑定。
+                      若自动匹配不准确，在下方搜番绑定任意一集后，同剧后续分集将自动沿用该番剧源。
                     </p>
                   </div>
                 )}
 
-                {/* Duration comparison tip */}
                 {sourceDuration && videoDuration && (
                   <div className="pt-2 border-t border-white/5 flex items-center justify-between text-xs text-gray-400">
                     <span>
@@ -420,7 +480,7 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
                     {durationDiff && durationDiff > 10 && (
                       <span className="text-yellow-400 flex items-center space-x-1 text-[11px]">
                         <AlertTriangle className="w-3 h-3" />
-                        <span>相差 {durationDiff} 秒</span>
+                        <span>相差 {durationDiff}s</span>
                       </span>
                     )}
                   </div>
@@ -433,7 +493,7 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
                   <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
                     手动搜索换源并绑定
                   </span>
-                  <span className="text-[11px] text-gray-500">来自节点: {activeServer.name}</span>
+                  <span className="text-[11px] text-gray-500">节点: {activeServer.name}</span>
                 </div>
 
                 <form onSubmit={handleSearch} className="flex space-x-2">
@@ -447,14 +507,13 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
                   <button
                     type="submit"
                     disabled={searching}
-                    className="px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-xl text-sm font-medium transition flex items-center space-x-1.5 disabled:opacity-50"
+                    className="px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-xl text-sm font-medium transition flex items-center space-x-1.5 disabled:opacity-50 cursor-pointer"
                   >
                     <Search className="w-4 h-4" />
                     <span>{searching ? '搜索中' : '搜索'}</span>
                   </button>
                 </form>
 
-                {/* Search Results list */}
                 {searchResults.length > 0 && !selectedAnime && (
                   <div className="max-h-60 overflow-y-auto space-y-1.5 rounded-xl bg-black/30 p-2.5 border border-white/10">
                     <span className="text-[11px] text-gray-400 px-2 block mb-1">
@@ -464,7 +523,7 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
                       <button
                         key={item.animeId}
                         onClick={() => handleSelectAnime(item)}
-                        className="w-full text-left px-3 py-2.5 rounded-lg text-sm hover:bg-white/10 transition flex items-center justify-between group"
+                        className="w-full text-left px-3 py-2.5 rounded-lg text-sm hover:bg-white/10 transition flex items-center justify-between group cursor-pointer"
                       >
                         <span className="truncate text-gray-200 group-hover:text-white font-medium">
                           {item.animeTitle}
@@ -477,7 +536,6 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
                   </div>
                 )}
 
-                {/* Episode selector for chosen anime */}
                 {selectedAnime && (
                   <div className="space-y-3 p-3.5 bg-black/40 rounded-xl border border-primary/30">
                     <div className="flex items-center justify-between pb-2 border-b border-white/10">
@@ -489,7 +547,7 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
                       </div>
                       <button
                         onClick={() => setSelectedAnime(null)}
-                        className="px-2 py-1 rounded bg-white/5 hover:bg-white/10 text-xs text-gray-400 hover:text-white"
+                        className="px-2 py-1 rounded bg-white/5 hover:bg-white/10 text-xs text-gray-400 hover:text-white cursor-pointer"
                       >
                         重新选番
                       </button>
@@ -503,14 +561,14 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
                     ) : (
                       <div className="space-y-1.5">
                         <span className="text-[11px] text-gray-400">
-                          点击分集将立即拉取弹幕并永久绑定到本片：
+                          点击分集立即拉取弹幕并绑定（同剧集后续分集自动延续）：
                         </span>
                         <div className="grid grid-cols-3 gap-2 max-h-48 overflow-y-auto pt-1 pr-1">
                           {selectedAnime.episodes?.map((ep) => (
                             <button
                               key={ep.episodeId}
                               onClick={() => handleSelectEpisodeAndBind(ep)}
-                              className="px-2.5 py-2 bg-white/5 hover:bg-primary hover:text-white text-gray-200 text-xs rounded-lg transition text-left truncate border border-white/5"
+                              className="px-2.5 py-2 bg-white/5 hover:bg-primary hover:text-white text-gray-200 text-xs rounded-lg transition text-left truncate border border-white/5 cursor-pointer"
                               title={ep.episodeTitle}
                             >
                               {ep.episodeTitle}
@@ -539,7 +597,7 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
                   <button
                     type="submit"
                     disabled={loadingUrl}
-                    className="px-3.5 py-2 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-medium transition flex items-center space-x-1 disabled:opacity-50"
+                    className="px-3.5 py-2 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-medium transition flex items-center space-x-1 disabled:opacity-50 cursor-pointer"
                   >
                     <LinkIcon className="w-3.5 h-3.5" />
                     <span>{loadingUrl ? '...' : '提取'}</span>
@@ -549,138 +607,136 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
             </div>
           )}
 
-          {activeTab === 'style' && (
-            <div className="space-y-6">
-              {/* 宽银幕画面沉浸贴底卡片 */}
-              <div className="bg-black/35 rounded-2xl p-4 border border-white/10 space-y-3.5">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-2">
-                    <ArrowDownToLine className="w-4 h-4 text-primary" />
-                    <span className="text-sm font-semibold text-white">宽银幕贴底 (顶部留黑)</span>
+          {activeTab === 'time' && (
+            <div className="space-y-5">
+              <div className="bg-black/35 rounded-2xl p-5 border border-white/10 text-center">
+                <span className="text-xs text-gray-400 block mb-1.5 font-medium">当前弹幕时间偏移</span>
+                <div className="text-4xl font-mono font-bold text-primary tabular-nums tracking-tight">
+                  {currentOffset > 0 ? `+${currentOffset.toFixed(1)}` : currentOffset.toFixed(1)}s
+                </div>
+                <p className="text-[11px] text-gray-400 mt-2.5 leading-relaxed">
+                  正值代表弹幕提前出现，负值代表延后出现。支持播放时按键盘 <kbd className="px-1 rounded bg-white/10 text-white font-mono">G</kbd> / <kbd className="px-1 rounded bg-white/10 text-white font-mono">H</kbd> 秒速微调。
+                </p>
+              </div>
+
+              {durationDiff && durationDiff > 10 && suggestedSignedOffset !== null && (
+                <div className="p-3.5 bg-amber-500/15 border border-amber-500/30 rounded-xl text-amber-200 text-xs space-y-2.5">
+                  <div className="flex items-start space-x-2">
+                    <AlertTriangle className="w-4 h-4 flex-shrink-0 text-amber-400 mt-0.5" />
+                    <div className="leading-relaxed">
+                      弹幕源时长 ({formatSec(sourceDuration)}) 与 Emby 视频 ({formatSec(videoDuration)}) 相差 {durationDiff} 秒，可能是片头前导长度不同所致。
+                    </div>
                   </div>
-                  {/* Toggle Switch */}
+                  <button
+                    onClick={() => {
+                      bridge.offset = suggestedSignedOffset;
+                      setItemOffset(itemId, suggestedSignedOffset);
+                      showToast(
+                        `已按时长差应用偏移 ${suggestedSignedOffset >= 0 ? `+${suggestedSignedOffset}` : suggestedSignedOffset}s`
+                      );
+                    }}
+                    className="w-full py-1.5 rounded-lg bg-amber-500/25 hover:bg-amber-500/40 text-amber-100 font-semibold transition cursor-pointer border border-amber-400/30"
+                  >
+                    一键按时长差对齐 ({suggestedSignedOffset >= 0 ? `+${suggestedSignedOffset}s` : `${suggestedSignedOffset}s`})
+                  </button>
+                </div>
+              )}
+
+              <div className="space-y-2.5">
+                <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider block">
+                  快捷微调 (5 档触感调节)
+                </span>
+                <div className="grid grid-cols-5 gap-1.5">
+                  <button
+                    onClick={() => adjustOffset(-5)}
+                    className="py-2.5 bg-white/5 hover:bg-white/15 rounded-xl text-xs font-mono font-bold transition text-gray-200 tabular-nums border border-white/5 cursor-pointer"
+                  >
+                    -5s
+                  </button>
+                  <button
+                    onClick={() => adjustOffset(-0.5)}
+                    className="py-2.5 bg-white/5 hover:bg-white/15 rounded-xl text-xs font-mono font-bold transition text-gray-200 tabular-nums border border-white/5 cursor-pointer"
+                  >
+                    -0.5s
+                  </button>
+                  <button
+                    onClick={resetOffset}
+                    className="py-2.5 bg-primary/20 hover:bg-primary text-primary hover:text-white rounded-xl text-xs font-bold transition border border-primary/30 cursor-pointer shadow-sm"
+                  >
+                    重置
+                  </button>
+                  <button
+                    onClick={() => adjustOffset(0.5)}
+                    className="py-2.5 bg-white/5 hover:bg-white/15 rounded-xl text-xs font-mono font-bold transition text-gray-200 tabular-nums border border-white/5 cursor-pointer"
+                  >
+                    +0.5s
+                  </button>
+                  <button
+                    onClick={() => adjustOffset(5)}
+                    className="py-2.5 bg-white/5 hover:bg-white/15 rounded-xl text-xs font-mono font-bold transition text-gray-200 tabular-nums border border-white/5 cursor-pointer"
+                  >
+                    +5s
+                  </button>
+                </div>
+              </div>
+
+              {seriesId && (
+                <button
+                  onClick={applyOffsetToWholeSeries}
+                  className="w-full py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-sky-300 text-xs font-medium border border-white/10 transition cursor-pointer"
+                >
+                  应用当前偏移 ({currentOffset >= 0 ? `+${currentOffset}` : currentOffset}s) 到本剧所有集数
+                </button>
+              )}
+            </div>
+          )}
+
+          {activeTab === 'style' && (
+            <div className="space-y-5">
+              {/* 防刷屏与高能热力图开关 */}
+              <div className="space-y-2.5">
+                <div className="flex items-center justify-between p-3 rounded-xl bg-black/35 border border-white/10">
+                  <div>
+                    <div className="text-xs font-semibold text-white">重复弹幕智能合并防刷屏</div>
+                    <div className="text-[11px] text-slate-400 mt-0.5">
+                      3 秒内相同刷屏弹幕自动折叠为「文本 ×N」
+                    </div>
+                  </div>
                   <label className="relative inline-flex items-center cursor-pointer">
                     <input
                       type="checkbox"
-                      checked={currentLayout.bottomAlign}
-                      onChange={(e) =>
-                        setVideoLayout(effectiveLayoutKey, { bottomAlign: e.target.checked })
-                      }
+                      checked={danmakuSettings.mergeDuplicates}
+                      onChange={(e) => updateDanmakuSettings({ mergeDuplicates: e.target.checked })}
                       className="sr-only peer"
                     />
-                    <div className="w-9 h-5 bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"></div>
+                    <div className="w-9 h-5 bg-white/10 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary" />
                   </label>
                 </div>
 
-                <div className="text-xs text-gray-400 leading-relaxed">
-                  消除底部黑边并将视频贴紧屏幕底部，让出顶部纯黑空间专供弹幕滑行，避免遮挡剧情画面。
-                </div>
-
-                {/* 片源比例状态与提示 */}
-                <div className="flex items-center justify-between text-[11px] pt-1 border-t border-white/5">
-                  <span className="text-gray-400">片源画幅检测:</span>
-                  {videoAspectRatio ? (
-                    <span
-                      className={`px-2 py-0.5 rounded font-mono font-medium ${
-                        isWidescreen
-                          ? 'bg-green-500/20 text-green-300 border border-green-500/30'
-                          : 'bg-white/10 text-gray-300'
-                      }`}
-                    >
-                      {videoAspectRatio.toFixed(2)}:1 {isWidescreen ? '· 宽银幕推荐' : '· 标准画幅'}
-                    </span>
-                  ) : (
-                    <span className="text-gray-500 font-mono">检测中...</span>
-                  )}
-                </div>
-
-                {/* 垂直位置调节与微调控件（开启贴底时可用） */}
-                {currentLayout.bottomAlign && (
-                  <div className="space-y-3 pt-2.5 border-t border-white/10 animate-in fade-in duration-150">
-                    <div className="flex justify-between items-center text-xs">
-                      <span className="text-gray-300 font-medium">垂直对齐锚点</span>
-                      <span className="font-mono text-primary font-bold">
-                        {currentLayout.verticalOffset}%{' '}
-                        <span className="text-gray-400 font-normal text-[11px]">
-                          ({currentLayout.verticalOffset === 100
-                            ? '完全贴底'
-                            : currentLayout.verticalOffset === 50
-                            ? '居中'
-                            : '贴底微调'})
-                        </span>
-                      </span>
-                    </div>
-
-                    <input
-                      type="range"
-                      min="50"
-                      max="100"
-                      step="1"
-                      value={currentLayout.verticalOffset}
-                      onChange={(e) =>
-                        setVideoLayout(effectiveLayoutKey, {
-                          verticalOffset: parseInt(e.target.value, 10),
-                        })
-                      }
-                      className="w-full h-1.5 bg-white/20 rounded-lg cursor-pointer accent-primary"
-                    />
-
-                    {/* 快捷对齐预设按钮 */}
-                    <div className="grid grid-cols-3 gap-1.5">
-                      <button
-                        onClick={() =>
-                          setVideoLayout(effectiveLayoutKey, { verticalOffset: 100 })
-                        }
-                        className={`py-1.5 rounded-lg text-xs font-medium transition ${
-                          currentLayout.verticalOffset === 100
-                            ? 'bg-primary text-white'
-                            : 'bg-white/5 hover:bg-white/10 text-gray-300'
-                        }`}
-                      >
-                        完全贴底 100%
-                      </button>
-                      <button
-                        onClick={() =>
-                          setVideoLayout(effectiveLayoutKey, { verticalOffset: 95 })
-                        }
-                        className={`py-1.5 rounded-lg text-xs font-medium transition ${
-                          currentLayout.verticalOffset === 95
-                            ? 'bg-primary text-white'
-                            : 'bg-white/5 hover:bg-white/10 text-gray-300'
-                        }`}
-                        title="底部预留少量缓冲，适合带硬字幕片源"
-                      >
-                        微浮避让 95%
-                      </button>
-                      <button
-                        onClick={() =>
-                          setVideoLayout(effectiveLayoutKey, { verticalOffset: 50 })
-                        }
-                        className={`py-1.5 rounded-lg text-xs font-medium transition ${
-                          currentLayout.verticalOffset === 50
-                            ? 'bg-primary text-white'
-                            : 'bg-white/5 hover:bg-white/10 text-gray-300'
-                        }`}
-                      >
-                        居中 50%
-                      </button>
-                    </div>
-
-                    {/* 记忆隔离说明 */}
-                    <div className="flex items-center space-x-1.5 text-[11px] text-gray-400 pt-1">
-                      <span className="w-1.5 h-1.5 rounded-full bg-primary flex-shrink-0" />
-                      <span className="truncate">
-                        {seriesName
-                          ? `已自动记忆为《${seriesName}》专属设置，同剧所有集数生效`
-                          : `已保存为本视频的专属设置`}
-                      </span>
+                <div className="flex items-center justify-between p-3 rounded-xl bg-black/35 border border-white/10">
+                  <div className="flex items-center space-x-2">
+                    <Flame className="w-4 h-4 text-sky-400 shrink-0" />
+                    <div>
+                      <div className="text-xs font-semibold text-white">进度条高能弹幕密度曲线</div>
+                      <div className="text-[11px] text-slate-400 mt-0.5">
+                        识别名场面波峰并渲染于进度条上方
+                      </div>
                     </div>
                   </div>
-                )}
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={danmakuSettings.showHeatmap}
+                      onChange={(e) => updateDanmakuSettings({ showHeatmap: e.target.checked })}
+                      className="sr-only peer"
+                    />
+                    <div className="w-9 h-5 bg-white/10 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary" />
+                  </label>
+                </div>
               </div>
 
               {/* Danmaku Lines Setting */}
-              <div className="space-y-2.5">
+              <div className="space-y-2.5 pt-2 border-t border-white/10">
                 <div className="flex justify-between items-center text-xs text-gray-300">
                   <div className="flex items-center space-x-1.5 font-medium">
                     <Layers className="w-3.5 h-3.5 text-primary" />
@@ -695,7 +751,7 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
                     <button
                       key={lines}
                       onClick={() => updateDanmakuSettings({ maxLines: lines })}
-                      className={`py-1.5 rounded-lg text-xs font-medium transition ${
+                      className={`py-1.5 rounded-lg text-xs font-medium transition cursor-pointer ${
                         danmakuSettings.maxLines === lines
                           ? 'bg-primary text-white shadow-md'
                           : 'bg-white/5 hover:bg-white/10 text-gray-300'
@@ -725,13 +781,6 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
                     <Palette className="w-3.5 h-3.5 text-primary" />
                     <span>色彩模式</span>
                   </div>
-                  <span className="text-[11px] text-gray-400">
-                    {danmakuSettings.colorMode === 'vibrant'
-                      ? '高对比度原色'
-                      : danmakuSettings.colorMode === 'monochrome'
-                      ? '统一纯白单色'
-                      : '屏蔽彩色弹幕'}
-                  </span>
                 </div>
                 <div className="grid grid-cols-3 gap-2">
                   {[
@@ -747,7 +796,7 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
                           blockColor: item.mode === 'blocked',
                         })
                       }
-                      className={`py-2 rounded-xl text-xs font-medium transition ${
+                      className={`py-2 rounded-xl text-xs font-medium transition cursor-pointer ${
                         danmakuSettings.colorMode === item.mode
                           ? 'bg-primary text-white shadow-md'
                           : 'bg-white/5 hover:bg-white/10 text-gray-300'
@@ -772,7 +821,7 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
                     <button
                       key={val}
                       onClick={() => updateDanmakuSettings({ area: val })}
-                      className={`py-1.5 rounded-lg text-xs font-medium transition ${
+                      className={`py-1.5 rounded-lg text-xs font-medium transition cursor-pointer ${
                         danmakuSettings.area === val
                           ? 'bg-primary text-white'
                           : 'bg-white/5 hover:bg-white/10 text-gray-300'
@@ -784,7 +833,7 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
                 </div>
               </div>
 
-              {/* Opacity */}
+              {/* Opacity & Speed */}
               <div className="space-y-2 pt-2 border-t border-white/10">
                 <div className="flex justify-between text-xs text-gray-300">
                   <span>不透明度</span>
@@ -803,7 +852,6 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
                 />
               </div>
 
-              {/* Speed */}
               <div className="space-y-2 pt-2 border-t border-white/10">
                 <div className="flex justify-between text-xs text-gray-300">
                   <span>移动速度</span>
@@ -822,8 +870,8 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
                 />
               </div>
 
-              {/* Font Size */}
-              <div className="space-y-2 pt-2 border-t border-white/10">
+              {/* Font Size, Weight & Stroke Width */}
+              <div className="space-y-3 pt-2 border-t border-white/10">
                 <div className="flex justify-between text-xs text-gray-300">
                   <span>字体大小</span>
                   <span className="font-mono text-primary font-bold">
@@ -835,7 +883,7 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
                     <button
                       key={size}
                       onClick={() => updateDanmakuSettings({ fontSize: size })}
-                      className={`py-1.5 rounded-lg text-xs font-medium transition ${
+                      className={`py-1.5 rounded-lg text-xs font-medium transition cursor-pointer ${
                         danmakuSettings.fontSize === size
                           ? 'bg-primary text-white'
                           : 'bg-white/5 hover:bg-white/10 text-gray-300'
@@ -845,9 +893,57 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
                     </button>
                   ))}
                 </div>
+
+                <div className="grid grid-cols-2 gap-3 pt-1">
+                  <div className="space-y-1.5">
+                    <span className="text-[11px] text-gray-400 block">字重</span>
+                    <div className="grid grid-cols-2 gap-1">
+                      {(
+                        [
+                          { val: 'normal', label: '常规' },
+                          { val: 'bold', label: '加粗' },
+                        ] as const
+                      ).map((w) => (
+                        <button
+                          key={w.val}
+                          onClick={() => updateDanmakuSettings({ fontWeight: w.val })}
+                          className={`py-1 rounded-lg text-[11px] transition cursor-pointer ${
+                            danmakuSettings.fontWeight === w.val
+                              ? 'bg-primary text-white font-semibold'
+                              : 'bg-white/5 hover:bg-white/10 text-gray-300'
+                          }`}
+                        >
+                          {w.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <span className="text-[11px] text-gray-400 block">描边清晰度</span>
+                    <div className="grid grid-cols-3 gap-1">
+                      {[
+                        { val: 1.5, label: '细' },
+                        { val: 2.5, label: '中' },
+                        { val: 3.5, label: '粗' },
+                      ].map((s) => (
+                        <button
+                          key={s.val}
+                          onClick={() => updateDanmakuSettings({ strokeWidth: s.val })}
+                          className={`py-1 rounded-lg text-[11px] transition cursor-pointer ${
+                            danmakuSettings.strokeWidth === s.val
+                              ? 'bg-primary text-white font-semibold'
+                              : 'bg-white/5 hover:bg-white/10 text-gray-300'
+                          }`}
+                        >
+                          {s.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
               </div>
 
-              {/* Subtitle Clearance (Bottom Margin) */}
+              {/* Bottom Margin */}
               <div className="space-y-2 pt-2 border-t border-white/10">
                 <div className="flex justify-between text-xs text-gray-300">
                   <span>底部字幕避让距离</span>
@@ -860,7 +956,7 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
                     <button
                       key={bm}
                       onClick={() => updateDanmakuSettings({ bottomMargin: bm })}
-                      className={`py-1.5 rounded-lg text-xs font-medium transition ${
+                      className={`py-1.5 rounded-lg text-xs font-medium transition cursor-pointer ${
                         danmakuSettings.bottomMargin === bm
                           ? 'bg-primary text-white'
                           : 'bg-white/5 hover:bg-white/10 text-gray-300'
@@ -872,7 +968,7 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
                 </div>
               </div>
 
-              {/* Position Block Toggles */}
+              {/* Type Block Toggles */}
               <div className="space-y-2 pt-2 border-t border-white/10">
                 <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider block">
                   类型屏蔽
@@ -923,7 +1019,7 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
                   />
                   <button
                     type="submit"
-                    className="px-3 py-1.5 bg-primary hover:bg-primary-hover text-white rounded-lg text-xs font-medium transition flex items-center space-x-1"
+                    className="px-3 py-1.5 bg-primary hover:bg-primary-hover text-white rounded-lg text-xs font-medium transition flex items-center space-x-1 cursor-pointer"
                   >
                     <Plus className="w-3.5 h-3.5" />
                     <span>添加</span>
@@ -940,7 +1036,7 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
                         <span>{word}</span>
                         <button
                           onClick={() => handleRemoveBlockedWord(word)}
-                          className="text-gray-400 hover:text-red-400"
+                          className="text-gray-400 hover:text-red-400 cursor-pointer"
                         >
                           <Trash2 className="w-3 h-3" />
                         </button>
@@ -949,128 +1045,78 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
                   </div>
                 )}
               </div>
-
-              {/* Playback Engine Selection */}
-              <div className="space-y-2 pt-2 border-t border-white/10">
-                <div className="flex justify-between items-center text-xs text-gray-300">
-                  <span>播放器内核 (切换即生效)</span>
-                  <span className="font-mono text-primary font-bold text-[11px]">
-                    {engineType === 'mpv' ? 'libmpv 原生硬解' : 'WebView 兼容'}
-                  </span>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    onClick={() => setEngineType('mpv')}
-                    className={`py-1.5 rounded-lg text-xs font-medium transition flex items-center justify-center space-x-1.5 ${
-                      engineType === 'mpv'
-                        ? 'bg-primary text-white shadow-md'
-                        : 'bg-white/5 hover:bg-white/10 text-gray-300'
-                    }`}
-                  >
-                    <span>libmpv 原生硬解</span>
-                  </button>
-                  <button
-                    onClick={() => setEngineType('html5')}
-                    className={`py-1.5 rounded-lg text-xs font-medium transition flex items-center justify-center space-x-1.5 ${
-                      engineType === 'html5'
-                        ? 'bg-primary text-white shadow-md'
-                        : 'bg-white/5 hover:bg-white/10 text-gray-300'
-                    }`}
-                  >
-                    <span>WebView 兼容</span>
-                  </button>
-                </div>
-                <p className="text-[10px] text-gray-400 leading-relaxed">
-                  原生硬解支持 MKV 原盘直接播放与 DTS/TrueHD 音轨本地直解，Emby 服务端 0% 转码与重封装。
-                </p>
-
-                <div className="pt-2">
-                  <button
-                    onClick={() => setIsProxyModalOpen(true)}
-                    className="w-full py-2 bg-white/5 hover:bg-white/10 text-gray-300 hover:text-white rounded-lg text-xs font-medium transition flex items-center justify-center space-x-1.5 cursor-pointer"
-                  >
-                    <Globe className="w-3.5 h-3.5 text-primary" />
-                    <span>网络与代理设置 (系统代理 / 手动代理)</span>
-                  </button>
-                </div>
-              </div>
             </div>
           )}
 
-          {activeTab === 'time' && (
-            <div className="space-y-5">
-              <div className="bg-black/35 rounded-2xl p-5 border border-white/10 text-center">
-                <span className="text-xs text-gray-400 block mb-1.5 font-medium">当前弹幕时间偏移</span>
-                <div className="text-4xl font-mono font-bold text-primary tabular-nums tracking-tight">
-                  {currentOffset > 0 ? `+${currentOffset.toFixed(1)}` : currentOffset.toFixed(1)}s
-                </div>
-                <p className="text-[11px] text-gray-400 mt-2.5 leading-relaxed">
-                  正值代表弹幕提前出现，负值代表延后出现。微调即时生效并自动持久化。
-                </p>
+          {activeTab === 'list' && (
+            <div className="space-y-3">
+              <div className="flex items-center space-x-2">
+                <input
+                  type="text"
+                  value={listQuery}
+                  onChange={(e) => setListQuery(e.target.value)}
+                  placeholder="搜索本集名场面弹幕..."
+                  className="flex-1 bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-primary text-white placeholder-gray-500"
+                />
+                <button
+                  onClick={() => setNearCurrentOnly((prev) => !prev)}
+                  className={`px-2.5 py-2 rounded-xl text-[11px] font-medium border transition cursor-pointer shrink-0 ${
+                    nearCurrentOnly
+                      ? 'bg-primary text-white border-primary'
+                      : 'bg-white/5 hover:bg-white/10 border-white/10 text-gray-300'
+                  }`}
+                  title="仅看当前进度前后 2 分钟内的弹幕"
+                >
+                  当前附近
+                </button>
               </div>
 
-              {/* 偏差警告 */}
-              {durationDiff && durationDiff > 15 && (
-                <div className="p-3 bg-amber-500/15 border border-amber-500/30 rounded-xl text-amber-300 text-xs flex items-start space-x-2 animate-fadeIn">
-                  <AlertTriangle className="w-4 h-4 flex-shrink-0 text-amber-400 mt-0.5" />
-                  <div className="leading-relaxed">
-                    弹幕源时长 ({formatSec(sourceDuration)}) 与 Emby 视频时长 ({formatSec(videoDuration)}) 相差 {durationDiff} 秒，建议使用下方按钮对齐片头。
-                  </div>
+              <div className="flex items-center justify-between text-[11px] text-slate-400 px-1">
+                <span>点击任意弹幕跳转进度 · 最多展示 200 条</span>
+                <span className="font-mono">{rawComments.length} 条总计</span>
+              </div>
+
+              {parsedDanmuList.length === 0 ? (
+                <div className="py-12 text-center text-xs text-slate-500">
+                  {rawComments.length === 0 ? '当前视频尚未加载弹幕' : '未检索到匹配弹幕'}
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  {parsedDanmuList.map((item, idx) => (
+                    <div
+                      key={`${item.cid}-${idx}`}
+                      className="group flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-black/25 hover:bg-white/10 transition text-xs"
+                    >
+                      <button
+                        onClick={() => onSeekToTime?.(item.time)}
+                        className="flex-1 min-w-0 flex items-center space-x-2 text-left cursor-pointer"
+                      >
+                        <span className="font-mono text-[11px] text-sky-400 shrink-0 tabular-nums">
+                          {formatSec(item.time)}
+                        </span>
+                        <span className="text-slate-200 group-hover:text-white truncate">
+                          {item.text}
+                        </span>
+                      </button>
+                      <button
+                        onClick={() => handleQuickBlockText(item.text)}
+                        className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-red-500/20 text-slate-400 hover:text-red-400 transition cursor-pointer shrink-0"
+                        title="屏蔽该条内容"
+                      >
+                        <ShieldBan className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
                 </div>
               )}
-
-              <div className="space-y-2.5">
-                <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider block">
-                  快捷微调 (5 档触感调节)
-                </span>
-                <div className="grid grid-cols-5 gap-1.5">
-                  <button
-                    onClick={() => adjustOffset(-5)}
-                    className="py-2.5 bg-white/5 hover:bg-white/15 rounded-xl text-xs font-mono font-bold transition text-gray-200 tabular-nums border border-white/5 cursor-pointer"
-                  >
-                    -5s
-                  </button>
-                  <button
-                    onClick={() => adjustOffset(-0.5)}
-                    className="py-2.5 bg-white/5 hover:bg-white/15 rounded-xl text-xs font-mono font-bold transition text-gray-200 tabular-nums border border-white/5 cursor-pointer"
-                  >
-                    -0.5s
-                  </button>
-                  <button
-                    onClick={resetOffset}
-                    className="py-2.5 bg-primary/20 hover:bg-primary text-primary hover:text-white rounded-xl text-xs font-bold transition border border-primary/30 cursor-pointer shadow-sm"
-                  >
-                    重置
-                  </button>
-                  <button
-                    onClick={() => adjustOffset(0.5)}
-                    className="py-2.5 bg-white/5 hover:bg-white/15 rounded-xl text-xs font-mono font-bold transition text-gray-200 tabular-nums border border-white/5 cursor-pointer"
-                  >
-                    +0.5s
-                  </button>
-                  <button
-                    onClick={() => adjustOffset(5)}
-                    className="py-2.5 bg-white/5 hover:bg-white/15 rounded-xl text-xs font-mono font-bold transition text-gray-200 tabular-nums border border-white/5 cursor-pointer"
-                  >
-                    +5s
-                  </button>
-                </div>
-              </div>
             </div>
           )}
         </div>
       </div>
 
-      {/* Danmu Server Config Modal */}
       <DanmuServerModal
         isOpen={isServerModalOpen}
         onClose={() => setIsServerModalOpen(false)}
-      />
-
-      {/* Network Proxy Config Modal */}
-      <NetworkProxyModal
-        isOpen={isProxyModalOpen}
-        onClose={() => setIsProxyModalOpen(false)}
       />
     </>
   );

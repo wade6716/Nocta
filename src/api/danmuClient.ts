@@ -181,6 +181,8 @@ export function transformToDanmakuItems(
   rawComments: RawDanmuComment[],
   options: {
     fontSize?: number;
+    fontWeight?: 'normal' | 'bold';
+    strokeWidth?: number;
     fontFamily?: string;
     blockScroll?: boolean;
     blockTop?: boolean;
@@ -188,10 +190,13 @@ export function transformToDanmakuItems(
     blockColor?: boolean;
     colorMode?: 'vibrant' | 'monochrome' | 'blocked';
     blockedWords?: (string | RegExp)[];
+    mergeDuplicates?: boolean;
   } = {}
 ): FormattedDanmakuItem[] {
   const {
     fontSize = 24,
+    fontWeight = 'bold',
+    strokeWidth = 2.5,
     fontFamily = '"PingFang SC", "Microsoft YaHei", sans-serif',
     blockScroll = false,
     blockTop = false,
@@ -199,9 +204,18 @@ export function transformToDanmakuItems(
     blockColor = false,
     colorMode = 'vibrant',
     blockedWords = [],
+    mergeDuplicates = true,
   } = options;
 
-  const result: FormattedDanmakuItem[] = [];
+  interface ParsedCandidate {
+    text: string;
+    normText: string;
+    time: number;
+    mode: FormattedDanmakuItem['mode'];
+    hexColor: string;
+  }
+
+  const candidates: ParsedCandidate[] = [];
   const effectiveColorMode = colorMode || (blockColor ? 'blocked' : 'vibrant');
 
   for (const item of rawComments) {
@@ -237,19 +251,110 @@ export function transformToDanmakuItems(
       hexColor = `#${decimalColor.toString(16).padStart(6, '0')}`;
     }
 
-    result.push({
+    candidates.push({
       text: item.m,
+      normText: item.m.trim().toLowerCase(),
       time,
       mode,
-      style: {
-        font: `bold ${fontSize}px ${fontFamily}`,
-        fillStyle: hexColor,
-        strokeStyle: 'rgba(0, 0, 0, 0.9)',
-        lineWidth: 2.5,
-        textBaseline: 'bottom',
-      },
+      hexColor,
     });
   }
 
-  return result.sort((a, b) => a.time - b.time);
+  candidates.sort((a, b) => a.time - b.time);
+
+  const fontPrefix = fontWeight === 'bold' ? 'bold ' : '';
+  const result: FormattedDanmakuItem[] = [];
+
+  if (!mergeDuplicates) {
+    for (const c of candidates) {
+      result.push({
+        text: c.text,
+        time: c.time,
+        mode: c.mode,
+        style: {
+          font: `${fontPrefix}${fontSize}px ${fontFamily}`,
+          fillStyle: c.hexColor,
+          strokeStyle: 'rgba(0, 0, 0, 0.9)',
+          lineWidth: strokeWidth,
+          textBaseline: 'bottom',
+        },
+      });
+    }
+    return result;
+  }
+
+  // 3 秒滑动窗口重复弹幕智能合并防刷屏
+  const windowMap = new Map<string, { resultIdx: number; firstTime: number; baseText: string; count: number }>();
+
+  for (const c of candidates) {
+    const existing = windowMap.get(c.normText);
+    if (existing && c.time - existing.firstTime <= 3) {
+      existing.count += 1;
+      if (existing.count >= 3) {
+        const target = result[existing.resultIdx];
+        target.text = `${existing.baseText} ×${existing.count}`;
+        target.style.lineWidth = Math.max(strokeWidth, 3);
+      }
+      continue;
+    }
+
+    const resultIdx = result.length;
+    result.push({
+      text: c.text,
+      time: c.time,
+      mode: c.mode,
+      style: {
+        font: `${fontPrefix}${fontSize}px ${fontFamily}`,
+        fillStyle: c.hexColor,
+        strokeStyle: 'rgba(0, 0, 0, 0.9)',
+        lineWidth: strokeWidth,
+        textBaseline: 'bottom',
+      },
+    });
+    windowMap.set(c.normText, {
+      resultIdx,
+      firstTime: c.time,
+      baseText: c.text,
+      count: 1,
+    });
+  }
+
+  return result;
+}
+
+/**
+ * 7. 计算进度条高能弹幕密度分布曲线 (归一化到 0 ~ 1)
+ */
+export function computeDanmakuHeatmap(
+  rawComments: RawDanmuComment[],
+  durationSeconds: number,
+  bucketCount = 100
+): number[] {
+  if (!durationSeconds || durationSeconds <= 0 || rawComments.length === 0 || bucketCount <= 0) {
+    return [];
+  }
+
+  const buckets = new Array<number>(bucketCount).fill(0);
+  for (const item of rawComments) {
+    if (!item.p) continue;
+    const t = parseFloat(item.p.split(',')[0]);
+    if (!Number.isFinite(t) || t < 0) continue;
+    const idx = Math.min(bucketCount - 1, Math.max(0, Math.floor((t / durationSeconds) * bucketCount)));
+    buckets[idx] += 1;
+  }
+
+  // 3 点移动平均平滑曲线
+  const smoothed = new Array<number>(bucketCount).fill(0);
+  let maxVal = 0;
+  for (let i = 0; i < bucketCount; i++) {
+    const prev = i > 0 ? buckets[i - 1] : buckets[i];
+    const curr = buckets[i];
+    const next = i < bucketCount - 1 ? buckets[i + 1] : buckets[i];
+    const val = (prev + curr * 2 + next) / 4;
+    smoothed[i] = val;
+    if (val > maxVal) maxVal = val;
+  }
+
+  if (maxVal <= 0) return [];
+  return smoothed.map((v) => v / maxVal);
 }

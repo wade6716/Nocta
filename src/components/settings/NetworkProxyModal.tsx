@@ -22,11 +22,12 @@ import { useAuthStore } from '../../stores/useAuthStore';
 interface NetworkProxyModalProps {
   isOpen: boolean;
   onClose: () => void;
+  onSaved?: () => void;
 }
 
 type TestTargetType = 'google' | 'emby' | 'custom';
 
-export const NetworkProxyModal: React.FC<NetworkProxyModalProps> = ({ isOpen, onClose }) => {
+export const NetworkProxyModal: React.FC<NetworkProxyModalProps> = ({ isOpen, onClose, onSaved }) => {
   const { globalProxyConfig, updateGlobalProxyConfig, getCurrentServer, testProxyConnection } =
     useAuthStore();
 
@@ -143,6 +144,7 @@ export const NetworkProxyModal: React.FC<NetworkProxyModalProps> = ({ isOpen, on
       password: password.trim() || undefined,
     };
     updateGlobalProxyConfig(newConfig);
+    onSaved?.();
     onClose();
   };
 

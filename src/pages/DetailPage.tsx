@@ -158,6 +158,7 @@ export const DetailPage: React.FC = () => {
       setPlaybackContext({
         item: targetItem,
         mediaSource,
+        availableMediaSources: pbInfo.MediaSources,
         playSessionId: pbInfo.PlaySessionId,
         streamUrl,
         audioTracks,

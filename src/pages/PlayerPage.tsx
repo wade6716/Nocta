@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   AlertCircle,
@@ -9,11 +9,16 @@ import {
   Play,
   Pause,
   Zap,
+  Globe,
+  Wifi,
 } from 'lucide-react';
 import { useAuthStore } from '../stores/useAuthStore';
 import { usePlayerStore } from '../stores/usePlayerStore';
 import { useDanmuStore } from '../stores/useDanmuStore';
 import {
+  EmbyChapter,
+  EmbyItem,
+  EmbyMediaSource,
   reportPlaybackStart,
   reportPlaybackProgress,
   reportPlaybackStopped,
@@ -21,38 +26,67 @@ import {
   buildDirectStreamUrl,
   buildNativeDirectStreamUrl,
   getItemDetail,
+  getSeriesSeasons,
+  getSeriesEpisodes,
   getPlaybackInfo,
   mapStreamTracks,
   buildItemImageUrl,
+  extractIntroRange,
 } from '../api/embyClient';
-import { IPlayerEngine } from '../player/types';
+import {
+  IPlayerEngine,
+  PlayerTelemetry,
+  ResolvedStreamProxyInfo,
+  StreamProxyOverride,
+  VideoAspectPreset,
+} from '../player/types';
 import { PlayerEngineFactory } from '../player/PlayerEngineFactory';
 import {
   autoMatchEpisode,
   fetchCommentsById,
   transformToDanmakuItems,
+  computeDanmakuHeatmap,
   RawDanmuComment,
-  FormattedDanmakuItem,
 } from '../api/danmuClient';
 import { isTauriEnvironment } from '../api/http';
 import { MpvDanmakuBridge } from '../components/player/MpvDanmakuBridge';
 import { DanmakuLayer } from '../components/player/DanmakuLayer';
-import { PlayerOsd } from '../components/player/PlayerOsd';
+import { PlayerOsd, formatTime } from '../components/player/PlayerOsd';
 import { DanmakuDrawer } from '../components/player/DanmakuDrawer';
 import { PlaybackInfoModal } from '../components/player/PlaybackInfoModal';
+import { MiniActionHud, MiniHudState } from '../components/player/MiniActionHud';
+import { PlayerContextMenu } from '../components/player/PlayerContextMenu';
+import { ShortcutsModal } from '../components/player/ShortcutsModal';
+import { EpisodeDrawer } from '../components/player/EpisodeDrawer';
+import { VideoProPanel } from '../components/player/VideoProPanel';
+import { NetworkProxyPopover } from '../components/player/NetworkProxyPopover';
+import { UpNextOverlay } from '../components/player/UpNextOverlay';
+import { NetworkProxyModal } from '../components/settings/NetworkProxyModal';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { getCurrentWebview } from '@tauri-apps/api/webview';
+import { invoke } from '@tauri-apps/api/core';
+
+type ActivePanelType =
+  | 'none'
+  | 'danmaku'
+  | 'videoPro'
+  | 'episodes'
+  | 'network'
+  | 'info'
+  | 'shortcuts';
 
 export const PlayerPage: React.FC = () => {
   const { itemId } = useParams<{ itemId: string }>();
   const navigate = useNavigate();
 
   const currentServer = useAuthStore((s) => s.getCurrentServer());
-  const { getActiveServer, activeServerId } = useDanmuStore();
+  const { getActiveServer } = useDanmuStore();
   const activeDanmuServer = getActiveServer();
 
   const {
     item,
     mediaSource,
+    availableMediaSources,
     playSessionId,
     streamUrl,
     currentTime,
@@ -65,20 +99,29 @@ export const PlayerPage: React.FC = () => {
     subtitleTracks,
     selectedAudioId,
     selectedSubtitleId,
+    selectedSecondarySubtitleId,
     danmakuSettings,
     itemOffsets,
+    seriesOffsets,
     danmakuBindings,
+    seriesDanmakuBindings,
     videoLayouts,
+    playerPreferences,
     engineType,
     setEngineType,
     setPlaybackContext,
+    updateTracks,
     updateTime,
     setPaused,
     setVolume,
     setPlaybackRate,
     selectAudioTrack,
     selectSubtitleTrack,
+    selectSecondarySubtitleTrack,
     updateDanmakuSettings,
+    setItemOffset,
+    setVideoLayout,
+    updatePlayerPreferences,
     resetPlayer,
   } = usePlayerStore();
 
@@ -86,21 +129,48 @@ export const PlayerPage: React.FC = () => {
   const bridgeRef = useRef<MpvDanmakuBridge>(new MpvDanmakuBridge());
   const bridge = bridgeRef.current;
 
-  // Video playback status (100% 原画直连，坚决不向服务端请求转码)
+  // Video playback & telemetry status
   const [currentStreamUrl, setCurrentStreamUrl] = useState<string | null>(streamUrl);
+  const [reloadToken, setReloadToken] = useState(0);
   const [isLoadingVideo, setIsLoadingVideo] = useState(true);
   const [videoError, setVideoError] = useState<string | null>(null);
   const [videoDimensions, setVideoDimensions] = useState<{ width: number; height: number } | null>(null);
   const [networkSpeed, setNetworkSpeed] = useState<number>(0);
+  const [speedHistory, setSpeedHistory] = useState<number[]>([]);
+  const [telemetry, setTelemetry] = useState<PlayerTelemetry>({});
+  const [proxyOverride, setProxyOverride] = useState<StreamProxyOverride>('follow');
+  const [proxyInfo, setProxyInfo] = useState<ResolvedStreamProxyInfo | null>(null);
+  const [abLoopA, setAbLoopA] = useState<number | null>(null);
+  const [abLoopB, setAbLoopB] = useState<number | null>(null);
 
-  // Initial resume seek flag & live refs for engine callbacks
+  // Chapters & Series Episodes state
+  const [chapters, setChapters] = useState<EmbyChapter[]>(item?.Chapters || []);
+  const [seasons, setSeasons] = useState<EmbyItem[]>([]);
+  const [selectedSeasonId, setSelectedSeasonId] = useState<string | null>(null);
+  const [episodes, setEpisodes] = useState<EmbyItem[]>([]);
+  const [episodesLoading, setEpisodesLoading] = useState(false);
+  const [cancelAutoNext, setCancelAutoNext] = useState(false);
+  const [autoNextCountdown, setAutoNextCountdown] = useState<number | null>(null);
+
+  // Refs to prevent stale closures & accidental 0s progress wipe
   const hasInitialSeekedRef = useRef(false);
   const initialTimeRef = useRef<number>(initialTime);
+  const lastValidTimeRef = useRef<number>(initialTime);
+  const reportedStoppedSessionRef = useRef<string | null>(null);
+  const autoSwitchedItemIdRef = useRef<string | null>(null);
+  const appliedPrefTrackUrlRef = useRef<string | null>(null);
+  const networkSpeedRef = useRef(0);
   const handleVideoErrorRef = useRef<(errMsg?: string) => void>(() => {});
+  const proxyOverrideRef = useRef<StreamProxyOverride>('follow');
 
   useEffect(() => {
     initialTimeRef.current = initialTime;
-  }, [initialTime]);
+    lastValidTimeRef.current = initialTime;
+  }, [initialTime, itemId]);
+
+  useEffect(() => {
+    proxyOverrideRef.current = proxyOverride;
+  }, [proxyOverride]);
 
   // Player Engine and Container refs
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -108,31 +178,77 @@ export const PlayerPage: React.FC = () => {
 
   // Per-series or per-item video layout configuration
   const layoutKey = item?.SeriesId ? `series_${item.SeriesId}` : item ? `item_${item.Id}` : '';
-  const currentLayout = (layoutKey && videoLayouts[layoutKey]) || { bottomAlign: false, verticalOffset: 100 };
-  const videoAspectRatio = videoDimensions ? videoDimensions.width / videoDimensions.height : undefined;
-  const isWidescreen = videoAspectRatio ? videoAspectRatio > (window.innerWidth / window.innerHeight) + 0.05 : false;
+  const currentLayout = (layoutKey && videoLayouts[layoutKey]) || {
+    bottomAlign: false,
+    verticalOffset: 100,
+  };
+  const videoAspectRatio = videoDimensions
+    ? videoDimensions.width / videoDimensions.height
+    : undefined;
+  const isWidescreen = videoAspectRatio
+    ? videoAspectRatio > window.innerWidth / window.innerHeight + 0.05
+    : false;
 
   // Danmaku state
   const [rawComments, setRawComments] = useState<RawDanmuComment[]>([]);
-  const [formattedComments, setFormattedComments] = useState<FormattedDanmakuItem[]>([]);
   const [matchedTitle, setMatchedTitle] = useState<string>('');
   const [sourceDuration, setSourceDuration] = useState<number | undefined>();
   const [danmuToast, setDanmuToast] = useState<string | null>(null);
   const [durationAlert, setDurationAlert] = useState<string | null>(null);
-  const [isDanmakuDrawerOpen, setIsDanmakuDrawerOpen] = useState(false);
-  const [isPlaybackInfoOpen, setIsPlaybackInfoOpen] = useState(false);
 
-  // OSD and Mouse interaction
+  // 互斥面板 & 弹窗状态
+  const [activePanel, setActivePanel] = useState<ActivePanelType>('none');
+  const [isProxyModalOpen, setIsProxyModalOpen] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{ visible: boolean; x: number; y: number }>({
+    visible: false,
+    x: 0,
+    y: 0,
+  });
+
+  // Mini HUD & Long-Press Fast Forward
+  const [miniHud, setMiniHud] = useState<MiniHudState | null>(null);
+  const [fastForwardRate, setFastForwardRate] = useState<number | null>(null);
+  const miniHudIdRef = useRef(1);
+  const miniHudTimerRef = useRef<number | null>(null);
+  const seekAccumRef = useRef<{ delta: number; lastAt: number }>({ delta: 0, lastAt: 0 });
+  const longPressTimerRef = useRef<number | null>(null);
+  const longPressActiveRef = useRef(false);
+  const preLongPressRateRef = useRef(1.0);
+
+  // OSD and Window interaction
   const [isOsdVisible, setIsOsdVisible] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
+  const [isPinned, setIsPinned] = useState(false);
   const [centerIcon, setCenterIcon] = useState<'play' | 'pause' | null>(null);
   const centerIconTimerRef = useRef<number | null>(null);
   const clickTimerRef = useRef<number | null>(null);
   const hideTimerRef = useRef<number | null>(null);
 
-  // Current item offset
-  const savedOffset = (itemId && itemOffsets[itemId]) || 0;
+  // Current item offset (单集偏移优先，否则继承整剧偏移)
+  const savedOffset =
+    (itemId && itemOffsets[itemId] !== undefined
+      ? itemOffsets[itemId]
+      : item?.SeriesId
+      ? seriesOffsets[item.SeriesId]
+      : 0) || 0;
+
+  const isAnyPanelOpen =
+    activePanel !== 'none' || isProxyModalOpen || contextMenu.visible;
+
+  const showMiniHud = useCallback(
+    (payload: Omit<MiniHudState, 'id'>, durationMs = 1500) => {
+      const id = ++miniHudIdRef.current;
+      setMiniHud({ ...payload, id });
+      if (miniHudTimerRef.current) {
+        window.clearTimeout(miniHudTimerRef.current);
+      }
+      miniHudTimerRef.current = window.setTimeout(() => {
+        setMiniHud(null);
+      }, durationMs);
+    },
+    []
+  );
 
   // Sync streamUrl when store changes
   useEffect(() => {
@@ -140,9 +256,51 @@ export const PlayerPage: React.FC = () => {
       setCurrentStreamUrl(streamUrl);
       setIsLoadingVideo(true);
       setVideoError(null);
+      setAbLoopA(null);
+      setAbLoopB(null);
+      setCancelAutoNext(false);
+      setAutoNextCountdown(null);
       hasInitialSeekedRef.current = false;
+      autoSwitchedItemIdRef.current = null;
+      appliedPrefTrackUrlRef.current = null;
     }
   }, [streamUrl]);
+
+  // 采样 30 秒实时下载速率历史曲线
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setSpeedHistory((prev) => [...prev.slice(-29), networkSpeedRef.current]);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  // 应用持久化 Pro 偏好到底层播放引擎的辅助函数
+  const applyAllPreferencesToEngine = useCallback((engine: IPlayerEngine | null) => {
+    if (!engine) return;
+    const state = usePlayerStore.getState();
+    const prefs = state.playerPreferences;
+    engine.setVolume(state.volume);
+    engine.setHwdecMode?.(prefs.hwdecMode);
+    engine.setVideoAspect?.(prefs.videoAspect);
+    engine.setVideoEnhancement?.({
+      toneMapping: prefs.toneMapping,
+      deband: prefs.deband,
+      brightness: prefs.colorAdjust.brightness,
+      contrast: prefs.colorAdjust.contrast,
+      saturation: prefs.colorAdjust.saturation,
+      gamma: prefs.colorAdjust.gamma,
+    });
+    engine.setAudioEnhancement?.({
+      audioDelay: prefs.audioDelay,
+      nightMode: prefs.nightMode,
+      volumeMax: 200,
+    });
+    engine.setSubtitleStyle?.({
+      delay: prefs.subDelay,
+      scale: prefs.subScale,
+      pos: prefs.subPos,
+    });
+  }, []);
 
   // 0. Player Engine Lifecycle (MpvPlayerEngine / Html5PlayerEngine)
   useEffect(() => {
@@ -150,9 +308,15 @@ export const PlayerPage: React.FC = () => {
     const engine = PlayerEngineFactory.create(engineType);
     engineRef.current = engine;
 
-    engine.init(containerRef.current).catch((err) => {
-      console.warn('[Engine Init Warning]', err);
-    });
+    engine
+      .init(containerRef.current)
+      .then(() => {
+        if (!active) return;
+        applyAllPreferencesToEngine(engine);
+      })
+      .catch((err) => {
+        console.warn('[Engine Init Warning]', err);
+      });
 
     const unlistenTime = engine.onTimeUpdate((cur, dur) => {
       if (!active) return;
@@ -162,6 +326,7 @@ export const PlayerPage: React.FC = () => {
         return;
       }
       hasInitialSeekedRef.current = true;
+      lastValidTimeRef.current = cur;
       setIsLoadingVideo(false);
       updateTime(cur, dur);
       bridge.onMpvTimePos(cur);
@@ -175,7 +340,6 @@ export const PlayerPage: React.FC = () => {
           setVideoError(null);
           break;
         case 'playing':
-          // 若有记忆起播进度且尚未收到真实起播秒数，保持加载中以避免黑屏穿透
           if (!hasInitialSeekedRef.current && initialTimeRef.current > 0) {
             setPaused(false);
             bridge.onMpvPauseChange(false);
@@ -218,9 +382,50 @@ export const PlayerPage: React.FC = () => {
       setVideoDimensions({ width, height });
     });
 
+    const unlistenTracks = engine.onTracksLoaded((aTracks, sTracks) => {
+      if (!active) return;
+      updateTracks(aTracks, sTracks);
+
+      // 根据用户上次选择的偏好语言自动匹配音轨与字幕（仅在每次新片源加载时应用一次）
+      const streamKey = currentStreamUrl || '';
+      if (appliedPrefTrackUrlRef.current !== streamKey) {
+        appliedPrefTrackUrlRef.current = streamKey;
+        const prefs = usePlayerStore.getState().playerPreferences;
+        if (prefs.preferredAudioLang && aTracks.length > 0) {
+          const matchAudio = aTracks.find(
+            (t) => t.language?.toLowerCase() === prefs.preferredAudioLang?.toLowerCase()
+          );
+          if (matchAudio) {
+            selectAudioTrack(matchAudio.id);
+            engine.selectAudioTrack(String(matchAudio.mpvId));
+          }
+        }
+        if (prefs.preferredSubLang && sTracks.length > 0) {
+          const matchSub = sTracks.find(
+            (t) => t.language?.toLowerCase() === prefs.preferredSubLang?.toLowerCase()
+          );
+          if (matchSub) {
+            selectSubtitleTrack(matchSub.id);
+            engine.selectSubtitleTrack(String(matchSub.mpvId));
+          }
+        }
+      }
+    });
+
     const unlistenSpeed = engine.onNetworkSpeed?.((spd) => {
       if (!active) return;
+      networkSpeedRef.current = spd;
       setNetworkSpeed(spd);
+    });
+
+    const unlistenTelemetry = engine.onTelemetry?.((t) => {
+      if (!active) return;
+      setTelemetry(t);
+    });
+
+    const unlistenProxy = engine.onProxyResolved?.((info) => {
+      if (!active) return;
+      setProxyInfo(info);
     });
 
     return () => {
@@ -229,29 +434,125 @@ export const PlayerPage: React.FC = () => {
       unlistenState();
       unlistenError();
       unlistenDim();
+      unlistenTracks();
       unlistenSpeed?.();
+      unlistenTelemetry?.();
+      unlistenProxy?.();
       engine.destroy();
       engineRef.current = null;
     };
   }, [engineType]);
 
-  // Sync streamUrl into active engine
+  // Sync streamUrl / reloadToken into active engine
   useEffect(() => {
     if (currentStreamUrl && engineRef.current) {
-      engineRef.current.load({
-        url: currentStreamUrl,
-        initialTime: initialTimeRef.current,
-        title: item?.Name,
-      });
+      engineRef.current
+        .load({
+          url: currentStreamUrl,
+          initialTime: initialTimeRef.current,
+          title: item?.Name,
+          proxyOverride: proxyOverrideRef.current,
+        })
+        .then(() => {
+          applyAllPreferencesToEngine(engineRef.current);
+        });
     }
-  }, [currentStreamUrl]);
+  }, [currentStreamUrl, reloadToken]);
+
+  // 响应 Pro 画质/字幕/音频偏好实时变化
+  useEffect(() => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    engine.setHwdecMode?.(playerPreferences.hwdecMode);
+  }, [playerPreferences.hwdecMode]);
+
+  useEffect(() => {
+    engineRef.current?.setVideoAspect?.(playerPreferences.videoAspect);
+  }, [playerPreferences.videoAspect]);
+
+  useEffect(() => {
+    engineRef.current?.setVideoEnhancement?.({
+      toneMapping: playerPreferences.toneMapping,
+      deband: playerPreferences.deband,
+      brightness: playerPreferences.colorAdjust.brightness,
+      contrast: playerPreferences.colorAdjust.contrast,
+      saturation: playerPreferences.colorAdjust.saturation,
+      gamma: playerPreferences.colorAdjust.gamma,
+    });
+  }, [
+    playerPreferences.toneMapping,
+    playerPreferences.deband,
+    playerPreferences.colorAdjust,
+  ]);
+
+  useEffect(() => {
+    engineRef.current?.setAudioEnhancement?.({
+      audioDelay: playerPreferences.audioDelay,
+      nightMode: playerPreferences.nightMode,
+      volumeMax: 200,
+    });
+  }, [playerPreferences.audioDelay, playerPreferences.nightMode]);
+
+  useEffect(() => {
+    engineRef.current?.setSubtitleStyle?.({
+      delay: playerPreferences.subDelay,
+      scale: playerPreferences.subScale,
+      pos: playerPreferences.subPos,
+    });
+  }, [playerPreferences.subDelay, playerPreferences.subScale, playerPreferences.subPos]);
 
   // Sync widescreen bottom-alignment into active engine
   useEffect(() => {
     if (engineRef.current) {
-      engineRef.current.setVideoAlignment(currentLayout.verticalOffset, currentLayout.bottomAlign);
+      engineRef.current.setVideoAlignment(
+        currentLayout.verticalOffset,
+        currentLayout.bottomAlign
+      );
     }
   }, [currentLayout.bottomAlign, currentLayout.verticalOffset]);
+
+  // Tauri 本地外挂字幕文件拖放加载
+  useEffect(() => {
+    if (!isTauriEnvironment()) return;
+    let unlistenFn: (() => void) | null = null;
+    let cancelled = false;
+
+    getCurrentWebview()
+      .onDragDropEvent(async (event) => {
+        if (event.payload.type === 'drop') {
+          const subExts = /\.(srt|ass|ssa|vtt|sub|sup|idx)$/i;
+          const subPath = event.payload.paths.find((p) => subExts.test(p));
+          if (subPath && engineRef.current?.addExternalSubtitle) {
+            try {
+              await engineRef.current.addExternalSubtitle(subPath);
+              const fileName = subPath.split(/[/\\]/).pop() || subPath;
+              showMiniHud({
+                icon: 'subtitle',
+                label: '已加载本地外挂字幕',
+                subLabel: fileName,
+              });
+            } catch (e: any) {
+              showMiniHud({
+                icon: 'info',
+                label: '加载外挂字幕失败',
+                subLabel: e?.message || '请确认使用 MPV 硬解内核',
+                progressWarn: true,
+              });
+            }
+          }
+        }
+      })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlistenFn = fn;
+      })
+      .catch(console.warn);
+
+    return () => {
+      cancelled = true;
+      unlistenFn?.();
+    };
+  }, [showMiniHud]);
 
   // Restore playback context if item was not loaded (e.g. page refresh)
   useEffect(() => {
@@ -296,16 +597,18 @@ export const PlayerPage: React.FC = () => {
             ms,
             currentServer.accessToken
           );
-          const initialTime = ticksToSeconds(detail.UserData?.PlaybackPositionTicks || 0);
+          const initSec = ticksToSeconds(detail.UserData?.PlaybackPositionTicks || 0);
 
+          setChapters(detail.Chapters || []);
           setPlaybackContext({
             item: detail,
             mediaSource: ms,
+            availableMediaSources: pbInfo.MediaSources,
             playSessionId: pbInfo.PlaySessionId,
             streamUrl: sUrl,
             audioTracks: aTracks,
             subtitleTracks: sTracks,
-            initialTime,
+            initialTime: initSec,
           });
         } catch (err: any) {
           setVideoError(err.message || '加载媒体失败');
@@ -315,7 +618,115 @@ export const PlayerPage: React.FC = () => {
     }
   }, [item, currentServer, itemId, engineType]);
 
-  // 1. Window punch-through styling lifecycle (关键避坑点 5 & 10)
+  // 补充拉取 Emby Chapters（从首页继续观看直达时可能缺少 Chapters 与全部版本列表）
+  useEffect(() => {
+    if (!item || !currentServer) return;
+    if (item.Chapters) {
+      setChapters(item.Chapters);
+      return;
+    }
+    let cancelled = false;
+    getItemDetail(currentServer.url, currentServer.userId, item.Id, currentServer.accessToken)
+      .then((detail) => {
+        if (!cancelled && detail.Chapters) {
+          setChapters(detail.Chapters);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [item?.Id, currentServer?.id]);
+
+  // 若当前是剧集，后台加载全部季与当前季分集，支持选集列表与自动连播下一集
+  useEffect(() => {
+    if (!item || !currentServer) {
+      setSeasons([]);
+      setEpisodes([]);
+      return;
+    }
+    const targetSeriesId = item.Type === 'Series' ? item.Id : item.SeriesId;
+    if (!targetSeriesId) {
+      setSeasons([]);
+      setEpisodes([]);
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const seasonsRes = await getSeriesSeasons(
+          currentServer.url,
+          currentServer.userId,
+          targetSeriesId,
+          currentServer.accessToken
+        );
+        if (cancelled) return;
+        const seasonList = seasonsRes.Items || [];
+        setSeasons(seasonList);
+
+        const matchSeason =
+          seasonList.find((s) => s.Id === item.SeasonId) || seasonList[0];
+        if (matchSeason) {
+          setSelectedSeasonId(matchSeason.Id);
+          setEpisodesLoading(true);
+          const epRes = await getSeriesEpisodes(
+            currentServer.url,
+            currentServer.userId,
+            targetSeriesId,
+            matchSeason.Id,
+            currentServer.accessToken
+          );
+          if (!cancelled) {
+            setEpisodes(epRes.Items || []);
+            setEpisodesLoading(false);
+          }
+        }
+      } catch (e) {
+        if (!cancelled) setEpisodesLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [item?.SeriesId, item?.SeasonId, currentServer?.id]);
+
+  const handleSelectSeasonInDrawer = async (seasonId: string) => {
+    setSelectedSeasonId(seasonId);
+    const targetSeriesId = item?.Type === 'Series' ? item.Id : item?.SeriesId;
+    if (!currentServer || !targetSeriesId) return;
+    try {
+      setEpisodesLoading(true);
+      const epRes = await getSeriesEpisodes(
+        currentServer.url,
+        currentServer.userId,
+        targetSeriesId,
+        seasonId,
+        currentServer.accessToken
+      );
+      setEpisodes(epRes.Items || []);
+    } catch (e) {
+      console.warn(e);
+    } finally {
+      setEpisodesLoading(false);
+    }
+  };
+
+  // 计算上一集 / 下一集
+  const currentEpisodeIndex = useMemo(() => {
+    if (!item || episodes.length === 0) return -1;
+    return episodes.findIndex((e) => e.Id === item.Id);
+  }, [item?.Id, episodes]);
+
+  const prevEpisode =
+    currentEpisodeIndex > 0 ? episodes[currentEpisodeIndex - 1] : null;
+  const nextEpisode =
+    currentEpisodeIndex >= 0 && currentEpisodeIndex + 1 < episodes.length
+      ? episodes[currentEpisodeIndex + 1]
+      : null;
+
+  // 1. Danmaku bridge offset lifecycle
   useEffect(() => {
     bridge.offset = savedOffset;
     return () => {
@@ -323,25 +734,46 @@ export const PlayerPage: React.FC = () => {
     };
   }, [savedOffset]);
 
-  // 2. Format comments whenever rawComments or danmaku filter settings change
-  useEffect(() => {
-    if (rawComments.length === 0) {
-      setFormattedComments([]);
-      return;
-    }
-    const items = transformToDanmakuItems(rawComments, {
+  // 2. 精确拆分 useMemo 依赖，彻底消除调节透明度/速度/行数/区域/显示开关时的 Canvas 重建闪烁 Bug！
+  const formattedComments = useMemo(() => {
+    if (rawComments.length === 0) return [];
+    return transformToDanmakuItems(rawComments, {
       fontSize: danmakuSettings.fontSize,
+      fontWeight: danmakuSettings.fontWeight,
+      strokeWidth: danmakuSettings.strokeWidth,
       colorMode: danmakuSettings.colorMode,
       blockScroll: danmakuSettings.blockScroll,
       blockTop: danmakuSettings.blockTop,
       blockBottom: danmakuSettings.blockBottom,
       blockColor: danmakuSettings.blockColor,
       blockedWords: danmakuSettings.blockedWords,
+      mergeDuplicates: danmakuSettings.mergeDuplicates,
     });
-    setFormattedComments(items);
-  }, [rawComments, danmakuSettings]);
+  }, [
+    rawComments,
+    danmakuSettings.fontSize,
+    danmakuSettings.fontWeight,
+    danmakuSettings.strokeWidth,
+    danmakuSettings.colorMode,
+    danmakuSettings.blockScroll,
+    danmakuSettings.blockTop,
+    danmakuSettings.blockBottom,
+    danmakuSettings.blockColor,
+    danmakuSettings.blockedWords,
+    danmakuSettings.mergeDuplicates,
+  ]);
 
-  // 3. Load danmaku: first check persistent binding, then fallback to auto-match
+  const effectiveDuration = duration || ticksToSeconds(item?.RunTimeTicks || 0);
+
+  // 计算进度条高能弹幕密度曲线
+  const danmakuHeatmap = useMemo(() => {
+    if (!danmakuSettings.showHeatmap || rawComments.length === 0 || effectiveDuration <= 0) {
+      return [];
+    }
+    return computeDanmakuHeatmap(rawComments, effectiveDuration, 100);
+  }, [rawComments, effectiveDuration, danmakuSettings.showHeatmap]);
+
+  // 3. Load danmaku: 单集手动绑定 -> 同剧集延续绑定 -> 智能自动匹配
   const triggerDanmakuLoad = useCallback(
     async (forceAuto = false) => {
       if (!item) return;
@@ -349,15 +781,12 @@ export const PlayerPage: React.FC = () => {
       const currentBinding = itemId && !forceAuto ? danmakuBindings[itemId] : undefined;
 
       if (currentBinding) {
-        // 1. 命中已保存的手动绑定
         setMatchedTitle(`《${currentBinding.animeTitle}》${currentBinding.episodeTitle}`);
         setSourceDuration(currentBinding.sourceDuration);
         try {
           const res = await fetchCommentsById(activeDanmuServer, currentBinding.episodeId);
           setRawComments(res.comments || []);
-          if (res.videoDuration) {
-            setSourceDuration(res.videoDuration);
-          }
+          if (res.videoDuration) setSourceDuration(res.videoDuration);
           setDanmuToast(
             `已加载绑定弹幕: 《${currentBinding.animeTitle}》${currentBinding.episodeTitle} (${res.comments?.length || 0}条)`
           );
@@ -368,18 +797,48 @@ export const PlayerPage: React.FC = () => {
           if (dur && embyDurationSec > 0) {
             const diff = Math.round(Math.abs(dur - embyDurationSec));
             if (diff > 15) {
-              setDurationAlert(`片源与弹幕源时长相差 ${diff} 秒，建议在右侧抽屉微调时间偏移。`);
+              setDurationAlert(`片源与弹幕源时长相差 ${diff} 秒，可在弹幕抽屉「校准」中一键对齐。`);
             } else {
               setDurationAlert(null);
             }
           }
           return;
         } catch (err) {
-          console.warn('加载绑定弹幕失败，尝试自动匹配', err);
+          console.warn('加载绑定弹幕失败，尝试同剧/自动匹配', err);
         }
       }
 
-      // 2. 未绑定或强制重新匹配，执行智能自动匹配
+      // 优先检查同剧集番剧绑定延续（无需每集手动重复搜番）
+      const seriesBinding =
+        !forceAuto && item.SeriesId ? seriesDanmakuBindings[item.SeriesId] : undefined;
+      if (seriesBinding && seriesBinding.episodes?.length > 0 && item.IndexNumber !== undefined) {
+        const epNum = item.IndexNumber;
+        const matchedEp =
+          seriesBinding.episodes.find((ep) => {
+            const m = ep.episodeTitle.match(/(\d+)/);
+            return m && Number(m[1]) === epNum;
+          }) || seriesBinding.episodes[epNum - 1];
+
+        if (matchedEp) {
+          try {
+            const res = await fetchCommentsById(activeDanmuServer, matchedEp.episodeId);
+            setMatchedTitle(`《${seriesBinding.animeTitle}》${matchedEp.episodeTitle}`);
+            setSourceDuration(res.videoDuration);
+            setRawComments(res.comments || []);
+            if (res.comments && res.comments.length > 0) {
+              setDanmuToast(
+                `同剧延续弹幕: 《${seriesBinding.animeTitle}》${matchedEp.episodeTitle} (${res.comments.length}条)`
+              );
+              setTimeout(() => setDanmuToast(null), 3500);
+            }
+            return;
+          } catch (err) {
+            console.warn('同剧延续弹幕失败，回退自动匹配', err);
+          }
+        }
+      }
+
+      // 智能自动匹配
       try {
         const match = await autoMatchEpisode(activeDanmuServer, {
           seriesName: item.SeriesName,
@@ -413,7 +872,7 @@ export const PlayerPage: React.FC = () => {
         if (res.videoDuration && embyDurationSec > 0) {
           const diff = Math.round(Math.abs(res.videoDuration - embyDurationSec));
           if (diff > 15) {
-            setDurationAlert(`片源与弹幕源时长相差 ${diff} 秒，建议在右侧抽屉微调时间偏移。`);
+            setDurationAlert(`片源与弹幕源时长相差 ${diff} 秒，可在弹幕抽屉「校准」中一键对齐。`);
           } else {
             setDurationAlert(null);
           }
@@ -422,7 +881,7 @@ export const PlayerPage: React.FC = () => {
         console.warn('弹幕自动匹配失败', err);
       }
     },
-    [item?.Id, itemId, danmakuBindings, activeDanmuServer]
+    [item?.Id, itemId, danmakuBindings, seriesDanmakuBindings, activeDanmuServer]
   );
 
   useEffect(() => {
@@ -433,7 +892,9 @@ export const PlayerPage: React.FC = () => {
   useEffect(() => {
     if (!currentServer || !item || !mediaSource || !playSessionId) return;
 
-    const startSec = initialTime > 0 ? initialTime : usePlayerStore.getState().currentTime;
+    const sessionKey = `${item.Id}_${playSessionId}`;
+    const startSec = initialTime > 0 ? initialTime : lastValidTimeRef.current;
+
     reportPlaybackStart(
       currentServer.url,
       {
@@ -447,7 +908,9 @@ export const PlayerPage: React.FC = () => {
 
     const interval = window.setInterval(() => {
       const liveSeconds =
-        engineRef.current?.currentTime ?? usePlayerStore.getState().currentTime;
+        lastValidTimeRef.current ??
+        engineRef.current?.currentTime ??
+        usePlayerStore.getState().currentTime;
       reportPlaybackProgress(
         currentServer.url,
         {
@@ -464,8 +927,14 @@ export const PlayerPage: React.FC = () => {
 
     return () => {
       clearInterval(interval);
+      if (reportedStoppedSessionRef.current === sessionKey) {
+        return;
+      }
+      reportedStoppedSessionRef.current = sessionKey;
       const stopSeconds =
-        engineRef.current?.currentTime ?? usePlayerStore.getState().currentTime;
+        lastValidTimeRef.current ??
+        engineRef.current?.currentTime ??
+        usePlayerStore.getState().currentTime;
       reportPlaybackStopped(
         currentServer.url,
         {
@@ -479,7 +948,196 @@ export const PlayerPage: React.FC = () => {
     };
   }, [currentServer?.id, item?.Id, playSessionId, initialTime]);
 
-  // 5. Mouse inactivity auto-hide OSD (在加载或报错时不隐藏)
+  // 原地无缝切换到其它分集（不销毁底层 mpv 实例）
+  const switchToEpisode = useCallback(
+    async (targetEp: EmbyItem) => {
+      if (!currentServer || !targetEp) return;
+      try {
+        setIsLoadingVideo(true);
+        setVideoError(null);
+        setActivePanel('none');
+        setAutoNextCountdown(null);
+
+        // 先使用准确现场进度上报上一集停止
+        if (item && mediaSource && playSessionId) {
+          const sessionKey = `${item.Id}_${playSessionId}`;
+          reportedStoppedSessionRef.current = sessionKey;
+          await reportPlaybackStopped(
+            currentServer.url,
+            {
+              itemId: item.Id,
+              mediaSourceId: mediaSource.Id,
+              playSessionId,
+              seconds: lastValidTimeRef.current || currentTime,
+            },
+            currentServer.accessToken
+          ).catch(() => {});
+        }
+
+        const [detail, pbInfo] = await Promise.all([
+          getItemDetail(
+            currentServer.url,
+            currentServer.userId,
+            targetEp.Id,
+            currentServer.accessToken
+          ),
+          getPlaybackInfo(
+            currentServer.url,
+            currentServer.userId,
+            targetEp.Id,
+            currentServer.accessToken
+          ),
+        ]);
+
+        const ms = pbInfo.MediaSources?.[0];
+        if (!ms) throw new Error('未检测到可用媒体源');
+
+        const sUrl =
+          engineType === 'mpv' && isTauriEnvironment()
+            ? buildNativeDirectStreamUrl(
+                currentServer.url,
+                detail.Id,
+                ms,
+                pbInfo.PlaySessionId,
+                currentServer.accessToken
+              )
+            : buildDirectStreamUrl(
+                currentServer.url,
+                detail.Id,
+                ms,
+                pbInfo.PlaySessionId,
+                currentServer.accessToken
+              );
+
+        const { audioTracks: aTracks, subtitleTracks: sTracks } = mapStreamTracks(
+          currentServer.url,
+          detail.Id,
+          ms,
+          currentServer.accessToken
+        );
+        const initSec = ticksToSeconds(detail.UserData?.PlaybackPositionTicks || 0);
+
+        setChapters(detail.Chapters || []);
+        setPlaybackContext({
+          item: detail,
+          mediaSource: ms,
+          availableMediaSources: pbInfo.MediaSources,
+          playSessionId: pbInfo.PlaySessionId,
+          streamUrl: sUrl,
+          audioTracks: aTracks,
+          subtitleTracks: sTracks,
+          initialTime: initSec,
+        });
+        navigate(`/player/${detail.Id}`, { replace: true });
+      } catch (err: any) {
+        setVideoError(err?.message || '切换剧集失败');
+        setIsLoadingVideo(false);
+      }
+    },
+    [currentServer, item, mediaSource, playSessionId, currentTime, engineType, navigate, setPlaybackContext]
+  );
+
+  // 原地切换多版本片源 (4K / 1080p 原画直连热切，保留播放进度)
+  const switchMediaSource = useCallback(
+    (ms: EmbyMediaSource) => {
+      if (!currentServer || !item || !playSessionId) return;
+      const liveSec = lastValidTimeRef.current || engineRef.current?.currentTime || currentTime;
+      const sUrl =
+        engineType === 'mpv' && isTauriEnvironment()
+          ? buildNativeDirectStreamUrl(
+              currentServer.url,
+              item.Id,
+              ms,
+              playSessionId,
+              currentServer.accessToken
+            )
+          : buildDirectStreamUrl(
+              currentServer.url,
+              item.Id,
+              ms,
+              playSessionId,
+              currentServer.accessToken
+            );
+      const { audioTracks: aTracks, subtitleTracks: sTracks } = mapStreamTracks(
+        currentServer.url,
+        item.Id,
+        ms,
+        currentServer.accessToken
+      );
+
+      initialTimeRef.current = liveSec;
+      hasInitialSeekedRef.current = liveSec <= 0;
+      setIsLoadingVideo(true);
+      setVideoError(null);
+      setPlaybackContext({
+        item,
+        mediaSource: ms,
+        availableMediaSources,
+        playSessionId,
+        streamUrl: sUrl,
+        audioTracks: aTracks,
+        subtitleTracks: sTracks,
+        initialTime: liveSec,
+      });
+      setReloadToken((t) => t + 1);
+      showMiniHud({
+        icon: 'info',
+        label: '正在切换原画版本',
+        subLabel: ms.Name || ms.Container?.toUpperCase(),
+      });
+    },
+    [currentServer, item, playSessionId, availableMediaSources, currentTime, engineType, setPlaybackContext, showMiniHud]
+  );
+
+  // 自动连播下一集监听（距片尾 <= 15s 出现提示并在倒计时结束切换）
+  useEffect(() => {
+    if (
+      !nextEpisode ||
+      !playerPreferences.autoPlayNext ||
+      cancelAutoNext ||
+      isLoadingVideo ||
+      videoError ||
+      effectiveDuration <= 60
+    ) {
+      setAutoNextCountdown(null);
+      return;
+    }
+
+    const remaining = effectiveDuration - currentTime;
+    if (remaining <= 15 && currentTime > 10) {
+      const secs = Math.max(0, Math.ceil(remaining));
+      setAutoNextCountdown(secs);
+      if (secs === 0 && autoSwitchedItemIdRef.current !== nextEpisode.Id) {
+        autoSwitchedItemIdRef.current = nextEpisode.Id;
+        switchToEpisode(nextEpisode);
+      }
+    } else if (autoNextCountdown !== null) {
+      setAutoNextCountdown(null);
+    }
+  }, [
+    nextEpisode?.Id,
+    playerPreferences.autoPlayNext,
+    cancelAutoNext,
+    isLoadingVideo,
+    videoError,
+    effectiveDuration,
+    currentTime,
+    switchToEpisode,
+  ]);
+
+  // 检测 Emby 片头区间（显示跳过片头胶囊）
+  const introRange = useMemo(
+    () => extractIntroRange(chapters, effectiveDuration),
+    [chapters, effectiveDuration]
+  );
+  const showSkipIntro =
+    !!introRange &&
+    !isLoadingVideo &&
+    !videoError &&
+    currentTime >= introRange.start &&
+    currentTime < introRange.end - 3;
+
+  // 5. Mouse inactivity auto-hide OSD
   const resetHideTimer = useCallback(() => {
     setIsOsdVisible(true);
     document.body.style.cursor = 'default';
@@ -488,13 +1146,13 @@ export const PlayerPage: React.FC = () => {
       window.clearTimeout(hideTimerRef.current);
     }
 
-    if (!isDanmakuDrawerOpen && !paused && !isLoadingVideo && !videoError) {
+    if (!isAnyPanelOpen && !paused && !isLoadingVideo && !videoError) {
       hideTimerRef.current = window.setTimeout(() => {
         setIsOsdVisible(false);
         document.body.style.cursor = 'none';
       }, 3500);
     }
-  }, [isDanmakuDrawerOpen, paused, isLoadingVideo, videoError]);
+  }, [isAnyPanelOpen, paused, isLoadingVideo, videoError]);
 
   useEffect(() => {
     const handleMouseMove = () => resetHideTimer();
@@ -508,7 +1166,7 @@ export const PlayerPage: React.FC = () => {
     };
   }, [resetHideTimer]);
 
-  // Sync window fullscreen and maximized states
+  // Sync window fullscreen, maximized & alwaysOnTop states
   useEffect(() => {
     if (!isTauriEnvironment()) {
       const handleFs = () => setIsFullscreen(!!document.fullscreenElement);
@@ -520,6 +1178,7 @@ export const PlayerPage: React.FC = () => {
       const win = getCurrentWindow();
       win.isFullscreen().then(setIsFullscreen);
       win.isMaximized().then(setIsMaximized);
+      win.isAlwaysOnTop?.().then(setIsPinned).catch(() => {});
 
       const unlistenPromise = win.onResized(async () => {
         try {
@@ -547,8 +1206,8 @@ export const PlayerPage: React.FC = () => {
     }, 600);
   };
 
-  // 6. Playback controls implementation
-  const handleTogglePlay = () => {
+  // 6. Playback controls
+  const handleTogglePlay = (fromKeyboard = false) => {
     if (isLoadingVideo || videoError) return;
     const nextPaused = !paused;
     setPaused(nextPaused);
@@ -558,7 +1217,9 @@ export const PlayerPage: React.FC = () => {
       nextPaused ? engineRef.current.pause() : engineRef.current.play();
     }
     triggerCenterIcon(nextPaused ? 'pause' : 'play');
-    resetHideTimer();
+    if (!fromKeyboard) {
+      resetHideTimer();
+    }
 
     if (currentServer && item && mediaSource && playSessionId) {
       reportPlaybackProgress(
@@ -567,7 +1228,7 @@ export const PlayerPage: React.FC = () => {
           itemId: item.Id,
           mediaSourceId: mediaSource.Id,
           playSessionId,
-          seconds: currentTime,
+          seconds: lastValidTimeRef.current || currentTime,
           isPaused: nextPaused,
           eventName: nextPaused ? 'Pause' : 'Unpause',
         },
@@ -577,11 +1238,13 @@ export const PlayerPage: React.FC = () => {
   };
 
   const handleSeek = (targetSeconds: number) => {
-    updateTime(targetSeconds);
-    bridge.onMpvTimePos(targetSeconds);
+    const clamped = Math.max(0, effectiveDuration > 0 ? Math.min(effectiveDuration, targetSeconds) : targetSeconds);
+    lastValidTimeRef.current = clamped;
+    updateTime(clamped);
+    bridge.onMpvTimePos(clamped);
 
     if (engineRef.current) {
-      engineRef.current.seek(targetSeconds);
+      engineRef.current.seek(clamped);
     }
 
     if (currentServer && item && mediaSource && playSessionId) {
@@ -591,7 +1254,7 @@ export const PlayerPage: React.FC = () => {
           itemId: item.Id,
           mediaSourceId: mediaSource.Id,
           playSessionId,
-          seconds: targetSeconds,
+          seconds: clamped,
           isPaused: paused,
           eventName: 'Seek',
         },
@@ -600,25 +1263,78 @@ export const PlayerPage: React.FC = () => {
     }
   };
 
-  const handleVolumeChange = (vol: number) => {
-    setVolume(vol);
-    if (engineRef.current) {
-      engineRef.current.setVolume(vol);
-    }
-  };
+  // 轻量无打扰 Seek（显示 Mini HUD 而不弹出整套大控制栏）
+  const handleSeekDelta = useCallback(
+    (delta: number) => {
+      const target = Math.max(
+        0,
+        effectiveDuration > 0 ? Math.min(effectiveDuration, currentTime + delta) : currentTime + delta
+      );
+      handleSeek(target);
 
-  const handleRateChange = (rate: number) => {
-    setPlaybackRate(rate);
-    bridge.onMpvSpeedChange(rate);
-    if (engineRef.current) {
-      engineRef.current.setPlaybackRate(rate);
-    }
-  };
+      const now = Date.now();
+      if (
+        now - seekAccumRef.current.lastAt < 800 &&
+        Math.sign(seekAccumRef.current.delta) === Math.sign(delta)
+      ) {
+        seekAccumRef.current.delta += delta;
+      } else {
+        seekAccumRef.current.delta = delta;
+      }
+      seekAccumRef.current.lastAt = now;
+
+      const totalDelta = seekAccumRef.current.delta;
+      showMiniHud({
+        icon: totalDelta >= 0 ? 'seek-forward' : 'seek-backward',
+        label: `${totalDelta >= 0 ? `+${totalDelta}s` : `${totalDelta}s`}`,
+        subLabel: `${formatTime(target)} / ${formatTime(effectiveDuration)}`,
+      });
+    },
+    [currentTime, effectiveDuration, showMiniHud]
+  );
+
+  const handleVolumeChange = useCallback(
+    (vol: number, withHud = false) => {
+      const maxVol = engineType === 'mpv' ? 200 : 100;
+      const clamped = Math.max(0, Math.min(maxVol, Math.round(vol)));
+      setVolume(clamped);
+      engineRef.current?.setVolume(clamped);
+
+      if (withHud) {
+        showMiniHud({
+          icon: clamped === 0 ? 'mute' : 'volume',
+          label: clamped === 0 ? '已静音' : `音量 ${clamped}%`,
+          progress: (clamped / maxVol) * 100,
+          progressWarn: clamped > 100,
+        });
+      }
+    },
+    [engineType, setVolume, showMiniHud]
+  );
+
+  const handleRateChange = useCallback(
+    (rate: number, withHud = false) => {
+      const clamped = Math.max(0.5, Math.min(3.0, Math.round(rate * 100) / 100));
+      setPlaybackRate(clamped);
+      bridge.onMpvSpeedChange(clamped);
+      engineRef.current?.setPlaybackRate(clamped);
+      if (withHud) {
+        showMiniHud({
+          icon: 'speed',
+          label: `播放倍速 ${clamped}x`,
+        });
+      }
+    },
+    [bridge, setPlaybackRate, showMiniHud]
+  );
 
   const handleSelectAudioTrack = (trackId: string | null) => {
     selectAudioTrack(trackId);
     if (trackId && engineRef.current) {
       const track = audioTracks.find((t) => t.id === trackId);
+      if (track?.language) {
+        updatePlayerPreferences({ preferredAudioLang: track.language });
+      }
       const engineTrackId =
         engineType === 'mpv' && track?.mpvId !== undefined ? String(track.mpvId) : trackId;
       engineRef.current.selectAudioTrack(engineTrackId);
@@ -633,11 +1349,131 @@ export const PlayerPage: React.FC = () => {
         return;
       }
       const track = subtitleTracks.find((t) => t.id === trackId);
+      if (track?.language) {
+        updatePlayerPreferences({ preferredSubLang: track.language });
+      }
       const engineTrackId =
         engineType === 'mpv' && track?.mpvId !== undefined ? String(track.mpvId) : trackId;
       engineRef.current.selectSubtitleTrack(engineTrackId);
     }
   };
+
+  const handleSelectSecondarySubtitleTrack = (trackId: string | null) => {
+    selectSecondarySubtitleTrack(trackId);
+    if (!engineRef.current?.selectSecondarySubtitleTrack) return;
+    if (!trackId) {
+      engineRef.current.selectSecondarySubtitleTrack(null);
+      return;
+    }
+    const track = subtitleTracks.find((t) => t.id === trackId);
+    const engineTrackId = track?.mpvId !== undefined ? String(track.mpvId) : trackId;
+    engineRef.current.selectSecondarySubtitleTrack(engineTrackId);
+  };
+
+  const handleTogglePin = async () => {
+    if (!isTauriEnvironment()) return;
+    try {
+      const win = getCurrentWindow();
+      const next = !isPinned;
+      await win.setAlwaysOnTop(next);
+      setIsPinned(next);
+      showMiniHud({
+        icon: 'pin',
+        label: next ? '窗口已置顶' : '已取消窗口置顶',
+      });
+    } catch (e) {
+      console.warn(e);
+    }
+  };
+
+  const handleTakeScreenshot = async () => {
+    if (engineType !== 'mpv' || !engineRef.current?.takeScreenshot) {
+      showMiniHud({
+        icon: 'screenshot',
+        label: '仅 MPV 硬解内核支持无损截图',
+        progressWarn: true,
+      });
+      return;
+    }
+    try {
+      const dir = isTauriEnvironment() ? await invoke<string>('get_screenshot_dir') : '';
+      await engineRef.current.takeScreenshot(dir, 'subtitles');
+      showMiniHud(
+        {
+          icon: 'screenshot',
+          label: '无损 PNG 截图已保存',
+          subLabel: dir || undefined,
+          actionLabel: dir ? '打开目录' : undefined,
+          onAction: dir ? () => invoke('show_in_file_manager', { path: dir }).catch(() => {}) : undefined,
+        },
+        3500
+      );
+    } catch (e: any) {
+      showMiniHud({
+        icon: 'screenshot',
+        label: '截图失败',
+        subLabel: e?.message,
+        progressWarn: true,
+      });
+    }
+  };
+
+  const handleSetAbLoop = async (point: 'a' | 'b' | 'clear') => {
+    const live = lastValidTimeRef.current || currentTime;
+    if (point === 'a') {
+      setAbLoopA(live);
+      await engineRef.current?.setAbLoop?.('a', live);
+      showMiniHud({ icon: 'loop', label: `已设 A 点: ${formatTime(live)}` });
+    } else if (point === 'b') {
+      setAbLoopB(live);
+      await engineRef.current?.setAbLoop?.('b', live);
+      showMiniHud({ icon: 'loop', label: `A-B 片段循环开始 (${formatTime(abLoopA || 0)} → ${formatTime(live)})` });
+    } else {
+      setAbLoopA(null);
+      setAbLoopB(null);
+      await engineRef.current?.setAbLoop?.('clear');
+      showMiniHud({ icon: 'loop', label: '已清除 A-B 循环' });
+    }
+  };
+
+  const handleSkipIntro = () => {
+    if (introRange) {
+      handleSeek(introRange.end);
+      showMiniHud({
+        icon: 'seek-forward',
+        label: '已跳过片头至正片',
+        subLabel: formatTime(introRange.end),
+      });
+    } else {
+      handleSeekDelta(playerPreferences.skipIntroSeconds);
+    }
+  };
+
+  // 原地热切流代理路由并保留精确当前进度
+  const handleHotReloadStreamWithProxy = useCallback(
+    (nextOverride: StreamProxyOverride) => {
+      setProxyOverride(nextOverride);
+      proxyOverrideRef.current = nextOverride;
+      if (!currentStreamUrl || !engineRef.current) return;
+
+      const liveSec = lastValidTimeRef.current || engineRef.current.currentTime || currentTime;
+      initialTimeRef.current = liveSec;
+      hasInitialSeekedRef.current = liveSec <= 0;
+      setIsLoadingVideo(true);
+      setVideoError(null);
+      setReloadToken((t) => t + 1);
+      showMiniHud({
+        icon: 'info',
+        label:
+          nextOverride === 'direct'
+            ? '正在切换直连模式重连...'
+            : nextOverride === 'proxy'
+            ? '正在切换代理通道重连...'
+            : '正按全局代理配置重连...',
+      });
+    },
+    [currentStreamUrl, currentTime, showMiniHud]
+  );
 
   const handleToggleFullscreen = async () => {
     if (isTauriEnvironment()) {
@@ -682,17 +1518,19 @@ export const PlayerPage: React.FC = () => {
       } catch (e) {
         console.warn(e);
       }
-    } else {
-      if (document.fullscreenElement) {
-        document.exitFullscreen();
-        setIsFullscreen(false);
-      }
+    } else if (document.fullscreenElement) {
+      document.exitFullscreen();
+      setIsFullscreen(false);
     }
   };
 
   const handleVideoClick = () => {
-    if (isDanmakuDrawerOpen) {
-      setIsDanmakuDrawerOpen(false);
+    if (contextMenu.visible) {
+      setContextMenu((prev) => ({ ...prev, visible: false }));
+      return;
+    }
+    if (activePanel !== 'none') {
+      setActivePanel('none');
       return;
     }
     if (clickTimerRef.current) {
@@ -702,16 +1540,14 @@ export const PlayerPage: React.FC = () => {
       clickTimerRef.current = window.setTimeout(() => {
         handleTogglePlay();
         clickTimerRef.current = null;
-      }, 250);
+      }, 240);
     }
   };
 
   const handleVideoDoubleClick = (e?: React.MouseEvent) => {
-    if (e) {
-      e.stopPropagation();
-    }
-    if (isDanmakuDrawerOpen) {
-      setIsDanmakuDrawerOpen(false);
+    if (e) e.stopPropagation();
+    if (activePanel !== 'none') {
+      setActivePanel('none');
       return;
     }
     if (clickTimerRef.current) {
@@ -719,6 +1555,27 @@ export const PlayerPage: React.FC = () => {
       clickTimerRef.current = null;
     }
     handleToggleFullscreen();
+  };
+
+  const handleVideoWheel = (e: React.WheelEvent) => {
+    if (isAnyPanelOpen || isLoadingVideo || videoError) return;
+    if (Math.abs(e.deltaY) < 2) return;
+    const up = e.deltaY < 0;
+    if (e.shiftKey) {
+      handleSeekDelta(up ? 5 : -5);
+    } else {
+      handleVolumeChange(volume + (up ? 5 : -5), true);
+    }
+  };
+
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu({
+      visible: true,
+      x: e.clientX,
+      y: e.clientY,
+    });
   };
 
   const handleBack = () => {
@@ -737,37 +1594,178 @@ export const PlayerPage: React.FC = () => {
     navigate('/', { replace: true });
   };
 
-  // 7. Global Keyboard Shortcuts
+  // 7. Global Keyboard Shortcuts（支持无打扰 Mini HUD 与长按 → 临时 2.5x 倍速）
   useEffect(() => {
+    const rateSteps = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0];
+
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) {
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement)?.tagName)) {
+        return;
+      }
+
+      // 优先允许 ? 呼出/关闭快捷键清单
+      if (e.key === '?' || (e.shiftKey && e.code === 'Slash')) {
+        e.preventDefault();
+        setActivePanel((prev) => (prev === 'shortcuts' ? 'none' : 'shortcuts'));
         return;
       }
 
       switch (e.code) {
         case 'Space':
           e.preventDefault();
-          handleTogglePlay();
+          handleTogglePlay(true);
           break;
         case 'ArrowLeft':
           e.preventDefault();
-          handleSeek(Math.max(0, currentTime - 5));
+          handleSeekDelta(-5);
           break;
         case 'ArrowRight':
           e.preventDefault();
-          handleSeek(Math.min(duration, currentTime + 5));
+          if (e.repeat) break;
+          if (!longPressActiveRef.current && !longPressTimerRef.current) {
+            preLongPressRateRef.current = playbackRate;
+            longPressTimerRef.current = window.setTimeout(() => {
+              longPressTimerRef.current = null;
+              longPressActiveRef.current = true;
+              const targetRate = playerPreferences.longPressSpeed;
+              setFastForwardRate(targetRate);
+              handleRateChange(targetRate, false);
+            }, 280);
+          }
           break;
         case 'ArrowUp':
           e.preventDefault();
-          handleVolumeChange(Math.min(100, volume + 5));
+          handleVolumeChange(volume + 5, true);
           break;
         case 'ArrowDown':
           e.preventDefault();
-          handleVolumeChange(Math.max(0, volume - 5));
+          handleVolumeChange(volume - 5, true);
           break;
-        case 'KeyD':
+        case 'KeyM':
           e.preventDefault();
-          updateDanmakuSettings({ visible: !danmakuSettings.visible });
+          handleVolumeChange(volume > 0 ? 0 : 100, true);
+          break;
+        case 'BracketLeft': {
+          e.preventDefault();
+          const idx = rateSteps.findIndex((r) => r >= playbackRate);
+          const next = rateSteps[Math.max(0, (idx === -1 ? rateSteps.length : idx) - 1)];
+          handleRateChange(next, true);
+          break;
+        }
+        case 'BracketRight': {
+          e.preventDefault();
+          const idx = rateSteps.findIndex((r) => r > playbackRate);
+          const next = idx === -1 ? rateSteps[rateSteps.length - 1] : rateSteps[idx];
+          handleRateChange(next, true);
+          break;
+        }
+        case 'Backslash':
+          e.preventDefault();
+          handleRateChange(1.0, true);
+          break;
+        case 'Period':
+          if (!isLoadingVideo && engineType === 'mpv') {
+            e.preventDefault();
+            engineRef.current?.frameStep?.('forward');
+            showMiniHud({ icon: 'seek-forward', label: '下一帧' });
+          }
+          break;
+        case 'Comma':
+          if (!isLoadingVideo && engineType === 'mpv') {
+            e.preventDefault();
+            engineRef.current?.frameStep?.('backward');
+            showMiniHud({ icon: 'seek-backward', label: '上一帧' });
+          }
+          break;
+        case 'KeyD': {
+          e.preventDefault();
+          const nextVis = !danmakuSettings.visible;
+          updateDanmakuSettings({ visible: nextVis });
+          showMiniHud({
+            icon: 'danmaku',
+            label: nextVis ? '弹幕已开启' : '弹幕已关闭',
+          });
+          break;
+        }
+        case 'KeyG':
+        case 'KeyH': {
+          if (!itemId) break;
+          e.preventDefault();
+          const delta = e.code === 'KeyG' ? -0.5 : 0.5;
+          const next = Math.round((savedOffset + delta) * 10) / 10;
+          bridge.offset = next;
+          setItemOffset(itemId, next);
+          showMiniHud({
+            icon: 'danmaku',
+            label: `弹幕偏移 ${next >= 0 ? `+${next.toFixed(1)}` : next.toFixed(1)}s`,
+          });
+          break;
+        }
+        case 'KeyZ':
+        case 'KeyX': {
+          if (engineType !== 'mpv') break;
+          e.preventDefault();
+          const delta = e.code === 'KeyZ' ? -0.5 : 0.5;
+          const next = Math.round((playerPreferences.subDelay + delta) * 10) / 10;
+          updatePlayerPreferences({ subDelay: next });
+          showMiniHud({
+            icon: 'subtitle',
+            label: `字幕延迟 ${next >= 0 ? `+${next.toFixed(1)}` : next.toFixed(1)}s`,
+          });
+          break;
+        }
+        case 'KeyC': {
+          if (subtitleTracks.length === 0) break;
+          e.preventDefault();
+          const idx = selectedSubtitleId
+            ? subtitleTracks.findIndex((t) => t.id === selectedSubtitleId)
+            : -1;
+          const nextTrack =
+            idx + 1 < subtitleTracks.length ? subtitleTracks[idx + 1] : null;
+          handleSelectSubtitleTrack(nextTrack ? nextTrack.id : null);
+          showMiniHud({
+            icon: 'subtitle',
+            label: nextTrack ? `字幕: ${nextTrack.title}` : '字幕已关闭',
+          });
+          break;
+        }
+        case 'KeyA': {
+          if (audioTracks.length <= 1) break;
+          e.preventDefault();
+          const idx = selectedAudioId
+            ? audioTracks.findIndex((t) => t.id === selectedAudioId)
+            : 0;
+          const nextTrack = audioTracks[(idx + 1) % audioTracks.length];
+          handleSelectAudioTrack(nextTrack.id);
+          showMiniHud({
+            icon: 'volume',
+            label: `音轨: ${nextTrack.title}`,
+          });
+          break;
+        }
+        case 'KeyL':
+          e.preventDefault();
+          handleSkipIntro();
+          break;
+        case 'KeyN':
+          if (nextEpisode) {
+            e.preventDefault();
+            switchToEpisode(nextEpisode);
+          }
+          break;
+        case 'KeyP':
+          if (prevEpisode) {
+            e.preventDefault();
+            switchToEpisode(prevEpisode);
+          }
+          break;
+        case 'KeyT':
+          e.preventDefault();
+          handleTogglePin();
+          break;
+        case 'KeyS':
+          e.preventDefault();
+          handleTakeScreenshot();
           break;
         case 'KeyF':
           e.preventDefault();
@@ -775,13 +1773,15 @@ export const PlayerPage: React.FC = () => {
           break;
         case 'KeyI':
           e.preventDefault();
-          setIsPlaybackInfoOpen((prev) => !prev);
+          setActivePanel((prev) => (prev === 'info' ? 'none' : 'info'));
           break;
         case 'Escape':
-          if (isPlaybackInfoOpen) {
-            setIsPlaybackInfoOpen(false);
-          } else if (isDanmakuDrawerOpen) {
-            setIsDanmakuDrawerOpen(false);
+          if (contextMenu.visible) {
+            setContextMenu((prev) => ({ ...prev, visible: false }));
+          } else if (isProxyModalOpen) {
+            setIsProxyModalOpen(false);
+          } else if (activePanel !== 'none') {
+            setActivePanel('none');
           } else if (isFullscreen) {
             handleToggleFullscreen();
           } else {
@@ -789,23 +1789,73 @@ export const PlayerPage: React.FC = () => {
           }
           break;
       }
-      resetHideTimer();
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'ArrowRight') {
+        if (longPressTimerRef.current) {
+          window.clearTimeout(longPressTimerRef.current);
+          longPressTimerRef.current = null;
+          handleSeekDelta(5);
+        } else if (longPressActiveRef.current) {
+          longPressActiveRef.current = false;
+          setFastForwardRate(null);
+          handleRateChange(preLongPressRateRef.current, false);
+        }
+      }
+    };
+
+    const handleWindowBlur = () => {
+      if (longPressTimerRef.current) {
+        window.clearTimeout(longPressTimerRef.current);
+        longPressTimerRef.current = null;
+      }
+      if (longPressActiveRef.current) {
+        longPressActiveRef.current = false;
+        setFastForwardRate(null);
+        handleRateChange(preLongPressRateRef.current, false);
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', handleWindowBlur);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', handleWindowBlur);
+    };
   }, [
     currentTime,
-    duration,
+    effectiveDuration,
     paused,
     volume,
+    playbackRate,
     danmakuSettings.visible,
+    savedOffset,
+    playerPreferences.subDelay,
+    playerPreferences.longPressSpeed,
+    playerPreferences.skipIntroSeconds,
+    audioTracks,
+    subtitleTracks,
+    selectedAudioId,
+    selectedSubtitleId,
+    nextEpisode,
+    prevEpisode,
     isFullscreen,
-    isDanmakuDrawerOpen,
-    isPlaybackInfoOpen,
+    activePanel,
+    isProxyModalOpen,
+    contextMenu.visible,
     isLoadingVideo,
     videoError,
-    resetHideTimer,
+    engineType,
+    itemId,
+    isPinned,
+    handleSeekDelta,
+    handleVolumeChange,
+    handleRateChange,
+    switchToEpisode,
+    showMiniHud,
   ]);
 
   // 零转码原画直连策略下的错误处理
@@ -821,7 +1871,6 @@ export const PlayerPage: React.FC = () => {
         return;
       }
 
-      // 若是 HTML5 引擎报错，绝不隐式向 Emby 请求转码或 MP4 重封装
       if (engineType === 'html5') {
         const container = (mediaSource.Container || 'MKV').toUpperCase();
         const videoCodec = (
@@ -833,7 +1882,6 @@ export const PlayerPage: React.FC = () => {
         return;
       }
 
-      // 若是 libmpv 动态库初始化本身报错
       if (errMsg && (errMsg.includes('初始化 libmpv') || errMsg.includes('FFI error'))) {
         setVideoError(errMsg);
         return;
@@ -841,8 +1889,8 @@ export const PlayerPage: React.FC = () => {
 
       setVideoError(
         errMsg
-          ? `直连媒体流播放中断 (${errMsg})。请检查网络连接或服务器直链状态。`
-          : '无法打开该媒体直连流，请检查网络连接或重试。'
+          ? `直连媒体流播放中断 (${errMsg})。请检查网络连接或代理配置。`
+          : '无法打开该媒体直连流，请检查网络连接、代理路由或重试。'
       );
     },
     [currentServer, item, mediaSource, playSessionId, engineType, setPaused]
@@ -852,8 +1900,12 @@ export const PlayerPage: React.FC = () => {
     handleVideoErrorRef.current = handleVideoError;
   }, [handleVideoError]);
 
-  const handleRetryDirect = () => {
+  const handleRetryDirect = (overrideMode?: StreamProxyOverride) => {
     if (!currentServer || !item || !mediaSource || !playSessionId) return;
+    if (overrideMode) {
+      setProxyOverride(overrideMode);
+      proxyOverrideRef.current = overrideMode;
+    }
     setIsLoadingVideo(true);
     setVideoError(null);
     hasInitialSeekedRef.current = false;
@@ -874,13 +1926,7 @@ export const PlayerPage: React.FC = () => {
             currentServer.accessToken
           );
     setCurrentStreamUrl(directUrl);
-    if (currentStreamUrl === directUrl && engineRef.current) {
-      engineRef.current.load({
-        url: directUrl,
-        initialTime: initialTimeRef.current,
-        title: item.Name,
-      });
-    }
+    setReloadToken((t) => t + 1);
   };
 
   const handleSwitchToMpv = () => {
@@ -914,9 +1960,28 @@ export const PlayerPage: React.FC = () => {
       )
     : '';
 
+  // 顶部标题旁画质微标（如 4K · HDR）
+  const vStream = mediaSource?.MediaStreams?.find((s) => s.Type === 'Video');
+  const specParts: string[] = [];
+  if (vStream?.Width && vStream.Width >= 3800) specParts.push('4K');
+  else if (vStream?.Width && vStream.Width >= 1900) specParts.push('1080p');
+  if (vStream?.VideoRange && vStream.VideoRange !== 'SDR') specParts.push(vStream.VideoRange);
+  const videoSpecLabel = specParts.join(' · ') || undefined;
+
+  const proxySummaryLabel =
+    proxyInfo?.mode === 'system_http' || proxyInfo?.mode === 'manual_http'
+      ? 'HTTP 代理'
+      : proxyInfo?.mode === 'lan_bypass'
+      ? 'LAN 直通'
+      : '直连';
+
   return (
-    <div className="relative w-screen h-screen overflow-hidden select-none bg-transparent">
-      {/* 哔哩哔哩风格：屏幕中央播放/暂停动效徽标 */}
+    <div
+      onWheel={handleVideoWheel}
+      onContextMenu={handleContextMenu}
+      className="relative w-screen h-screen overflow-hidden select-none bg-transparent"
+    >
+      {/* 屏幕中央播放/暂停瞬时动效徽标 */}
       {centerIcon && (
         <div className="absolute inset-0 pointer-events-none flex items-center justify-center z-30">
           <div className="p-5 rounded-full bg-black/60 backdrop-blur-md text-white shadow-2xl border border-white/10 animate-in zoom-in-75 fade-in duration-150">
@@ -929,7 +1994,10 @@ export const PlayerPage: React.FC = () => {
         </div>
       )}
 
-      {/* 底层：原生视频表面穿透层与交互层 (libmpv 底层透明穿透 / HTML5 挂载容器) */}
+      {/* 无打扰 Mini HUD & 长按倍速顶部胶囊 */}
+      <MiniActionHud hud={miniHud} fastForwardRate={fastForwardRate} />
+
+      {/* 底层：原生视频表面穿透层与交互层 */}
       <div
         ref={containerRef}
         className="absolute inset-0 z-0 cursor-pointer overflow-hidden bg-transparent"
@@ -956,6 +2024,11 @@ export const PlayerPage: React.FC = () => {
                   ? '正在通过 MPV 硬解引擎直连原画 (0 转码)...'
                   : '正在通过 HTML5 引擎直连原画 (0 转码)...'}
               </p>
+              {proxyInfo && (
+                <p className="text-[11px] text-sky-400/90 font-mono mt-1.5">
+                  网络路线: {proxyInfo.effectiveProxy ? `代理 ${proxyInfo.effectiveProxy}` : proxySummaryLabel}
+                </p>
+              )}
             </div>
             <button
               onClick={handleBack}
@@ -968,7 +2041,7 @@ export const PlayerPage: React.FC = () => {
         </div>
       )}
 
-      {/* Error Overlay */}
+      {/* Error Overlay (增强：显示当前代理路线 + 强制直连重试 + 代理配置入口) */}
       {videoError && (
         <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-[#0f1115]/95 p-6 pointer-events-auto">
           <div className="max-w-md w-full bg-[#161922] border border-red-500/30 rounded-2xl p-6 shadow-2xl space-y-4 text-center">
@@ -979,9 +2052,19 @@ export const PlayerPage: React.FC = () => {
               <h3 className="text-base font-bold text-white">视频无法播放</h3>
               <p className="text-xs text-gray-400 mt-2 leading-relaxed">{videoError}</p>
             </div>
-            <div className="pt-2 flex flex-col sm:flex-row gap-2">
+
+            {proxyInfo && (
+              <div className="p-2.5 rounded-xl bg-black/30 border border-white/10 text-[11px] text-slate-300 font-mono flex items-center justify-center space-x-2">
+                <Wifi className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                <span className="truncate">
+                  当前路线: {proxyInfo.effectiveProxy || proxySummaryLabel}
+                </span>
+              </div>
+            )}
+
+            <div className="pt-1 flex flex-col gap-2">
               {engineType === 'html5' ? (
-                <>
+                <div className="flex gap-2">
                   <button
                     onClick={handleSwitchToMpv}
                     className="flex-1 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-xl text-xs font-semibold flex items-center justify-center space-x-1.5 transition cursor-pointer shadow-lg shadow-primary/20"
@@ -990,35 +2073,54 @@ export const PlayerPage: React.FC = () => {
                     <span>一键切换至 MPV 硬解</span>
                   </button>
                   <button
-                    onClick={handleRetryDirect}
+                    onClick={() => handleRetryDirect()}
                     className="py-2.5 px-4 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-semibold flex items-center justify-center space-x-1.5 transition cursor-pointer"
                   >
                     <RefreshCw className="w-3.5 h-3.5" />
                     <span>重试</span>
                   </button>
-                </>
+                </div>
               ) : (
-                <button
-                  onClick={handleRetryDirect}
-                  className="flex-1 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-xl text-xs font-semibold flex items-center justify-center space-x-1.5 transition cursor-pointer"
-                >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  <span>重试原画直连</span>
-                </button>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => handleRetryDirect()}
+                    className="py-2.5 bg-primary hover:bg-primary-hover text-white rounded-xl text-xs font-semibold flex items-center justify-center space-x-1.5 transition cursor-pointer"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>重试原画直连</span>
+                  </button>
+                  <button
+                    onClick={() => handleRetryDirect('direct')}
+                    className="py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-semibold flex items-center justify-center space-x-1.5 transition cursor-pointer"
+                  >
+                    <Wifi className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>强制直连重试</span>
+                  </button>
+                </div>
               )}
-              <button
-                onClick={handleBack}
-                className="flex-1 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-semibold flex items-center justify-center space-x-1.5 transition cursor-pointer"
-              >
-                <ArrowLeft className="w-3.5 h-3.5" />
-                <span>返回详情页</span>
-              </button>
+
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => setIsProxyModalOpen(true)}
+                  className="py-2 bg-white/5 hover:bg-white/15 text-sky-300 rounded-xl text-xs font-medium flex items-center justify-center space-x-1.5 transition cursor-pointer border border-white/10"
+                >
+                  <Globe className="w-3.5 h-3.5" />
+                  <span>代理设置与测速</span>
+                </button>
+                <button
+                  onClick={handleBack}
+                  className="py-2 bg-white/5 hover:bg-white/15 text-gray-300 hover:text-white rounded-xl text-xs font-medium flex items-center justify-center space-x-1.5 transition cursor-pointer border border-white/10"
+                >
+                  <ArrowLeft className="w-3.5 h-3.5" />
+                  <span>返回详情页</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* 中层：Danmaku Canvas 图层 (Z-Index 10, pointer-events-none) */}
+      {/* 中层：Danmaku Canvas 120Hz 零闪烁渲染层 */}
       <DanmakuLayer
         bridge={bridge}
         comments={formattedComments}
@@ -1030,17 +2132,49 @@ export const PlayerPage: React.FC = () => {
         bottomMargin={danmakuSettings.bottomMargin}
       />
 
-      {/* 顶层：播放器 OSD 控制栏 (Z-Index 20) */}
+      {/* 跳过片头胶囊 & 下一集自动连播倒计时浮窗 */}
+      <UpNextOverlay
+        showSkipIntro={showSkipIntro}
+        onSkipIntro={handleSkipIntro}
+        nextEpisode={nextEpisode}
+        serverUrl={currentServer?.url}
+        countdownSeconds={autoNextCountdown}
+        onPlayNextNow={() => nextEpisode && switchToEpisode(nextEpisode)}
+        onCancelAutoNext={() => {
+          setCancelAutoNext(true);
+          setAutoNextCountdown(null);
+        }}
+      />
+
+      {/* 顶层：播放器 OSD 控制栏 */}
       <PlayerOsd
         title={item.Name}
         subtitle={item.SeriesName ? `${item.SeriesName} · 第 ${item.IndexNumber || 1} 集` : undefined}
         visible={isOsdVisible || isLoadingVideo || !!videoError}
         paused={paused}
         currentTime={currentTime}
-        duration={duration || ticksToSeconds(item.RunTimeTicks || 0)}
+        duration={effectiveDuration}
         volume={volume}
         playbackRate={playbackRate}
+        engineType={engineType}
+        telemetry={telemetry}
+        videoSpecLabel={videoSpecLabel}
         networkSpeed={networkSpeed}
+        proxyInfo={proxyInfo}
+        chapters={chapters}
+        danmakuHeatmap={danmakuHeatmap}
+        showHeatmap={danmakuSettings.showHeatmap}
+        abLoopA={abLoopA}
+        abLoopB={abLoopB}
+        showRemainingTime={playerPreferences.showRemainingTime}
+        onToggleRemainingTime={() =>
+          updatePlayerPreferences({ showRemainingTime: !playerPreferences.showRemainingTime })
+        }
+        hasNextEpisode={!!nextEpisode}
+        onNextEpisode={() => nextEpisode && switchToEpisode(nextEpisode)}
+        availableMediaSources={availableMediaSources}
+        activeMediaSourceId={mediaSource?.Id}
+        onSelectMediaSource={switchMediaSource}
         danmakuVisible={danmakuSettings.visible}
         danmakuCount={rawComments.length}
         danmakuOffset={savedOffset}
@@ -1049,97 +2183,218 @@ export const PlayerPage: React.FC = () => {
         subtitleTracks={subtitleTracks}
         selectedAudioId={selectedAudioId}
         selectedSubtitleId={selectedSubtitleId}
+        selectedSecondarySubtitleId={selectedSecondarySubtitleId}
         isFullscreen={isFullscreen}
         isMaximized={isMaximized}
+        isPinned={isPinned}
+        isTauri={isTauriEnvironment()}
+        isDanmakuDrawerOpen={activePanel === 'danmaku'}
+        isVideoProPanelOpen={activePanel === 'videoPro'}
+        isEpisodeDrawerOpen={activePanel === 'episodes'}
+        isNetworkPopoverOpen={activePanel === 'network'}
+        isPlaybackInfoOpen={activePanel === 'info'}
         onBack={handleBack}
         onHome={handleHome}
-        onTogglePlay={handleTogglePlay}
+        onTogglePlay={() => handleTogglePlay(false)}
         onSeek={handleSeek}
-        onVolumeChange={handleVolumeChange}
-        onRateChange={handleRateChange}
+        onVolumeChange={(v) => handleVolumeChange(v, false)}
+        onRateChange={(r) => handleRateChange(r, false)}
         onToggleDanmaku={() => updateDanmakuSettings({ visible: !danmakuSettings.visible })}
-        onToggleDanmakuDrawer={() => setIsDanmakuDrawerOpen(!isDanmakuDrawerOpen)}
-        onTogglePlaybackInfo={() => setIsPlaybackInfoOpen(!isPlaybackInfoOpen)}
-        isPlaybackInfoOpen={isPlaybackInfoOpen}
+        onToggleDanmakuDrawer={() =>
+          setActivePanel((p) => (p === 'danmaku' ? 'none' : 'danmaku'))
+        }
+        onToggleVideoProPanel={() =>
+          setActivePanel((p) => (p === 'videoPro' ? 'none' : 'videoPro'))
+        }
+        onToggleEpisodeDrawer={
+          episodes.length > 0 || availableMediaSources.length > 1
+            ? () => setActivePanel((p) => (p === 'episodes' ? 'none' : 'episodes'))
+            : undefined
+        }
+        onToggleNetworkPopover={() =>
+          setActivePanel((p) => (p === 'network' ? 'none' : 'network'))
+        }
+        onTogglePlaybackInfo={() => setActivePanel((p) => (p === 'info' ? 'none' : 'info'))}
         onSelectAudioTrack={handleSelectAudioTrack}
         onSelectSubtitleTrack={handleSelectSubtitleTrack}
+        onTogglePin={handleTogglePin}
+        onMinimizeWindow={() => getCurrentWindow().minimize().catch(() => {})}
+        onCloseWindow={() => getCurrentWindow().close().catch(() => {})}
         onToggleWindowMode={handleToggleWindowMode}
         onToggleFullscreen={handleToggleFullscreen}
         onVideoClick={handleVideoClick}
         onVideoDoubleClick={handleVideoDoubleClick}
       />
 
+      {/* 右键快捷菜单 */}
+      <PlayerContextMenu
+        visible={contextMenu.visible}
+        x={contextMenu.x}
+        y={contextMenu.y}
+        onClose={() => setContextMenu((prev) => ({ ...prev, visible: false }))}
+        paused={paused}
+        hasNextEpisode={!!nextEpisode}
+        hasPrevEpisode={!!prevEpisode}
+        playbackRate={playbackRate}
+        danmakuVisible={danmakuSettings.visible}
+        isPinned={isPinned}
+        isBottomAlign={currentLayout.bottomAlign}
+        videoAspect={playerPreferences.videoAspect}
+        proxySummary={proxySummaryLabel}
+        showEpisodesEntry={episodes.length > 0 || availableMediaSources.length > 1}
+        onTogglePlay={() => handleTogglePlay(false)}
+        onNextEpisode={() => nextEpisode && switchToEpisode(nextEpisode)}
+        onPrevEpisode={() => prevEpisode && switchToEpisode(prevEpisode)}
+        onSkipIntro={handleSkipIntro}
+        onRateChange={(r) => handleRateChange(r, true)}
+        onToggleDanmaku={() => updateDanmakuSettings({ visible: !danmakuSettings.visible })}
+        onToggleBottomAlign={() =>
+          layoutKey && setVideoLayout(layoutKey, { bottomAlign: !currentLayout.bottomAlign })
+        }
+        onCycleAspect={() => {
+          const order: VideoAspectPreset[] = ['auto', '16:9', '21:9', '4:3', 'fill'];
+          const next = order[(order.indexOf(playerPreferences.videoAspect) + 1) % order.length];
+          updatePlayerPreferences({ videoAspect: next });
+        }}
+        onOpenDanmakuDrawer={() => setActivePanel('danmaku')}
+        onOpenVideoPro={() => setActivePanel('videoPro')}
+        onOpenNetworkPopover={() => setActivePanel('network')}
+        onOpenEpisodeDrawer={() => setActivePanel('episodes')}
+        onTogglePin={handleTogglePin}
+        onTakeScreenshot={handleTakeScreenshot}
+        onOpenPlaybackInfo={() => setActivePanel('info')}
+        onOpenShortcuts={() => setActivePanel('shortcuts')}
+      />
+
       {/* 弹幕加载或绑定提示 Toast */}
       {danmuToast && (
-        <div className="fixed top-6 right-6 z-40 max-w-md bg-black/85 backdrop-blur-md border border-primary/40 text-white text-xs px-4 py-2.5 rounded-xl shadow-2xl flex items-center space-x-2.5 animate-in fade-in slide-in-from-top-2">
+        <div className="fixed top-20 right-6 z-40 max-w-md bg-black/85 backdrop-blur-md border border-primary/40 text-white text-xs px-4 py-2.5 rounded-xl shadow-2xl flex items-center space-x-2.5 animate-in fade-in slide-in-from-top-2">
           <span className="w-2 h-2 rounded-full bg-primary animate-ping flex-shrink-0" />
           <span className="font-medium truncate">{danmuToast}</span>
         </div>
       )}
 
-      {/* Duration mismatch non-modal banner (Milestone 4.3) */}
+      {/* 时长偏差提示 Banner */}
       {durationAlert && (
-        <div className="fixed top-20 right-6 z-40 max-w-sm bg-black/80 backdrop-blur-md border border-yellow-500/30 text-yellow-300 text-xs p-3 rounded-xl shadow-xl flex items-start space-x-2 animate-in fade-in slide-in-from-top-2">
+        <div className="fixed top-32 right-6 z-40 max-w-sm bg-black/80 backdrop-blur-md border border-yellow-500/30 text-yellow-300 text-xs p-3 rounded-xl shadow-xl flex items-start space-x-2 animate-in fade-in slide-in-from-top-2">
           <AlertCircle className="w-4 h-4 flex-shrink-0 text-yellow-400 mt-0.5" />
           <div className="flex-1 leading-relaxed">{durationAlert}</div>
           <button
             onClick={() => setDurationAlert(null)}
-            className="text-gray-400 hover:text-white ml-1"
+            className="text-gray-400 hover:text-white ml-1 cursor-pointer"
           >
             <X className="w-3.5 h-3.5" />
           </button>
         </div>
       )}
 
-      {/* 右侧弹幕设置与搜番抽屉 (Z-Index 30) */}
+      {/* 右侧专注面板 1: 弹幕控制中心 */}
       <DanmakuDrawer
-        isOpen={isDanmakuDrawerOpen}
-        onClose={() => setIsDanmakuDrawerOpen(false)}
+        isOpen={activePanel === 'danmaku'}
+        onClose={() => setActivePanel('none')}
         bridge={bridge}
         itemId={item.Id}
         seriesId={item.SeriesId}
         itemTitle={item.Name}
         seriesName={item.SeriesName}
-        layoutKey={layoutKey}
-        videoAspectRatio={videoAspectRatio}
-        isWidescreen={isWidescreen}
         currentMatchedTitle={matchedTitle}
         sourceCommentCount={rawComments.length}
         sourceDuration={sourceDuration}
-        videoDuration={duration || ticksToSeconds(item.RunTimeTicks || 0)}
+        videoDuration={effectiveDuration}
+        rawComments={rawComments}
+        currentTime={currentTime}
+        onSeekToTime={(sec) => {
+          handleSeek(sec);
+          showMiniHud({ icon: 'seek-forward', label: `跳转至 ${formatTime(sec)}` });
+        }}
         onCommentsLoaded={(newComments, sDur, meta) => {
           setRawComments(newComments);
           if (sDur) setSourceDuration(sDur);
           if (meta) {
             setMatchedTitle(`《${meta.animeTitle}》${meta.episodeTitle}`);
-            setDanmuToast(`已切换并绑定弹幕: 《${meta.animeTitle}》${meta.episodeTitle} (${newComments.length}条)`);
+            setDanmuToast(
+              `已切换并绑定弹幕: 《${meta.animeTitle}》${meta.episodeTitle} (${newComments.length}条)`
+            );
             setTimeout(() => setDanmuToast(null), 3500);
           }
           if (sDur && item.RunTimeTicks) {
             const embyDurationSec = ticksToSeconds(item.RunTimeTicks);
             const diff = Math.round(Math.abs(sDur - embyDurationSec));
             if (diff > 15) {
-              setDurationAlert(`重新加载的弹幕源时长相差 ${diff} 秒，建议在右侧抽屉微调时间偏移。`);
+              setDurationAlert(`弹幕源时长相差 ${diff} 秒，可在校准页面一键按时长差对齐。`);
             } else {
               setDurationAlert(null);
             }
           }
         }}
-        onReAutoMatch={() => {
-          triggerDanmakuLoad(true);
-        }}
+        onReAutoMatch={() => triggerDanmakuLoad(true)}
       />
 
-      {/* 详细播放信息 HUD 浮层 (Z-Index 35) */}
+      {/* 右侧专注面板 2: 画质、硬解与音字幕 Pro 调校 */}
+      <VideoProPanel
+        isOpen={activePanel === 'videoPro'}
+        onClose={() => setActivePanel('none')}
+        layoutKey={layoutKey}
+        seriesName={item.SeriesName}
+        videoAspectRatio={videoAspectRatio}
+        isWidescreen={isWidescreen}
+        telemetry={telemetry}
+        subtitleTracks={subtitleTracks}
+        selectedSubtitleId={selectedSubtitleId}
+        selectedSecondarySubtitleId={selectedSecondarySubtitleId}
+        onSelectSubtitleTrack={handleSelectSubtitleTrack}
+        onSelectSecondarySubtitleTrack={handleSelectSecondarySubtitleTrack}
+        abLoopA={abLoopA}
+        abLoopB={abLoopB}
+        onSetAbLoop={handleSetAbLoop}
+        onTakeScreenshot={handleTakeScreenshot}
+        volume={volume}
+        onVolumeChange={(v) => handleVolumeChange(v, false)}
+      />
+
+      {/* 右侧专注面板 3: 分集列表与多版本原画源 */}
+      <EpisodeDrawer
+        isOpen={activePanel === 'episodes'}
+        onClose={() => setActivePanel('none')}
+        currentItemId={item.Id}
+        seasons={seasons}
+        selectedSeasonId={selectedSeasonId}
+        onSelectSeason={handleSelectSeasonInDrawer}
+        episodes={episodes}
+        episodesLoading={episodesLoading}
+        serverUrl={currentServer?.url}
+        onSelectEpisode={switchToEpisode}
+        availableMediaSources={availableMediaSources}
+        activeMediaSourceId={mediaSource?.Id}
+        onSelectMediaSource={switchMediaSource}
+        autoPlayNext={playerPreferences.autoPlayNext}
+        onToggleAutoPlayNext={(val) => updatePlayerPreferences({ autoPlayNext: val })}
+      />
+
+      {/* 浮动面板 4: 网络缓冲监控与代理快切 */}
+      <NetworkProxyPopover
+        isOpen={activePanel === 'network'}
+        onClose={() => setActivePanel('none')}
+        networkSpeed={networkSpeed}
+        speedHistory={speedHistory}
+        telemetry={telemetry}
+        proxyInfo={proxyInfo}
+        proxyOverride={proxyOverride}
+        onChangeProxyOverride={handleHotReloadStreamWithProxy}
+        onReloadStream={() => handleHotReloadStreamWithProxy(proxyOverride)}
+        onOpenProxySettings={() => setIsProxyModalOpen(true)}
+      />
+
+      {/* 居中浮层 5: 实时硬解与媒体技术信息 HUD */}
       <PlaybackInfoModal
-        isOpen={isPlaybackInfoOpen}
-        onClose={() => setIsPlaybackInfoOpen(false)}
+        isOpen={activePanel === 'info'}
+        onClose={() => setActivePanel('none')}
         item={item}
         mediaSource={mediaSource}
         streamUrl={currentStreamUrl || streamUrl}
         engineType={engineType}
         currentTime={currentTime}
-        duration={duration || ticksToSeconds(item.RunTimeTicks || 0)}
+        duration={effectiveDuration}
         playbackRate={playbackRate}
         audioTracks={audioTracks}
         subtitleTracks={subtitleTracks}
@@ -1150,6 +2405,21 @@ export const PlayerPage: React.FC = () => {
         danmakuCount={rawComments.length}
         danmakuOffset={savedOffset}
         networkSpeed={networkSpeed}
+        telemetry={telemetry}
+        proxyInfo={proxyInfo}
+      />
+
+      {/* 居中浮层 6: 快捷键与手势指南 */}
+      <ShortcutsModal
+        isOpen={activePanel === 'shortcuts'}
+        onClose={() => setActivePanel('none')}
+      />
+
+      {/* 详细网络与代理配置弹窗（保存后原地热重载视频流） */}
+      <NetworkProxyModal
+        isOpen={isProxyModalOpen}
+        onClose={() => setIsProxyModalOpen(false)}
+        onSaved={() => handleHotReloadStreamWithProxy(proxyOverride)}
       />
     </div>
   );

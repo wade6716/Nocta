@@ -233,6 +233,7 @@ pub fn run() {
             sync::sync_smb_write,
             system::save_backup_file,
             system::show_in_file_manager,
+            system::get_screenshot_dir,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

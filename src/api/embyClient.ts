@@ -64,6 +64,13 @@ export interface EmbyMediaSource {
   MediaStreams?: EmbyMediaStream[];
 }
 
+export interface EmbyChapter {
+  StartPositionTicks: number;
+  Name?: string;
+  MarkerType?: string; // e.g. 'Chapter' | 'IntroStart' | 'IntroEnd' | 'CreditsStart'
+  ImageTag?: string;
+}
+
 export interface EmbyItem {
   Id: string;
   Name: string;
@@ -108,6 +115,7 @@ export interface EmbyItem {
   ChildCount?: number;
   RecursiveItemCount?: number;
   Status?: string;
+  Chapters?: EmbyChapter[];
 }
 
 /**
@@ -488,13 +496,63 @@ export async function getItemDetail(
   accessToken: string
 ): Promise<EmbyItem> {
   const base = normalizeServerUrl(serverUrl);
-  const url = `${base}/emby/Users/${userId}/Items/${itemId}?Fields=Overview,MediaSources,Path,People,Genres`;
+  const url = `${base}/emby/Users/${userId}/Items/${itemId}?Fields=Overview,MediaSources,Path,People,Genres,Chapters`;
   const res = await httpClient(url, {
     method: 'GET',
     headers: buildEmbyHeaders(userId, accessToken),
   });
   if (!res.ok) throw new Error(`获取条目详情失败: ${res.status}`);
   return res.json();
+}
+
+/**
+ * 从 Emby/Jellyfin 章节元数据中提取片头 (Intro/OP) 起止秒数区间
+ */
+export function extractIntroRange(
+  chapters?: EmbyChapter[],
+  durationSeconds?: number
+): { start: number; end: number } | null {
+  if (!chapters || chapters.length === 0) return null;
+
+  const sorted = [...chapters].sort(
+    (a, b) => (a.StartPositionTicks || 0) - (b.StartPositionTicks || 0)
+  );
+
+  // 1. 优先识别官方 MarkerType
+  const introStartIdx = sorted.findIndex((c) => c.MarkerType === 'IntroStart');
+  if (introStartIdx >= 0) {
+    const start = ticksToSeconds(sorted[introStartIdx].StartPositionTicks || 0);
+    const introEnd = sorted.find(
+      (c, idx) => idx > introStartIdx && c.MarkerType === 'IntroEnd'
+    );
+    const nextChapter = sorted[introStartIdx + 1];
+    let end = introEnd
+      ? ticksToSeconds(introEnd.StartPositionTicks || 0)
+      : nextChapter
+      ? ticksToSeconds(nextChapter.StartPositionTicks || 0)
+      : start + 90;
+
+    if (durationSeconds && durationSeconds > 0) {
+      end = Math.min(end, durationSeconds);
+    }
+    if (end > start + 10) {
+      return { start, end };
+    }
+  }
+
+  // 2. 启发式识别常见 OP / Intro / 片头章节名
+  const introRegex = /^(op|opening|intro|片头|主題歌|主题曲)(\b|\s|$|\d)/i;
+  const matchIdx = sorted.findIndex((c) => introRegex.test((c.Name || '').trim()));
+  if (matchIdx >= 0 && matchIdx + 1 < sorted.length) {
+    const start = ticksToSeconds(sorted[matchIdx].StartPositionTicks || 0);
+    const end = ticksToSeconds(sorted[matchIdx + 1].StartPositionTicks || 0);
+    const span = end - start;
+    if (span >= 30 && span <= 180) {
+      return { start, end };
+    }
+  }
+
+  return null;
 }
 
 /**

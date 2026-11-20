@@ -229,3 +229,19 @@
     - **上游插件硬编码路径缺陷**：`tauri-plugin-libmpv` 原版 `desktop.rs` 仅检查 `current_exe().parent()` (`Contents/MacOS`) 与 `exe_dir.join("lib")` (`Contents/MacOS/lib`)。在 macOS Bundle 体系中，Tauri 的 `"resources": ["lib/**/*"]` 必然打入 `Contents/Resources/lib/`。若在只读 DMG（`EROFS`）或签名后的 `/Applications` 运行时，动态在 `Contents/MacOS` 建立软链会失败，导致 `valid_lib_path` 退化为裸文件名 `"libmpv-wrapper.dylib"`，继而触发 dyld 报错：`dlopen(libmpv-wrapper.dylib, 0x0005): tried: 'libmpv-wrapper.dylib' (no such file)...`；
     - **解决方案 1（插件原生路径补丁）**：通过 Cargo `[patch.crates-io]` 本地重写 `src-tauri/crates/tauri-plugin-libmpv`，在 `search_dirs` 中显式扩展 `contents_dir.join("Resources").join("lib")`、`contents_dir.join("Resources")`、`contents_dir.join("Frameworks")` 及 `self.app.path().resource_dir()`，确保绝对路径 100% 精准寻址；
     - **解决方案 2（Rust 进程全局预热 Pre-loading）**：在 `init_macos_mpv_environment` 中，使用 `libc::dlopen(..., RTLD_NOW | RTLD_GLOBAL)` 先行预热加载 `libmpv-wrapper.dylib` 与 `libmpv.dylib`，将动态库镜像常驻进程内存，使后续任何裸库名 dlopen 均能瞬间命中内存缓存。
+
+### 17. 播放器沉浸体验、零闪烁弹幕与透明代理热切规范 (Player UX, Zero-Flicker Danmaku & Live Proxy Switching)
+- **严禁因视觉参数变更触发 `DanmakuLayer` 重建 Canvas（消除闪烁红线）**：
+  - `DanmakuLayer` 监听 `[bridge, comments]` 引用重建实例。因此 `PlayerPage` 构造 `formattedComments` 的 `useMemo` **只能依赖实际改变弹幕内容的字段**（`rawComments`, `fontSize`, `fontWeight`, `strokeWidth`, `colorMode`, `blockScroll`, `blockTop`, `blockBottom`, `blockColor`, `blockedWords`, `mergeDuplicates`）；
+  - **绝不能将 `visible` / `opacity` / `speed` / `area` / `maxLines` / `bottomMargin` / `showHeatmap` 放入 `useMemo` 依赖**，否则拖动滑块调参时会造成满屏弹幕销毁重绘闪烁。
+- **进度条拖拽防抖与防进度丢失（Scrub Debounce & Session Progress Safety）**：
+  - `PlayerOsd` 的进度条 `<input type="range">` 拖动过程中只更新本地 `scrubTime`（借助 `isScrubbingRef` + `scrubTimeRef`），仅在 `onPointerUp` / `onTouchEnd` / `onKeyUp` 释放时才调用 `onSeek`；
+  - 在播放页内原地切集或切换多版本片源时，必须先用 `lastValidTimeRef.current` 上报当前会话的 `reportPlaybackStopped` 并记录 `reportedStoppedSessionRef`，防止 `useEffect` 清理函数在引擎 `load()` 重置 `_currentTime = 0` 后误将 Emby 播放进度冲刷归零。
+- **无边框播放窗顶部拖拽区交互规范**：
+  - `PlayerOsd` 顶部栏外层必须使用在 `visible` 状态下具备 `pointer-events-auto` 与 `data-tauri-drag-region` 的有限高度容器，两侧毛玻璃胶囊内部通过 `stopPropagation` 防止事件干扰，才可确保无边框窗口态可平滑拖拽与双击最大化。
+- **`libmpv` 真实硬解遥测与透明 `socks5` 路由提示**：
+  - 真实硬解状态 (`hwdec-current`)、帧率 (`estimated-vf-fps`)、丢帧数 (`frame-drop-count`)、前向缓冲 (`demuxer-cache-duration`, `demuxer-cache-time`, `fw-bytes`) 全部通过 `OBSERVED_PROPERTIES` + 节流事件推送获取，延续「绝不调用 `getProperty(..., 'node')`」红线；
+  - `resolveMpvProxyDetailed` 明确区分系统 HTTP 代理、手动 HTTP 代理、局域网直通旁路、直连以及 `socks5_fallback_direct`——当用户配置 `socks5://` 时透明展示说明并引导使用混合端口，同时支持通过 `StreamProxyOverride`（`follow` / `direct` / `proxy`）在不退出播放页的前提下原地保留精确秒数热重连媒体流。
+- **快捷键无打扰 Mini HUD 规范**：
+  - 键盘调音量、快进/快退（支持 800ms 内连按累加显示）、倍速、长按 `→` 临时 2.5x 倍速快进（注意忽略 `e.repeat` 并处理 `blur` 恢复）、弹幕/字幕偏移均只呼出 `MiniActionHud` 轻量反馈胶囊，绝不拉起完整上下 OSD 工具栏，最大化沉浸观影体验。
+

@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { EmbyItem, EmbyMediaSource, MappedTrack } from '../api/embyClient';
+import { HwdecMode, ToneMappingMode, VideoAspectPreset } from '../player/types';
 
 export type DanmakuColorMode = 'vibrant' | 'monochrome' | 'blocked';
 
@@ -10,6 +11,8 @@ export interface DanmakuSettings {
   maxLines: number; // 0 为不限行数，3, 5, 8 等为限制行数
   speed: number;
   fontSize: number;
+  fontWeight: 'normal' | 'bold';
+  strokeWidth: number;
   bottomMargin: number; // 底部避让字幕距离，默认 48
   colorMode: DanmakuColorMode; // 'vibrant' 彩色原色 | 'monochrome' 统一纯白 | 'blocked' 屏蔽彩色
   blockScroll: boolean;
@@ -17,6 +20,8 @@ export interface DanmakuSettings {
   blockBottom: boolean;
   blockColor: boolean; // 兼容旧字段
   blockedWords: string[];
+  mergeDuplicates: boolean; // 3 秒滑动窗口重复弹幕合并防刷屏
+  showHeatmap: boolean; // 进度条高能弹幕密度曲线
 }
 
 export interface DanmakuBinding {
@@ -31,15 +36,50 @@ export interface DanmakuBinding {
   boundAt: number;
 }
 
+export interface SeriesDanmakuBinding {
+  seriesId: string;
+  animeId: string | number;
+  animeTitle: string;
+  episodes: Array<{ episodeId: number | string; episodeTitle: string }>;
+  boundAt: number;
+}
+
 export interface VideoLayoutConfig {
   bottomAlign: boolean; // 是否开启贴底模式
   verticalOffset: number; // 垂直位置百分比: 50(居中) ~ 100(完全贴底)，默认 100
+}
+
+export interface ColorAdjustConfig {
+  brightness: number; // -50 ~ 50
+  contrast: number; // -50 ~ 50
+  saturation: number; // -50 ~ 50
+  gamma: number; // -50 ~ 50
+}
+
+export interface PlayerPreferences {
+  hwdecMode: HwdecMode;
+  toneMapping: ToneMappingMode;
+  deband: boolean;
+  videoAspect: VideoAspectPreset;
+  colorAdjust: ColorAdjustConfig;
+  audioDelay: number; // 秒 (-5 ~ +5)
+  nightMode: boolean; // 夜间动态人声均衡
+  subDelay: number; // 秒
+  subScale: number; // 0.6 ~ 1.8
+  subPos: number; // 50 ~ 100
+  autoPlayNext: boolean; // 自动连播下一集
+  longPressSpeed: 2.0 | 2.5 | 3.0; // 长按右方向键倍速
+  skipIntroSeconds: number; // 快捷跳过片头秒数
+  showRemainingTime: boolean; // 是否显示剩余时间
+  preferredAudioLang?: string;
+  preferredSubLang?: string;
 }
 
 interface PlayerState {
   // 播放项信息
   item: EmbyItem | null;
   mediaSource: EmbyMediaSource | null;
+  availableMediaSources: EmbyMediaSource[];
   playSessionId: string | null;
   streamUrl: string | null;
 
@@ -57,24 +97,30 @@ interface PlayerState {
   subtitleTracks: MappedTrack[];
   selectedAudioId: string | null;
   selectedSubtitleId: string | null;
+  selectedSecondarySubtitleId: string | null;
 
   // 弹幕设置与偏好
   danmakuSettings: DanmakuSettings;
   itemOffsets: Record<string, number>; // itemId -> offsetSeconds
+  seriesOffsets: Record<string, number>; // seriesId -> offsetSeconds
   danmakuBindings: Record<string, DanmakuBinding>; // itemId -> DanmakuBinding
+  seriesDanmakuBindings: Record<string, SeriesDanmakuBinding>; // seriesId -> SeriesDanmakuBinding
   videoLayouts: Record<string, VideoLayoutConfig>; // seriesId/itemId -> VideoLayoutConfig
+  playerPreferences: PlayerPreferences;
   engineType: 'mpv' | 'html5';
 
   // Actions
   setPlaybackContext: (payload: {
     item: EmbyItem;
     mediaSource: EmbyMediaSource;
+    availableMediaSources?: EmbyMediaSource[];
     playSessionId: string;
     streamUrl: string;
     audioTracks: MappedTrack[];
     subtitleTracks: MappedTrack[];
     initialTime?: number;
   }) => void;
+  updateTracks: (audioTracks: MappedTrack[], subtitleTracks: MappedTrack[]) => void;
   updateTime: (currentTime: number, duration?: number) => void;
   setPaused: (paused: boolean) => void;
   setBuffering: (buffering: boolean) => void;
@@ -82,12 +128,17 @@ interface PlayerState {
   setVolume: (vol: number) => void;
   selectAudioTrack: (id: string | null) => void;
   selectSubtitleTrack: (id: string | null) => void;
+  selectSecondarySubtitleTrack: (id: string | null) => void;
   updateDanmakuSettings: (settings: Partial<DanmakuSettings>) => void;
   setItemOffset: (itemId: string, offset: number) => void;
+  setSeriesOffset: (seriesId: string, offset: number) => void;
   bindDanmaku: (itemId: string, binding: Omit<DanmakuBinding, 'boundAt'>) => void;
   unbindDanmaku: (itemId: string) => void;
+  bindSeriesDanmaku: (seriesId: string, binding: Omit<SeriesDanmakuBinding, 'boundAt'>) => void;
   setVideoLayout: (key: string, config: Partial<VideoLayoutConfig>) => void;
   resetVideoLayout: (key: string) => void;
+  updatePlayerPreferences: (prefs: Partial<PlayerPreferences>) => void;
+  resetVideoEnhancements: () => void;
   setEngineType: (type: 'mpv' | 'html5') => void;
   resetPlayer: () => void;
   importPlayerConfigs: (
@@ -104,9 +155,37 @@ interface PlayerState {
 
 const SETTINGS_KEY = 'emby_danmaku_settings';
 const OFFSETS_KEY = 'emby_danmaku_offsets';
+const SERIES_OFFSETS_KEY = 'nocta_series_danmaku_offsets';
 const BINDINGS_KEY = 'emby_danmaku_bindings';
+const SERIES_BINDINGS_KEY = 'nocta_series_danmaku_bindings';
 const VIDEO_LAYOUTS_KEY = 'emby_video_layout_configs';
 const ENGINE_TYPE_KEY = 'emby_player_engine_type';
+const VOLUME_KEY = 'nocta_player_volume';
+const PREFERENCES_KEY = 'nocta_player_preferences';
+
+const DEFAULT_COLOR_ADJUST: ColorAdjustConfig = {
+  brightness: 0,
+  contrast: 0,
+  saturation: 0,
+  gamma: 0,
+};
+
+const DEFAULT_PLAYER_PREFERENCES: PlayerPreferences = {
+  hwdecMode: 'auto-safe',
+  toneMapping: 'auto',
+  deband: false,
+  videoAspect: 'auto',
+  colorAdjust: { ...DEFAULT_COLOR_ADJUST },
+  audioDelay: 0,
+  nightMode: false,
+  subDelay: 0,
+  subScale: 1.0,
+  subPos: 100,
+  autoPlayNext: true,
+  longPressSpeed: 2.5,
+  skipIntroSeconds: 85,
+  showRemainingTime: false,
+};
 
 function loadEngineType(): 'mpv' | 'html5' {
   try {
@@ -114,6 +193,34 @@ function loadEngineType(): 'mpv' | 'html5' {
     return raw === 'html5' ? 'html5' : 'mpv';
   } catch {
     return 'mpv';
+  }
+}
+
+function loadVolume(): number {
+  try {
+    const raw = localStorage.getItem(VOLUME_KEY);
+    if (raw === null) return 100;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? Math.max(0, Math.min(200, parsed)) : 100;
+  } catch {
+    return 100;
+  }
+}
+
+function loadPlayerPreferences(): PlayerPreferences {
+  try {
+    const raw = localStorage.getItem(PREFERENCES_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return {
+      ...DEFAULT_PLAYER_PREFERENCES,
+      ...parsed,
+      colorAdjust: {
+        ...DEFAULT_COLOR_ADJUST,
+        ...(parsed.colorAdjust || {}),
+      },
+    };
+  } catch {
+    return { ...DEFAULT_PLAYER_PREFERENCES, colorAdjust: { ...DEFAULT_COLOR_ADJUST } };
   }
 }
 
@@ -137,6 +244,8 @@ function loadDanmakuSettings(): DanmakuSettings {
       maxLines: parsed.maxLines ?? 0,
       speed: parsed.speed ?? 144,
       fontSize: parsed.fontSize ?? 24,
+      fontWeight: parsed.fontWeight ?? 'bold',
+      strokeWidth: parsed.strokeWidth ?? 2.5,
       bottomMargin: parsed.bottomMargin ?? 48,
       colorMode: parsed.colorMode ?? (parsed.blockColor ? 'blocked' : 'vibrant'),
       blockScroll: parsed.blockScroll ?? false,
@@ -144,6 +253,8 @@ function loadDanmakuSettings(): DanmakuSettings {
       blockBottom: parsed.blockBottom ?? false,
       blockColor: parsed.blockColor ?? false,
       blockedWords: parsed.blockedWords ?? [],
+      mergeDuplicates: parsed.mergeDuplicates ?? true,
+      showHeatmap: parsed.showHeatmap ?? true,
     };
   } catch {
     return {
@@ -153,6 +264,8 @@ function loadDanmakuSettings(): DanmakuSettings {
       maxLines: 0,
       speed: 144,
       fontSize: 24,
+      fontWeight: 'bold',
+      strokeWidth: 2.5,
       bottomMargin: 48,
       colorMode: 'vibrant',
       blockScroll: false,
@@ -160,6 +273,8 @@ function loadDanmakuSettings(): DanmakuSettings {
       blockBottom: false,
       blockColor: false,
       blockedWords: [],
+      mergeDuplicates: true,
+      showHeatmap: true,
     };
   }
 }
@@ -167,6 +282,15 @@ function loadDanmakuSettings(): DanmakuSettings {
 function loadOffsets(): Record<string, number> {
   try {
     const raw = localStorage.getItem(OFFSETS_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function loadSeriesOffsets(): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(SERIES_OFFSETS_KEY);
     return raw ? JSON.parse(raw) : {};
   } catch {
     return {};
@@ -182,9 +306,19 @@ function loadBindings(): Record<string, DanmakuBinding> {
   }
 }
 
-export const usePlayerStore = create<PlayerState>((set, get) => ({
+function loadSeriesBindings(): Record<string, SeriesDanmakuBinding> {
+  try {
+    const raw = localStorage.getItem(SERIES_BINDINGS_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+export const usePlayerStore = create<PlayerState>((set) => ({
   item: null,
   mediaSource: null,
+  availableMediaSources: [],
   playSessionId: null,
   streamUrl: null,
 
@@ -194,23 +328,44 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   paused: true,
   buffering: false,
   playbackRate: 1.0,
-  volume: 100,
+  volume: loadVolume(),
 
   audioTracks: [],
   subtitleTracks: [],
   selectedAudioId: null,
   selectedSubtitleId: null,
+  selectedSecondarySubtitleId: null,
 
   danmakuSettings: loadDanmakuSettings(),
   itemOffsets: loadOffsets(),
+  seriesOffsets: loadSeriesOffsets(),
   danmakuBindings: loadBindings(),
+  seriesDanmakuBindings: loadSeriesBindings(),
   videoLayouts: loadVideoLayouts(),
+  playerPreferences: loadPlayerPreferences(),
   engineType: loadEngineType(),
 
   setPlaybackContext: (payload) => {
+    const prefs = loadPlayerPreferences();
+    // 优先匹配用户偏好语言音轨，其次默认音轨，最后首条音轨
+    const preferredAudio = prefs.preferredAudioLang
+      ? payload.audioTracks.find(
+          (t) => t.language && t.language.toLowerCase() === prefs.preferredAudioLang?.toLowerCase()
+        )
+      : undefined;
     const defaultAudio =
-      payload.audioTracks.find((t) => t.isDefault)?.id || payload.audioTracks[0]?.id || null;
-    const defaultSub = payload.subtitleTracks.find((t) => t.isDefault)?.id || null;
+      preferredAudio?.id ||
+      payload.audioTracks.find((t) => t.isDefault)?.id ||
+      payload.audioTracks[0]?.id ||
+      null;
+
+    const preferredSub = prefs.preferredSubLang
+      ? payload.subtitleTracks.find(
+          (t) => t.language && t.language.toLowerCase() === prefs.preferredSubLang?.toLowerCase()
+        )
+      : undefined;
+    const defaultSub =
+      preferredSub?.id || payload.subtitleTracks.find((t) => t.isDefault)?.id || null;
 
     // 完播防回滚：当进度距片尾不足 15 秒或超过 98% 时，视为完播，下次重新起播从 0:00 开始
     const runTimeSec = payload.item.RunTimeTicks ? payload.item.RunTimeTicks / 10000000 : 0;
@@ -224,16 +379,56 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     set({
       item: payload.item,
       mediaSource: payload.mediaSource,
+      availableMediaSources:
+        payload.availableMediaSources && payload.availableMediaSources.length > 0
+          ? payload.availableMediaSources
+          : payload.mediaSource
+          ? [payload.mediaSource]
+          : [],
       playSessionId: payload.playSessionId,
       streamUrl: payload.streamUrl,
       audioTracks: payload.audioTracks,
       subtitleTracks: payload.subtitleTracks,
       selectedAudioId: defaultAudio,
       selectedSubtitleId: defaultSub,
+      selectedSecondarySubtitleId: null,
       currentTime: safeInitialTime,
       initialTime: safeInitialTime,
       paused: false,
       buffering: false,
+    });
+  },
+
+  updateTracks: (audioTracks, subtitleTracks) => {
+    set((state) => {
+      // 保留 Emby 已有外挂字幕 URL（如引擎仅上报内封轨道时合并保留）
+      const existingExternalSubs = state.subtitleTracks.filter((t) => t.isExternal);
+      const mergedSubs = [...subtitleTracks];
+      for (const ext of existingExternalSubs) {
+        if (!mergedSubs.some((s) => s.title === ext.title && s.isExternal)) {
+          mergedSubs.push(ext);
+        }
+      }
+
+      const finalAudio = audioTracks.length > 0 ? audioTracks : state.audioTracks;
+      const finalSubs = mergedSubs.length > 0 ? mergedSubs : state.subtitleTracks;
+
+      const selectedAudioId =
+        state.selectedAudioId && finalAudio.some((t) => t.id === state.selectedAudioId)
+          ? state.selectedAudioId
+          : finalAudio.find((t) => t.isDefault)?.id || finalAudio[0]?.id || null;
+
+      const selectedSubtitleId =
+        state.selectedSubtitleId && finalSubs.some((t) => t.id === state.selectedSubtitleId)
+          ? state.selectedSubtitleId
+          : state.selectedSubtitleId;
+
+      return {
+        audioTracks: finalAudio,
+        subtitleTracks: finalSubs,
+        selectedAudioId,
+        selectedSubtitleId,
+      };
     });
   },
 
@@ -247,10 +442,17 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
   setPaused: (paused) => set({ paused }),
   setBuffering: (buffering) => set({ buffering }),
   setPlaybackRate: (playbackRate) => set({ playbackRate }),
-  setVolume: (volume) => set({ volume: Math.max(0, Math.min(100, volume)) }),
+  setVolume: (volume) => {
+    const clamped = Math.max(0, Math.min(200, Math.round(volume)));
+    try {
+      localStorage.setItem(VOLUME_KEY, String(clamped));
+    } catch {}
+    set({ volume: clamped });
+  },
 
   selectAudioTrack: (id) => set({ selectedAudioId: id }),
   selectSubtitleTrack: (id) => set({ selectedSubtitleId: id }),
+  selectSecondarySubtitleTrack: (id) => set({ selectedSecondarySubtitleId: id }),
 
   updateDanmakuSettings: (newSettings) => {
     set((state) => {
@@ -273,6 +475,18 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         console.error(e);
       }
       return { itemOffsets: updated };
+    });
+  },
+
+  setSeriesOffset: (seriesId, offset) => {
+    set((state) => {
+      const updated = { ...state.seriesOffsets, [seriesId]: offset };
+      try {
+        localStorage.setItem(SERIES_OFFSETS_KEY, JSON.stringify(updated));
+      } catch (e) {
+        console.error(e);
+      }
+      return { seriesOffsets: updated };
     });
   },
 
@@ -305,6 +519,22 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     });
   },
 
+  bindSeriesDanmaku: (seriesId, binding) => {
+    set((state) => {
+      const full: SeriesDanmakuBinding = {
+        ...binding,
+        boundAt: Date.now(),
+      };
+      const updated = { ...state.seriesDanmakuBindings, [seriesId]: full };
+      try {
+        localStorage.setItem(SERIES_BINDINGS_KEY, JSON.stringify(updated));
+      } catch (e) {
+        console.error(e);
+      }
+      return { seriesDanmakuBindings: updated };
+    });
+  },
+
   setVideoLayout: (key, config) => {
     set((state) => {
       const prev = state.videoLayouts[key] || { bottomAlign: false, verticalOffset: 100 };
@@ -334,6 +564,42 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     });
   },
 
+  updatePlayerPreferences: (prefs) => {
+    set((state) => {
+      const updated: PlayerPreferences = {
+        ...state.playerPreferences,
+        ...prefs,
+        colorAdjust: prefs.colorAdjust
+          ? { ...state.playerPreferences.colorAdjust, ...prefs.colorAdjust }
+          : state.playerPreferences.colorAdjust,
+      };
+      try {
+        localStorage.setItem(PREFERENCES_KEY, JSON.stringify(updated));
+      } catch (e) {
+        console.error(e);
+      }
+      return { playerPreferences: updated };
+    });
+  },
+
+  resetVideoEnhancements: () => {
+    set((state) => {
+      const updated: PlayerPreferences = {
+        ...state.playerPreferences,
+        toneMapping: 'auto',
+        deband: false,
+        videoAspect: 'auto',
+        colorAdjust: { ...DEFAULT_COLOR_ADJUST },
+      };
+      try {
+        localStorage.setItem(PREFERENCES_KEY, JSON.stringify(updated));
+      } catch (e) {
+        console.error(e);
+      }
+      return { playerPreferences: updated };
+    });
+  },
+
   setEngineType: (type) => {
     try {
       localStorage.setItem(ENGINE_TYPE_KEY, type);
@@ -347,6 +613,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
     set({
       item: null,
       mediaSource: null,
+      availableMediaSources: [],
       playSessionId: null,
       streamUrl: null,
       currentTime: 0,
@@ -358,6 +625,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       subtitleTracks: [],
       selectedAudioId: null,
       selectedSubtitleId: null,
+      selectedSecondarySubtitleId: null,
     });
   },
 

@@ -1,4 +1,4 @@
-import { IPlayerEngine, PlayerLoadOptions, PlayerState } from './types';
+import { IPlayerEngine, PlayerLoadOptions, PlayerState, PlayerTelemetry } from './types';
 import { MappedTrack } from '../api/embyClient';
 
 export class Html5PlayerEngine implements IPlayerEngine {
@@ -19,6 +19,7 @@ export class Html5PlayerEngine implements IPlayerEngine {
   private videoDimensionsListeners: Set<(width: number, height: number) => void> = new Set();
   private tracksLoadedListeners: Set<(audio: MappedTrack[], subtitles: MappedTrack[]) => void> = new Set();
   private networkSpeedListeners: Set<(speed: number) => void> = new Set();
+  private telemetryListeners: Set<(telemetry: PlayerTelemetry) => void> = new Set();
   private speedPollTimer: number | null = null;
   private lastBufferedEnd = 0;
   private lastProgressCheckTime = 0;
@@ -133,7 +134,7 @@ export class Html5PlayerEngine implements IPlayerEngine {
     this.setState('loading');
     this.video.src = options.url;
     this.video.playbackRate = this._playbackRate;
-    this.video.volume = this._volume / 100;
+    this.video.volume = Math.min(1, Math.max(0, this._volume / 100));
 
     if (options.initialTime && options.initialTime > 0) {
       const onFirstReady = () => {
@@ -248,6 +249,14 @@ export class Html5PlayerEngine implements IPlayerEngine {
           const estimatedBitrate = 8_000_000;
           speed = (deltaSec * (estimatedBitrate / 8)) / dt;
         }
+        const cacheDur = Math.max(0, maxBufferedEnd - (this.video.currentTime || 0));
+        this.telemetryListeners.forEach((cb) =>
+          cb({
+            hwdecCurrent: 'browser',
+            bufferedEnd: maxBufferedEnd,
+            cacheDuration: cacheDur,
+          })
+        );
       }
       this.networkSpeedListeners.forEach((cb) => cb(speed));
     }, 1000);
@@ -277,6 +286,7 @@ export class Html5PlayerEngine implements IPlayerEngine {
     this.videoDimensionsListeners.clear();
     this.tracksLoadedListeners.clear();
     this.networkSpeedListeners.clear();
+    this.telemetryListeners.clear();
     this._state = 'idle';
   }
 
@@ -315,5 +325,10 @@ export class Html5PlayerEngine implements IPlayerEngine {
     this.networkSpeedListeners.add(cb);
     cb(0);
     return () => this.networkSpeedListeners.delete(cb);
+  }
+
+  onTelemetry(cb: (telemetry: PlayerTelemetry) => void): () => void {
+    this.telemetryListeners.add(cb);
+    return () => this.telemetryListeners.delete(cb);
   }
 }

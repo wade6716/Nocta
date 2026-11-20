@@ -65,7 +65,7 @@ function formatSec(sec?: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
+export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
   isOpen,
   onClose,
   bridge,
@@ -131,7 +131,8 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
     }
   }, [defaultKeyword]);
 
-  // 弹幕列表索引与检索
+  // 弹幕列表索引与检索（将 currentTime 量化为 5 秒分桶，避免播放时每秒多次触发全量重排）
+  const nearTimeBucket = nearCurrentOnly ? Math.floor(currentTime / 5) * 5 : 0;
   const parsedDanmuList = useMemo(() => {
     if (!isOpen || activeTab !== 'list' || rawComments.length === 0) return [];
     const q = listQuery.trim().toLowerCase();
@@ -141,14 +142,14 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
       const c = rawComments[i];
       if (!c.m || !c.p) continue;
       const t = parseFloat(c.p.split(',')[0]) || 0;
-      if (nearCurrentOnly && Math.abs(t - currentTime) > 120) continue;
+      if (nearCurrentOnly && Math.abs(t - nearTimeBucket) > 120) continue;
       if (q && !c.m.toLowerCase().includes(q)) continue;
       list.push({ cid: c.cid || i, time: t, text: c.m });
     }
 
     list.sort((a, b) => a.time - b.time);
     return list.slice(0, 200);
-  }, [isOpen, activeTab, rawComments, listQuery, nearCurrentOnly, currentTime]);
+  }, [isOpen, activeTab, rawComments, listQuery, nearCurrentOnly, nearTimeBucket]);
 
   if (!isOpen) return null;
 
@@ -1120,6 +1121,6 @@ export const DanmakuDrawer: React.FC<DanmakuDrawerProps> = ({
       />
     </>
   );
-};
+});
 
 export default DanmakuDrawer;

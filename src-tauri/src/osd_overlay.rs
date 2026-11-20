@@ -22,6 +22,7 @@ pub async fn open_osd_overlay(app: tauri::AppHandle) -> Result<(), String> {
     let position = monitor.position();
     let size = monitor.size();
 
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
     let overlay = match WebviewWindowBuilder::new(
         &app,
         OSD_OVERLAY_LABEL,

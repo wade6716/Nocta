@@ -290,3 +290,15 @@
   - `resolveMpvProxyDetailed` 明确区分系统 HTTP 代理、手动 HTTP 代理、局域网直通旁路、直连以及 `socks5_fallback_direct`——当用户配置 `socks5://` 时透明展示说明并引导使用混合端口，同时支持通过 `StreamProxyOverride`（`follow` / `direct` / `proxy`）在不退出播放页的前提下原地保留精确秒数热重连媒体流。
 - **快捷键无打扰 Mini HUD 规范**：
   - 键盘调音量、快进/快退（支持 800ms 内连按累加显示）、倍速、长按 `→` 临时 2.5x 倍速快进（注意忽略 `e.repeat` 并处理 `blur` 恢复）、弹幕/字幕偏移均只呼出 `MiniActionHud` 轻量反馈胶囊，绝不拉起完整上下 OSD 工具栏，最大化沉浸观影体验。
+
+### 21. 播放器模块解耦、并发竞态防护与 CI 打包红线 (Architecture Refactoring & Guardrails)
+- **CI 必须直编 `danmaku` 源码 (`vite.config.ts`)**：
+  - `node_modules/danmaku`（`github:wade6716/Danmaku`）更新了 `src/index.js`（新增 `area` / `opacity` / `maxLines` / `bottomMargin` / `offset`）但未重建 `dist/esm/danmaku.js`。因此 `vite.config.ts` 必须做两级源码解析：优先 `../Danmaku/src/index.js`，不存在时回退至 `node_modules/danmaku/src/index.js` 并将其保留在 `optimizeDeps.exclude`，严禁 CI 打包机静默退回到旧版 `dist/` 导致发布包弹幕布局配置失效。
+- **高频时钟与 Store 持久化分层**：
+  - `PlayerPage` 收到引擎 `onTimeUpdate` 后，对 `MpvDanmakuBridge.onMpvTimePos` 与片尾起点检测保持不节流实时直通，对写入 Zustand `updateTime` 保持 **250ms 节流**（Seek 或时长变更立即穿透）；各抽屉、面板与 `PlayerPage` 一律使用精细化 Selector 按字段订阅状态，非开启状态的面板按需条件渲染（`DanmakuDrawer` 保留实例但将 `currentTime` 量化至 5 秒分桶）；
+  - `usePlayerStore` 的高频滑块持久化统一走 `saveStorageDebounced`（200ms 合并写入 + `beforeunload` 刷盘），且 `setPlaybackContext` 必须通过 `get().playerPreferences` 读取内存最新偏好，禁止直接重读 `localStorage` 造成未刷盘偏好丢失。
+- **异步切集与弹幕匹配并发竞态锁**：
+  - `useDanmakuSession`（`danmakuReqIdRef` + `activeItemIdRef`）与 `switchToEpisode`（`episodeSwitchReqIdRef`）在每个 `await` 后均校验请求令牌是否仍是最新且属于当前条目，防止快速连点切集时慢响应倒灌覆盖新剧集；
+  - 统一通过 `src/player/playbackSessionService.ts` 装配零转码直连流地址与音字幕轨道，`DetailPage` 与 `PlayerPage` 共享同一套起播服务，正交业务拆入 `src/player/hooks/` 四个领域 Hooks。
+- **macOS 全屏浮层协议与快捷键对齐**：
+  - `OsdSyncPayload` / `OsdCommand` 与 `OsdOverlayPage` 完整同步画质徽标、硬解遥测、代理路由、章节、高能弹幕热力图、A-B 循环及 `MiniActionHud`，并接入全部快捷键（含 200% MPV 音量增益、长按 `→` 倍速、滚轮手势）。

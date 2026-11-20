@@ -6,6 +6,7 @@ import { DanmakuLayer } from '../components/player/DanmakuLayer';
 import { MpvDanmakuBridge } from '../components/player/MpvDanmakuBridge';
 import { OutroSkipToast } from '../components/player/OutroSkipToast';
 import { SkipNoticeToast } from '../components/player/SkipNoticeToast';
+import { MiniActionHud } from '../components/player/MiniActionHud';
 import {
   OSD_OVERLAY_COMMENTS_EVENT,
   OSD_OVERLAY_COMMAND_EVENT,
@@ -26,6 +27,8 @@ export const OsdOverlayPage: React.FC = () => {
   const clickTimerRef = useRef<number | null>(null);
   const shownRef = useRef(false);
   const syncRef = useRef<OsdSyncPayload | null>(null);
+  const longPressTimerRef = useRef<number | null>(null);
+  const longPressActiveRef = useRef(false);
   syncRef.current = sync;
 
   const send = useCallback((command: OsdCommand) => {
@@ -116,49 +119,173 @@ export const OsdOverlayPage: React.FC = () => {
     send({ type: 'toggle-fullscreen' });
   };
 
-  // 浮层是当前 key window，需要自行接管播放器快捷键
+  const handleWheel = useCallback(
+    (e: React.WheelEvent) => {
+      if (!syncRef.current || syncRef.current.isLoading) return;
+      if (Math.abs(e.deltaY) < 2) return;
+      const up = e.deltaY < 0;
+      if (e.shiftKey) {
+        send({ type: 'seek-delta', delta: up ? 5 : -5 });
+      } else {
+        send({ type: 'volume-delta', delta: up ? 5 : -5 });
+      }
+    },
+    [send]
+  );
+
+  // 浮层是当前 key window，需要自行接管完整播放器快捷键（对齐 PlayerPage）
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const state = syncRef.current;
       if (!state) return;
-      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) return;
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes((e.target as HTMLElement)?.tagName)) return;
 
+      let shouldResetOsdTimer = false;
       switch (e.code) {
         case 'Space':
           e.preventDefault();
           send({ type: 'toggle-play' });
+          shouldResetOsdTimer = true;
           break;
         case 'ArrowLeft':
           e.preventDefault();
-          send({ type: 'seek', seconds: Math.max(0, state.currentTime - 5) });
+          send({ type: 'seek-delta', delta: -5 });
           break;
         case 'ArrowRight':
           e.preventDefault();
-          send({ type: 'seek', seconds: Math.min(state.duration, state.currentTime + 5) });
+          if (e.repeat) break;
+          if (!longPressActiveRef.current && !longPressTimerRef.current) {
+            longPressTimerRef.current = window.setTimeout(() => {
+              longPressTimerRef.current = null;
+              longPressActiveRef.current = true;
+              send({ type: 'rate-temp', rate: syncRef.current?.longPressSpeed ?? 2.5 });
+            }, 280);
+          }
           break;
         case 'ArrowUp':
           e.preventDefault();
-          send({ type: 'volume', volume: Math.min(100, state.volume + 5) });
+          send({ type: 'volume-delta', delta: 5 });
           break;
         case 'ArrowDown':
           e.preventDefault();
-          send({ type: 'volume', volume: Math.max(0, state.volume - 5) });
+          send({ type: 'volume-delta', delta: -5 });
+          break;
+        case 'KeyM':
+          e.preventDefault();
+          send({ type: 'toggle-mute' });
+          break;
+        case 'BracketLeft':
+          e.preventDefault();
+          send({ type: 'rate-step', direction: 'down' });
+          break;
+        case 'BracketRight':
+          e.preventDefault();
+          send({ type: 'rate-step', direction: 'up' });
+          break;
+        case 'Backslash':
+          e.preventDefault();
+          send({ type: 'rate-step', direction: 'reset' });
+          break;
+        case 'Period':
+          if (!state.isLoading) {
+            e.preventDefault();
+            send({ type: 'frame-step', direction: 'forward' });
+          }
+          break;
+        case 'Comma':
+          if (!state.isLoading) {
+            e.preventDefault();
+            send({ type: 'frame-step', direction: 'backward' });
+          }
           break;
         case 'KeyD':
           e.preventDefault();
           send({ type: 'toggle-danmaku' });
           break;
+        case 'KeyG':
+          e.preventDefault();
+          send({ type: 'danmaku-offset-delta', delta: -0.5 });
+          break;
+        case 'KeyH':
+          e.preventDefault();
+          send({ type: 'danmaku-offset-delta', delta: 0.5 });
+          break;
+        case 'KeyZ':
+          e.preventDefault();
+          send({ type: 'sub-delay-delta', delta: -0.5 });
+          break;
+        case 'KeyX':
+          e.preventDefault();
+          send({ type: 'sub-delay-delta', delta: 0.5 });
+          break;
+        case 'KeyC':
+          e.preventDefault();
+          send({ type: 'cycle-subtitle' });
+          break;
+        case 'KeyA':
+          e.preventDefault();
+          send({ type: 'cycle-audio' });
+          break;
+        case 'KeyL':
+          e.preventDefault();
+          send({ type: 'skip-intro' });
+          break;
+        case 'KeyS':
+          e.preventDefault();
+          send({ type: 'screenshot' });
+          break;
         case 'KeyF':
         case 'Escape':
           e.preventDefault();
           send({ type: 'toggle-fullscreen' });
+          shouldResetOsdTimer = true;
           break;
       }
-      resetHideTimer();
+      if (shouldResetOsdTimer) {
+        resetHideTimer();
+      }
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'ArrowRight') {
+        if (longPressTimerRef.current) {
+          window.clearTimeout(longPressTimerRef.current);
+          longPressTimerRef.current = null;
+          send({ type: 'seek-delta', delta: 5 });
+        } else if (longPressActiveRef.current) {
+          longPressActiveRef.current = false;
+          send({ type: 'rate-temp', rate: null });
+        }
+      }
+    };
+
+    const handleWindowBlur = () => {
+      if (longPressTimerRef.current) {
+        window.clearTimeout(longPressTimerRef.current);
+        longPressTimerRef.current = null;
+      }
+      if (longPressActiveRef.current) {
+        longPressActiveRef.current = false;
+        send({ type: 'rate-temp', rate: null });
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', handleWindowBlur);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', handleWindowBlur);
+      if (longPressTimerRef.current) {
+        window.clearTimeout(longPressTimerRef.current);
+        longPressTimerRef.current = null;
+      }
+      if (longPressActiveRef.current) {
+        longPressActiveRef.current = false;
+        send({ type: 'rate-temp', rate: null });
+      }
+    };
   }, [resetHideTimer, send]);
 
   if (!sync) {
@@ -166,7 +293,10 @@ export const OsdOverlayPage: React.FC = () => {
   }
 
   return (
-    <div className="fixed inset-0 bg-transparent select-none overflow-hidden">
+    <div
+      onWheel={handleWheel}
+      className="fixed inset-0 bg-transparent select-none overflow-hidden"
+    >
       <DanmakuLayer
         bridge={bridgeRef.current}
         comments={comments}
@@ -176,6 +306,11 @@ export const OsdOverlayPage: React.FC = () => {
         area={sync.danmakuStyle.area}
         maxLines={sync.danmakuStyle.maxLines}
         bottomMargin={sync.danmakuStyle.bottomMargin}
+      />
+
+      <MiniActionHud
+        hud={sync.miniHud ?? null}
+        fastForwardRate={sync.fastForwardRate ?? null}
       />
 
       <PlayerOsd
@@ -188,7 +323,18 @@ export const OsdOverlayPage: React.FC = () => {
         duration={sync.duration}
         volume={sync.volume}
         playbackRate={sync.playbackRate}
+        engineType={sync.engineType}
+        telemetry={sync.telemetry}
+        videoSpecLabel={sync.videoSpecLabel}
         networkSpeed={sync.networkSpeed}
+        proxyInfo={sync.proxyInfo}
+        chapters={sync.chapters}
+        danmakuHeatmap={sync.danmakuHeatmap}
+        showHeatmap={sync.showHeatmap}
+        abLoopA={sync.abLoopA}
+        abLoopB={sync.abLoopB}
+        showRemainingTime={sync.showRemainingTime}
+        onToggleRemainingTime={() => send({ type: 'toggle-remaining-time' })}
         danmakuVisible={sync.danmakuVisible}
         danmakuCount={sync.danmakuCount}
         danmakuOffset={sync.danmakuOffset}

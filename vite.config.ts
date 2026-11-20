@@ -5,6 +5,12 @@ import fs from 'fs';
 
 const localDanmakuSrc = path.resolve(__dirname, '../Danmaku/src/index.js');
 const hasLocalDanmaku = fs.existsSync(localDanmakuSrc);
+const nodeModulesDanmakuSrc = path.resolve(__dirname, 'node_modules/danmaku/src/index.js');
+const danmakuEntry = hasLocalDanmaku
+  ? localDanmakuSrc
+  : fs.existsSync(nodeModulesDanmakuSrc)
+  ? nodeModulesDanmakuSrc
+  : null;
 
 export default defineConfig({
   plugins: [react()],
@@ -27,11 +33,11 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
-      // 若本地存在独立 clone 的 Danmaku 源码，优先使用本地源码实现热更新；CI/打包机无本地目录时自动回退到 npm/github 依赖
-      ...(hasLocalDanmaku ? { danmaku: localDanmakuSrc } : {}),
+      // 优先使用同级 ../Danmaku 源码，否则固定指向 node_modules/danmaku/src/index.js，防止回退到旧版 dist
+      ...(danmakuEntry ? { danmaku: danmakuEntry } : {}),
     },
   },
   optimizeDeps: {
-    ...(hasLocalDanmaku ? { exclude: ['danmaku'] } : {}),
+    ...(danmakuEntry ? { exclude: ['danmaku'] } : {}),
   },
 });

@@ -5,6 +5,7 @@ mod osd_overlay;
 #[cfg(target_os = "macos")]
 mod mpv_embed;
 
+#[cfg(target_os = "macos")]
 const MPV_EMBED_WINDOW_TITLE: &str = "Nocta Video Surface";
 
 #[tauri::command]

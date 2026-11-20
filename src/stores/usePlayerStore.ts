@@ -375,7 +375,60 @@ function loadSeriesBindings(): Record<string, SeriesDanmakuBinding> {
   }
 }
 
-export const usePlayerStore = create<PlayerState>((set) => ({
+const pendingStorageWrites = new Map<string, { value: string; timer: number }>();
+
+function writeStorageRaw(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+function saveStorageDebounced(key: string, value: unknown, delayMs = 200): void {
+  const serialized = typeof value === 'string' ? value : JSON.stringify(value);
+  if (typeof window === 'undefined') {
+    writeStorageRaw(key, serialized);
+    return;
+  }
+  const prev = pendingStorageWrites.get(key);
+  if (prev) {
+    window.clearTimeout(prev.timer);
+  }
+  const timer = window.setTimeout(() => {
+    pendingStorageWrites.delete(key);
+    writeStorageRaw(key, serialized);
+  }, delayMs);
+  pendingStorageWrites.set(key, { value: serialized, timer });
+}
+
+function saveStorageImmediate(key: string, value: unknown): void {
+  const serialized = typeof value === 'string' ? value : JSON.stringify(value);
+  if (typeof window !== 'undefined') {
+    const prev = pendingStorageWrites.get(key);
+    if (prev) {
+      window.clearTimeout(prev.timer);
+      pendingStorageWrites.delete(key);
+    }
+  }
+  writeStorageRaw(key, serialized);
+}
+
+function flushPendingStorageWrites(): void {
+  pendingStorageWrites.forEach(({ value, timer }, key) => {
+    if (typeof window !== 'undefined') {
+      window.clearTimeout(timer);
+    }
+    writeStorageRaw(key, value);
+  });
+  pendingStorageWrites.clear();
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', flushPendingStorageWrites);
+}
+
+export const usePlayerStore = create<PlayerState>((set, get) => ({
   item: null,
   mediaSource: null,
   availableMediaSources: [],
@@ -408,7 +461,7 @@ export const usePlayerStore = create<PlayerState>((set) => ({
   engineType: loadEngineType(),
 
   setPlaybackContext: (payload) => {
-    const prefs = loadPlayerPreferences();
+    const prefs = get().playerPreferences;
     // 优先匹配用户偏好语言音轨，其次默认音轨，最后首条音轨
     const preferredAudio = prefs.preferredAudioLang
       ? payload.audioTracks.find(
@@ -506,9 +559,7 @@ export const usePlayerStore = create<PlayerState>((set) => ({
   setPlaybackRate: (playbackRate) => set({ playbackRate }),
   setVolume: (volume) => {
     const clamped = Math.max(0, Math.min(200, Math.round(volume)));
-    try {
-      localStorage.setItem(VOLUME_KEY, String(clamped));
-    } catch {}
+    saveStorageDebounced(VOLUME_KEY, String(clamped));
     set({ volume: clamped });
   },
 
@@ -519,11 +570,7 @@ export const usePlayerStore = create<PlayerState>((set) => ({
   updateDanmakuSettings: (newSettings) => {
     set((state) => {
       const updated = { ...state.danmakuSettings, ...newSettings };
-      try {
-        localStorage.setItem(SETTINGS_KEY, JSON.stringify(updated));
-      } catch (e) {
-        console.error(e);
-      }
+      saveStorageDebounced(SETTINGS_KEY, updated);
       return { danmakuSettings: updated };
     });
   },
@@ -531,11 +578,7 @@ export const usePlayerStore = create<PlayerState>((set) => ({
   setItemOffset: (itemId, offset) => {
     set((state) => {
       const updated = { ...state.itemOffsets, [itemId]: offset };
-      try {
-        localStorage.setItem(OFFSETS_KEY, JSON.stringify(updated));
-      } catch (e) {
-        console.error(e);
-      }
+      saveStorageDebounced(OFFSETS_KEY, updated);
       return { itemOffsets: updated };
     });
   },
@@ -543,11 +586,7 @@ export const usePlayerStore = create<PlayerState>((set) => ({
   setSeriesOffset: (seriesId, offset) => {
     set((state) => {
       const updated = { ...state.seriesOffsets, [seriesId]: offset };
-      try {
-        localStorage.setItem(SERIES_OFFSETS_KEY, JSON.stringify(updated));
-      } catch (e) {
-        console.error(e);
-      }
+      saveStorageDebounced(SERIES_OFFSETS_KEY, updated);
       return { seriesOffsets: updated };
     });
   },
@@ -559,11 +598,7 @@ export const usePlayerStore = create<PlayerState>((set) => ({
         boundAt: Date.now(),
       };
       const updated = { ...state.danmakuBindings, [itemId]: fullBinding };
-      try {
-        localStorage.setItem(BINDINGS_KEY, JSON.stringify(updated));
-      } catch (e) {
-        console.error(e);
-      }
+      saveStorageImmediate(BINDINGS_KEY, updated);
       return { danmakuBindings: updated };
     });
   },
@@ -572,11 +607,7 @@ export const usePlayerStore = create<PlayerState>((set) => ({
     set((state) => {
       const updated = { ...state.danmakuBindings };
       delete updated[itemId];
-      try {
-        localStorage.setItem(BINDINGS_KEY, JSON.stringify(updated));
-      } catch (e) {
-        console.error(e);
-      }
+      saveStorageImmediate(BINDINGS_KEY, updated);
       return { danmakuBindings: updated };
     });
   },
@@ -588,11 +619,7 @@ export const usePlayerStore = create<PlayerState>((set) => ({
         boundAt: Date.now(),
       };
       const updated = { ...state.seriesDanmakuBindings, [seriesId]: full };
-      try {
-        localStorage.setItem(SERIES_BINDINGS_KEY, JSON.stringify(updated));
-      } catch (e) {
-        console.error(e);
-      }
+      saveStorageImmediate(SERIES_BINDINGS_KEY, updated);
       return { seriesDanmakuBindings: updated };
     });
   },
@@ -604,11 +631,7 @@ export const usePlayerStore = create<PlayerState>((set) => ({
         ...state.videoLayouts,
         [key]: { ...prev, ...config },
       };
-      try {
-        localStorage.setItem(VIDEO_LAYOUTS_KEY, JSON.stringify(updated));
-      } catch (e) {
-        console.error(e);
-      }
+      saveStorageDebounced(VIDEO_LAYOUTS_KEY, updated);
       return { videoLayouts: updated };
     });
   },
@@ -617,11 +640,7 @@ export const usePlayerStore = create<PlayerState>((set) => ({
     set((state) => {
       const updated = { ...state.videoLayouts };
       delete updated[key];
-      try {
-        localStorage.setItem(VIDEO_LAYOUTS_KEY, JSON.stringify(updated));
-      } catch (e) {
-        console.error(e);
-      }
+      saveStorageDebounced(VIDEO_LAYOUTS_KEY, updated);
       return { videoLayouts: updated };
     });
   },
@@ -635,11 +654,7 @@ export const usePlayerStore = create<PlayerState>((set) => ({
           ? { ...state.playerPreferences.colorAdjust, ...prefs.colorAdjust }
           : state.playerPreferences.colorAdjust,
       };
-      try {
-        localStorage.setItem(PREFERENCES_KEY, JSON.stringify(updated));
-      } catch (e) {
-        console.error(e);
-      }
+      saveStorageDebounced(PREFERENCES_KEY, updated);
       return { playerPreferences: updated };
     });
   },
@@ -653,11 +668,7 @@ export const usePlayerStore = create<PlayerState>((set) => ({
         videoAspect: 'auto',
         colorAdjust: { ...DEFAULT_COLOR_ADJUST },
       };
-      try {
-        localStorage.setItem(PREFERENCES_KEY, JSON.stringify(updated));
-      } catch (e) {
-        console.error(e);
-      }
+      saveStorageDebounced(PREFERENCES_KEY, updated);
       return { playerPreferences: updated };
     });
   },
@@ -671,11 +682,7 @@ export const usePlayerStore = create<PlayerState>((set) => ({
         updatedAt: Date.now(),
       };
       const updated = { ...state.skipSegments, [key]: next };
-      try {
-        localStorage.setItem(SKIP_SEGMENTS_KEY, JSON.stringify(updated));
-      } catch (e) {
-        console.error(e);
-      }
+      saveStorageDebounced(SKIP_SEGMENTS_KEY, updated);
       return { skipSegments: updated };
     });
   },
@@ -695,11 +702,7 @@ export const usePlayerStore = create<PlayerState>((set) => ({
         updated[key] = next;
       }
 
-      try {
-        localStorage.setItem(SKIP_SEGMENTS_KEY, JSON.stringify(updated));
-      } catch (e) {
-        console.error(e);
-      }
+      saveStorageDebounced(SKIP_SEGMENTS_KEY, updated);
       return { skipSegments: updated };
     });
   },
@@ -707,21 +710,13 @@ export const usePlayerStore = create<PlayerState>((set) => ({
   updateSkipSettings: (settings) => {
     set((state) => {
       const updated = { ...state.skipSettings, ...settings };
-      try {
-        localStorage.setItem(SKIP_SETTINGS_KEY, JSON.stringify(updated));
-      } catch (e) {
-        console.error(e);
-      }
+      saveStorageDebounced(SKIP_SETTINGS_KEY, updated);
       return { skipSettings: updated };
     });
   },
 
   setEngineType: (type) => {
-    try {
-      localStorage.setItem(ENGINE_TYPE_KEY, type);
-    } catch (e) {
-      console.error(e);
-    }
+    saveStorageImmediate(ENGINE_TYPE_KEY, type);
     set({ engineType: type });
   },
 
@@ -822,17 +817,13 @@ export const usePlayerStore = create<PlayerState>((set) => ({
         }
       }
 
-      try {
-        localStorage.setItem(SETTINGS_KEY, JSON.stringify(nextSettings));
-        localStorage.setItem(OFFSETS_KEY, JSON.stringify(nextOffsets));
-        localStorage.setItem(BINDINGS_KEY, JSON.stringify(nextBindings));
-        localStorage.setItem(VIDEO_LAYOUTS_KEY, JSON.stringify(nextLayouts));
-        localStorage.setItem(SKIP_SEGMENTS_KEY, JSON.stringify(nextSkipSegments));
-        localStorage.setItem(SKIP_SETTINGS_KEY, JSON.stringify(nextSkipSettings));
-        localStorage.setItem(ENGINE_TYPE_KEY, nextEngine);
-      } catch (e) {
-        console.error('Failed to save imported player configs:', e);
-      }
+      saveStorageImmediate(SETTINGS_KEY, nextSettings);
+      saveStorageImmediate(OFFSETS_KEY, nextOffsets);
+      saveStorageImmediate(BINDINGS_KEY, nextBindings);
+      saveStorageImmediate(VIDEO_LAYOUTS_KEY, nextLayouts);
+      saveStorageImmediate(SKIP_SEGMENTS_KEY, nextSkipSegments);
+      saveStorageImmediate(SKIP_SETTINGS_KEY, nextSkipSettings);
+      saveStorageImmediate(ENGINE_TYPE_KEY, nextEngine);
 
       return {
         danmakuSettings: nextSettings,

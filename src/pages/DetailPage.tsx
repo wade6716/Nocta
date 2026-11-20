@@ -8,14 +8,10 @@ import {
   getItemDetail,
   getSeriesSeasons,
   getSeriesEpisodes,
-  getPlaybackInfo,
-  buildDirectStreamUrl,
-  buildNativeDirectStreamUrl,
-  mapStreamTracks,
   buildItemImageUrl,
   ticksToSeconds,
 } from '../api/embyClient';
-import { isTauriEnvironment } from '../api/http';
+import { fetchAndPreparePlaybackSession } from '../player/playbackSessionService';
 import { EpisodeGrid } from '../components/media/EpisodeGrid';
 
 export const DetailPage: React.FC = () => {
@@ -116,56 +112,15 @@ export const DetailPage: React.FC = () => {
     if (!currentServer) return;
     try {
       setStartingPlay(true);
-      const pbInfo = await getPlaybackInfo(
-        currentServer.url,
-        currentServer.userId,
-        targetItem.Id,
-        currentServer.accessToken
-      );
-
-      const mediaSource = pbInfo.MediaSources?.[0];
-      if (!mediaSource) {
-        throw new Error('未检测到可用的媒体源 (MediaSource)');
-      }
-
       const engineType = usePlayerStore.getState().engineType;
-      const streamUrl =
-        engineType === 'mpv' && isTauriEnvironment()
-          ? buildNativeDirectStreamUrl(
-              currentServer.url,
-              targetItem.Id,
-              mediaSource,
-              pbInfo.PlaySessionId,
-              currentServer.accessToken
-            )
-          : buildDirectStreamUrl(
-              currentServer.url,
-              targetItem.Id,
-              mediaSource,
-              pbInfo.PlaySessionId,
-              currentServer.accessToken
-            );
-
-      const { audioTracks, subtitleTracks } = mapStreamTracks(
-        currentServer.url,
+      const session = await fetchAndPreparePlaybackSession(
+        currentServer,
         targetItem.Id,
-        mediaSource,
-        currentServer.accessToken
+        engineType,
+        targetItem
       );
 
-      const initialTime = ticksToSeconds(targetItem.UserData?.PlaybackPositionTicks || 0);
-
-      setPlaybackContext({
-        item: targetItem,
-        mediaSource,
-        availableMediaSources: pbInfo.MediaSources,
-        playSessionId: pbInfo.PlaySessionId,
-        streamUrl,
-        audioTracks,
-        subtitleTracks,
-        initialTime,
-      });
-
+      setPlaybackContext(session);
       navigate(`/player/${targetItem.Id}`);
     } catch (err: any) {
       alert(`无法起播: ${err.message}`);

@@ -72,15 +72,13 @@ export const VideoProPanel: React.FC<VideoProPanelProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'video' | 'subtitle' | 'audio'>('video');
 
-  const {
-    engineType,
-    setEngineType,
-    videoLayouts,
-    setVideoLayout,
-    playerPreferences,
-    updatePlayerPreferences,
-    resetVideoEnhancements,
-  } = usePlayerStore();
+  const engineType = usePlayerStore((s) => s.engineType);
+  const setEngineType = usePlayerStore((s) => s.setEngineType);
+  const videoLayouts = usePlayerStore((s) => s.videoLayouts);
+  const setVideoLayout = usePlayerStore((s) => s.setVideoLayout);
+  const playerPreferences = usePlayerStore((s) => s.playerPreferences);
+  const updatePlayerPreferences = usePlayerStore((s) => s.updatePlayerPreferences);
+  const resetVideoEnhancements = usePlayerStore((s) => s.resetVideoEnhancements);
 
   if (!isOpen) return null;
 

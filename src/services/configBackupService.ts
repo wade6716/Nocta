@@ -51,7 +51,7 @@ export interface ConfigStats {
   blockedWordCount: number;
 }
 
-const CLIENT_VERSION = '0.1.0-alpha.8';
+const CLIENT_VERSION = '0.1.0-alpha.9';
 
 function getOrCreateDeviceId(): string {
   try {

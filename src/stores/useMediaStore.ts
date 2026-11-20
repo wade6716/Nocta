@@ -12,6 +12,7 @@ interface MediaStoreState {
   isLoaded: boolean;
   isRefreshing: boolean;
   homeScrollY: number;
+  cacheVersion: number;
 
   setMediaData: (params: {
     serverId: string;
@@ -45,6 +46,7 @@ export const useMediaStore = create<MediaStoreState>((set) => ({
   isLoaded: false,
   isRefreshing: false,
   homeScrollY: 0,
+  cacheVersion: 0,
 
   setMediaData: ({ serverId, resumeItems, nextUpItems, recentlyPlayedItems, views, latestMap, viewCounts }) =>
     set((state) => ({
@@ -80,7 +82,7 @@ export const useMediaStore = create<MediaStoreState>((set) => ({
     set({ homeScrollY }),
 
   clearMediaCache: () =>
-    set({
+    set((state) => ({
       serverId: null,
       resumeItems: [],
       nextUpItems: [],
@@ -91,6 +93,7 @@ export const useMediaStore = create<MediaStoreState>((set) => ({
       isLoaded: false,
       isRefreshing: false,
       homeScrollY: 0,
-    }),
+      cacheVersion: state.cacheVersion + 1,
+    })),
 }));
 

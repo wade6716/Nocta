@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Minus, Square, Copy, X, Search, Settings } from 'lucide-react';
 import { isTauriEnvironment } from '../../api/http';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -16,6 +16,8 @@ export const TitleBar: React.FC<TitleBarProps> = ({
   onOpenAddServerModal,
 }) => {
   const navigate = useNavigate();
+  const location = useLocation();
+  const isHomePage = location.pathname === '/';
   const currentServer = useAuthStore((s) => s.getCurrentServer());
   const [isMaximized, setIsMaximized] = useState(false);
   const isTauri = isTauriEnvironment();
@@ -99,10 +101,28 @@ export const TitleBar: React.FC<TitleBarProps> = ({
         </button>
 
         {currentServer ? (
-          <ServerSwitcherDropdown
-            onOpenManageModal={() => navigate('/settings')}
-            onOpenAddModal={onOpenAddServerModal}
-          />
+          isHomePage ? (
+            <ServerSwitcherDropdown
+              onOpenManageModal={() => navigate('/settings')}
+              onOpenAddModal={onOpenAddServerModal}
+            />
+          ) : (
+            <div
+              className="flex items-center space-x-2 px-3 py-1.5 rounded-full text-xs font-medium bg-white/[0.06] text-gray-300 border border-white/[0.08] cursor-default"
+              title="仅支持在首页切换 Emby 服务器"
+            >
+              <span
+                className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                  currentServer.lastTestOk === false
+                    ? 'bg-amber-400 animate-pulse'
+                    : 'bg-emerald-400'
+                }`}
+              />
+              <span className="max-w-[140px] truncate font-semibold">
+                {currentServer.name || '未命名服务器'}
+              </span>
+            </div>
+          )
         ) : (
           <button
             onClick={() => navigate('/settings')}

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   X,
   Server,
@@ -132,6 +133,9 @@ export const EmbyServerModal: React.FC<EmbyServerModalProps> = ({
   onClose,
   initialEditId,
 }) => {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const isHomePage = location.pathname === '/';
   const { servers, currentServerId, addOrUpdateServer, updateServer, removeServer, setCurrentServer } =
     useAuthStore();
   const clearMediaCache = useMediaStore((s) => s.clearMediaCache);
@@ -306,6 +310,7 @@ export const EmbyServerModal: React.FC<EmbyServerModalProps> = ({
             clearMediaCache();
           }
         } else {
+          clearMediaCache();
           addOrUpdateServer({
             id: auth.ServerId || result.serverName || cleanUrl,
             name: displayName,
@@ -392,12 +397,23 @@ export const EmbyServerModal: React.FC<EmbyServerModalProps> = ({
   };
 
   const handleSwitch = (id: string) => {
-    if (id === currentServerId) return;
+    if (!isHomePage) return;
+    if (id === currentServerId) {
+      onClose();
+      return;
+    }
+    clearMediaCache();
     setCurrentServer(id);
+    onClose();
+    document.getElementById('main-scroll-container')?.scrollTo({ top: 0 });
+    navigate('/', { replace: true });
   };
 
   const handleDelete = (server: SavedServer) => {
     if (!confirm(`确定要删除服务器「${server.name}」吗？删除后需要重新登录该服务器。`)) return;
+    if (server.id === currentServerId) {
+      clearMediaCache();
+    }
     removeServer(server.id);
     if (editingId === server.id) {
       setIsEditing(false);
@@ -532,11 +548,11 @@ export const EmbyServerModal: React.FC<EmbyServerModalProps> = ({
                                 <Activity className="w-3.5 h-3.5" />
                               )}
                             </button>
-                            {!isActive && (
+                            {!isActive && isHomePage && (
                               <button
                                 onClick={() => handleSwitch(s.id)}
                                 title="切换到该服务器"
-                                className="p-1.5 rounded-lg bg-white/5 hover:bg-primary/20 text-gray-300 hover:text-primary transition"
+                                className="p-1.5 rounded-lg bg-white/5 hover:bg-primary/20 text-gray-300 hover:text-primary transition cursor-pointer"
                               >
                                 <ArrowRight className="w-3.5 h-3.5" />
                               </button>

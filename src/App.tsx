@@ -3,6 +3,7 @@ import { Routes, Route, useLocation } from 'react-router-dom';
 import { TitleBar } from './components/layout/TitleBar';
 import { Sidebar } from './components/layout/Sidebar';
 import { HomePage } from './pages/HomePage';
+import { ContinueWatchingPage } from './pages/ContinueWatchingPage';
 import { LoginPage } from './pages/LoginPage';
 import { DetailPage } from './pages/DetailPage';
 import { PlayerPage } from './pages/PlayerPage';
@@ -61,6 +62,7 @@ export const App: React.FC = () => {
           >
             <Routes>
               <Route path="/" element={<HomePage />} />
+              <Route path="/continue-watching" element={<ContinueWatchingPage />} />
               <Route path="/login" element={<LoginPage />} />
               <Route path="/search" element={<SearchPage />} />
               <Route path="/settings" element={<SettingsPage />} />

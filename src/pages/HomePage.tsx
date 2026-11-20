@@ -1,29 +1,20 @@
-import React, { useEffect, useState, useCallback, useLayoutEffect, useMemo } from 'react';
+import React, { useEffect, useState, useCallback, useLayoutEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  LogOut,
   RefreshCw,
   Film,
   Tv,
   Play,
   History,
-  Server,
-  MessagesSquare,
-  Globe,
-  Search,
-  Settings,
-  Pencil,
   TriangleAlert,
   Info,
   Sparkles,
-  Star,
 } from 'lucide-react';
-import { useAuthStore } from '../stores/useAuthStore';
+import { useAuthStore, SavedServer } from '../stores/useAuthStore';
 import { useMediaStore } from '../stores/useMediaStore';
 import { DanmuServerModal } from '../components/danmu/DanmuServerModal';
 import { EmbyServerModal } from '../components/settings/EmbyServerModal';
 import { NetworkProxyModal } from '../components/settings/NetworkProxyModal';
-import { ServerSwitcherDropdown } from '../components/layout/ServerSwitcherDropdown';
 import {
   EmbyItem,
   getUserViews,
@@ -39,26 +30,6 @@ import {
   formatSeriesEpisodeBadge,
 } from '../api/embyClient';
 import { MediaCard } from '../components/media/MediaCard';
-
-function formatRelativeTime(dateStr?: string): string {
-  if (!dateStr) return '';
-  try {
-    const d = new Date(dateStr);
-    const now = new Date();
-    const diffSec = Math.floor((now.getTime() - d.getTime()) / 1000);
-    if (diffSec < 60) return '刚刚';
-    const diffMin = Math.floor(diffSec / 60);
-    if (diffMin < 60) return `${diffMin}分钟前`;
-    const diffHour = Math.floor(diffMin / 60);
-    if (diffHour < 24) return `${diffHour}小时前`;
-    const diffDay = Math.floor(diffHour / 24);
-    if (diffDay === 1) return '昨天';
-    if (diffDay < 7) return `${diffDay}天前`;
-    return `${d.getMonth() + 1}月${d.getDate()}日`;
-  } catch {
-    return '';
-  }
-}
 
 function renderViewCountBadge(counts?: ViewCounts) {
   if (!counts) return null;
@@ -97,12 +68,12 @@ export const HomePage: React.FC = () => {
     isLoaded,
     isRefreshing,
     homeScrollY,
+    cacheVersion,
     setMediaData,
     updateResumeAndRecent,
     updateViewCount,
     setRefreshing,
     setHomeScrollY,
-    clearMediaCache,
   } = useMediaStore();
 
   const isCached = isLoaded && serverId === currentServer?.id;
@@ -110,19 +81,25 @@ export const HomePage: React.FC = () => {
   const [isDanmuModalOpen, setIsDanmuModalOpen] = useState(false);
   const [isServerModalOpen, setIsServerModalOpen] = useState(false);
   const [isProxyModalOpen, setIsProxyModalOpen] = useState(false);
+  const loadReqIdRef = useRef(0);
 
   const fetchCountsForViews = useCallback(
-    (currentViews: EmbyItem[]) => {
-      if (!currentServer) return;
+    (currentViews: EmbyItem[], targetServer: SavedServer, reqId: number) => {
       currentViews.forEach((v) => {
         getViewItemCounts(
-          currentServer.url,
-          currentServer.userId,
+          targetServer.url,
+          targetServer.userId,
           v.Id,
           v.CollectionType,
-          currentServer.accessToken
+          targetServer.accessToken
         )
           .then((counts) => {
+            if (
+              reqId !== loadReqIdRef.current ||
+              useAuthStore.getState().getCurrentServer()?.id !== targetServer.id
+            ) {
+              return;
+            }
             updateViewCount(v.Id, counts);
           })
           .catch((e) => {
@@ -130,26 +107,39 @@ export const HomePage: React.FC = () => {
           });
       });
     },
-    [currentServer, updateViewCount]
+    [updateViewCount]
   );
 
   const loadData = useCallback(
     async (isManualRefresh = false) => {
-      if (!currentServer) return;
+      const targetServer = currentServer;
+      if (!targetServer) return;
+
+      const reqId = ++loadReqIdRef.current;
+      const isStale = () =>
+        reqId !== loadReqIdRef.current ||
+        useAuthStore.getState().getCurrentServer()?.id !== targetServer.id;
+
+      const mediaState = useMediaStore.getState();
+      const serverCached = mediaState.isLoaded && mediaState.serverId === targetServer.id;
 
       if (isManualRefresh) {
         setRefreshing(true);
+      } else if (!serverCached) {
+        setLoading(true);
+        document.getElementById('main-scroll-container')?.scrollTo({ top: 0 });
       }
 
       try {
         // If we already have cache and it's not a forced manual refresh,
         // quietly update "继续观看" and "最近播放" in background without flashing the UI
-        if (!isManualRefresh && isCached) {
+        if (!isManualRefresh && serverCached) {
           const [resResume, resNextUp, resRecent] = await Promise.all([
-            getResumeItems(currentServer.url, currentServer.userId, currentServer.accessToken),
-            getNextUpEpisodes(currentServer.url, currentServer.userId, currentServer.accessToken).catch(() => []),
-            getRecentlyPlayedItems(currentServer.url, currentServer.userId, currentServer.accessToken).catch(() => []),
+            getResumeItems(targetServer.url, targetServer.userId, targetServer.accessToken),
+            getNextUpEpisodes(targetServer.url, targetServer.userId, targetServer.accessToken).catch(() => []),
+            getRecentlyPlayedItems(targetServer.url, targetServer.userId, targetServer.accessToken).catch(() => []),
           ]);
+          if (isStale()) return;
 
           updateResumeAndRecent({
             resumeItems: resResume.Items || [],
@@ -158,19 +148,20 @@ export const HomePage: React.FC = () => {
           });
 
           // 缓存模式下也在后台轻量同步各分类统计数
-          if (views.length > 0) {
-            fetchCountsForViews(views);
+          if (mediaState.views.length > 0) {
+            fetchCountsForViews(mediaState.views, targetServer, reqId);
           }
           return;
         }
 
-        // Full fetch (initial load or manual refresh button)
+        // Full fetch (initial load, server switch, or manual refresh button)
         const [resResume, resNextUp, resRecent, resViews] = await Promise.all([
-          getResumeItems(currentServer.url, currentServer.userId, currentServer.accessToken),
-          getNextUpEpisodes(currentServer.url, currentServer.userId, currentServer.accessToken).catch(() => []),
-          getRecentlyPlayedItems(currentServer.url, currentServer.userId, currentServer.accessToken).catch(() => []),
-          getUserViews(currentServer.url, currentServer.userId, currentServer.accessToken),
+          getResumeItems(targetServer.url, targetServer.userId, targetServer.accessToken),
+          getNextUpEpisodes(targetServer.url, targetServer.userId, targetServer.accessToken).catch(() => []),
+          getRecentlyPlayedItems(targetServer.url, targetServer.userId, targetServer.accessToken).catch(() => []),
+          getUserViews(targetServer.url, targetServer.userId, targetServer.accessToken),
         ]);
+        if (isStale()) return;
 
         const userViews = resViews.Items || [];
         const latestEntries: Record<string, EmbyItem[]> = {};
@@ -179,10 +170,10 @@ export const HomePage: React.FC = () => {
           userViews.map(async (v) => {
             try {
               const items = await getLatestItems(
-                currentServer.url,
-                currentServer.userId,
+                targetServer.url,
+                targetServer.userId,
                 v.Id,
-                currentServer.accessToken,
+                targetServer.accessToken,
                 12
               );
               latestEntries[v.Id] = items;
@@ -191,9 +182,10 @@ export const HomePage: React.FC = () => {
             }
           })
         );
+        if (isStale()) return;
 
         setMediaData({
-          serverId: currentServer.id,
+          serverId: targetServer.id,
           resumeItems: resResume.Items || [],
           nextUpItems: resNextUp || [],
           recentlyPlayedItems: resRecent || [],
@@ -202,15 +194,19 @@ export const HomePage: React.FC = () => {
         });
 
         // 异步并发拉取每个媒体库的剧集和电影数量
-        fetchCountsForViews(userViews);
+        fetchCountsForViews(userViews, targetServer, reqId);
       } catch (err: any) {
-        console.error('加载媒体库失败', err);
+        if (!isStale()) {
+          console.error('加载媒体库失败', err);
+        }
       } finally {
-        setLoading(false);
-        setRefreshing(false);
+        if (!isStale()) {
+          setLoading(false);
+          setRefreshing(false);
+        }
       }
     },
-    [currentServer, isCached, views, setMediaData, updateResumeAndRecent, setRefreshing, fetchCountsForViews]
+    [currentServer, setMediaData, updateResumeAndRecent, setRefreshing, fetchCountsForViews]
   );
 
   useEffect(() => {
@@ -219,13 +215,13 @@ export const HomePage: React.FC = () => {
       return;
     }
 
-    if (serverId !== currentServer.id) {
+    if (serverId !== currentServer.id || !isLoaded) {
       setLoading(true);
     }
 
     loadData(false);
-    // 服务器地址或令牌被编辑后，即便 id 不变也需重新拉取媒体库
-  }, [currentServer?.id, currentServer?.url, currentServer?.accessToken]);
+    // 服务器切换、地址/令牌变更或手动清除缓存时均强制重新拉取媒体库
+  }, [currentServer?.id, currentServer?.url, currentServer?.accessToken, cacheVersion]);
 
   // Restore scroll position when returning from video/detail pages
   useLayoutEffect(() => {
@@ -247,6 +243,7 @@ export const HomePage: React.FC = () => {
   // Save scroll position when navigating away or unmounting
   useEffect(() => {
     const saveCurrentScroll = () => {
+      if (!useMediaStore.getState().isLoaded) return;
       const container = document.getElementById('main-scroll-container');
       if (container) {
         setHomeScrollY(container.scrollTop);
@@ -284,46 +281,17 @@ export const HomePage: React.FC = () => {
     navigate(`/detail/${item.Id}`);
   };
 
-  const handleLogout = () => {
-    clearMediaCache();
-    navigate('/login');
-  };
-
-  // 1. 合并“继续观看”：
-  // 综合未完播 (resumeItems) 与待播下一集 (nextUpItems)；
-  // 如果这两个都为空（例如用户在第二个服务器上看完后没有未完播内容），回退使用最近播放 (recentlyPlayedItems)
-  // 并按相同媒体（剧集按 SeriesId/SeriesName）合并，只展示每部剧集最新进度的一张卡片！
+  // 用于 Hero Spotlight 的精选候选计算
   const continueWatchingItems = useMemo(() => {
     let sourceList: EmbyItem[] = [];
     if (resumeItems.length > 0 || nextUpItems.length > 0) {
       sourceList = [...resumeItems, ...nextUpItems];
     } else if (recentlyPlayedItems.length > 0) {
-      // 容灾回退：若服务器未返回断点条目，直接以最近观看历史无缝承接继续观看
       sourceList = recentlyPlayedItems;
     }
-    // 坚决过滤非视频（排除音乐、音频、歌单）
     const videoOnly = sourceList.filter(isVideoMedia);
     return mergeMediaBySeries(videoOnly);
   }, [resumeItems, nextUpItems, recentlyPlayedItems]);
-
-  // 2. “最近观看历史”：
-  // 从最近播放记录中过滤掉已经在“继续观看”中出现的同一部剧集或电影，同样按相同媒体聚合
-  const filteredRecentItems = useMemo(() => {
-    const continueKeys = new Set(
-      continueWatchingItems.map((it) =>
-        it.Type === 'Episode' ? (it.SeriesId || it.SeriesName || it.Id) : it.Id
-      )
-    );
-
-    const nonDuplicate = recentlyPlayedItems
-      .filter(isVideoMedia) // 排除一切音乐与音频
-      .filter((it) => {
-        const key = it.Type === 'Episode' ? (it.SeriesId || it.SeriesName || it.Id) : it.Id;
-        return !continueKeys.has(key);
-      });
-
-    return mergeMediaBySeries(nonDuplicate);
-  }, [recentlyPlayedItems, continueWatchingItems]);
 
   // Hero Spotlight Banner: 优先选取当前继续观看首位，或第一个分类的首部大片
   const spotlightItem = useMemo(() => {
@@ -360,6 +328,14 @@ export const HomePage: React.FC = () => {
         </div>
 
         <div className="flex items-center space-x-2">
+          <button
+            onClick={() => navigate('/continue-watching')}
+            className="px-3 py-2 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] text-slate-200 hover:text-white border border-white/[0.06] transition cursor-pointer inline-flex items-center space-x-1.5 text-xs font-medium"
+            title="前往独立「继续观看与最近播放」页面"
+          >
+            <History className="w-3.5 h-3.5 text-[#38BDF8]" />
+            <span>继续观看</span>
+          </button>
           <button
             onClick={() => loadData(true)}
             disabled={isRefreshing || loading}
@@ -473,57 +449,7 @@ export const HomePage: React.FC = () => {
             </div>
           )}
 
-          {/* 2. 继续观看泳道 (Continue Watching - 16:9 横版滚动泳道) */}
-          {continueWatchingItems.length > 0 && (
-            <div id="continue-watching" className="space-y-4">
-              <div className="flex items-center space-x-2">
-                <Play className="w-4 h-4 text-[#38BDF8] fill-[#38BDF8]" />
-                <h2 className="text-lg font-semibold tracking-tight text-slate-100">继续观看</h2>
-                <span className="text-xs text-slate-500 font-medium">16:9 剧照与断点进度</span>
-              </div>
-              <div className="flex space-x-4 overflow-x-auto pb-4 pt-1 custom-scrollbar">
-                {continueWatchingItems.map((item) => {
-                  const hasProgress =
-                    item.UserData?.PlaybackPositionTicks && item.UserData.PlaybackPositionTicks > 0;
-                  return (
-                    <div key={item.Id} className="w-64 md:w-72 flex-shrink-0">
-                      <MediaCard
-                        item={item}
-                        serverUrl={currentServer!.url}
-                        onClick={handleCardClick}
-                        aspectRatio="backdrop"
-                        badge={hasProgress ? undefined : '下一集'}
-                      />
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* 3. 最近观看历史 (按相同媒体聚合) */}
-          {filteredRecentItems.length > 0 && (
-            <div className="space-y-4">
-              <div className="flex items-center space-x-2">
-                <History className="w-4 h-4 text-indigo-400" />
-                <h2 className="text-lg font-semibold tracking-tight text-slate-100">最近播放记录</h2>
-              </div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-5">
-                {filteredRecentItems.map((item) => (
-                  <MediaCard
-                    key={item.Id}
-                    item={item}
-                    serverUrl={currentServer!.url}
-                    onClick={handleCardClick}
-                    aspectRatio="poster"
-                    badge={formatRelativeTime(item.UserData?.LastPlayedDate)}
-                  />
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* 4. 媒体库各分类海报网格 (2:3 纵向海报) */}
+          {/* 2. 媒体库各分类海报网格 (2:3 纵向海报) */}
           {views.map((v) => {
             const items = latestMap[v.Id] || [];
             if (items.length === 0) return null;

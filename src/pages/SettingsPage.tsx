@@ -91,7 +91,6 @@ export const SettingsPage: React.FC = () => {
     addOrUpdateServer,
     updateServer: updateEmbyServer,
     removeServer: removeEmbyServer,
-    setCurrentServer: setEmbyCurrentServer,
     globalProxyConfig,
     updateGlobalProxyConfig,
     testProxyConnection,
@@ -151,13 +150,6 @@ export const SettingsPage: React.FC = () => {
   const [customProxyTestUrl, setCustomProxyTestUrl] = useState('');
   const currentEmbyServer = embyServers.find((s) => s.id === currentServerId) || embyServers[0] || null;
 
-  // 切换 Emby 服务器
-  const handleSwitchEmbyServer = (id: string) => {
-    if (id === currentServerId) return;
-    clearMediaCache();
-    setEmbyCurrentServer(id);
-  };
-
   // 密码可见性切换
   const togglePasswordReveal = (id: string) => {
     setRevealedPasswords((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -212,6 +204,7 @@ export const SettingsPage: React.FC = () => {
         lastTestError: authRes ? undefined : '连接或登录校验未通过',
         lastTestAt: Date.now(),
       });
+      clearMediaCache();
     }
 
     setEmbyTesting(false);
@@ -704,12 +697,12 @@ export const SettingsPage: React.FC = () => {
 
                         <div className="flex items-center space-x-2">
                           {!isCurrent && (
-                            <button
-                              onClick={() => handleSwitchEmbyServer(server.id)}
-                              className="px-2.5 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-xs text-white transition cursor-pointer"
+                            <span
+                              className="px-2 py-1 rounded-md bg-white/[0.04] text-[11px] text-gray-500"
+                              title="仅支持在首页顶部切换当前 Emby 服务器"
                             >
-                              使用此服务器
-                            </button>
+                              请于首页切换
+                            </span>
                           )}
                           <button
                             onClick={() => {
@@ -730,6 +723,9 @@ export const SettingsPage: React.FC = () => {
                             <button
                               onClick={() => {
                                 if (confirm(`确定要移除「${server.name}」吗？`)) {
+                                  if (server.id === currentServerId) {
+                                    clearMediaCache();
+                                  }
                                   removeEmbyServer(server.id);
                                 }
                               }}

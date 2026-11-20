@@ -1,12 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   ChevronDown,
   Server,
   Check,
   Plus,
   Settings,
-  Circle,
-  ExternalLink,
 } from 'lucide-react';
 import { useAuthStore, SavedServer } from '../../stores/useAuthStore';
 import { useMediaStore } from '../../stores/useMediaStore';
@@ -20,6 +19,7 @@ export const ServerSwitcherDropdown: React.FC<ServerSwitcherDropdownProps> = ({
   onOpenManageModal,
   onOpenAddModal,
 }) => {
+  const navigate = useNavigate();
   const { servers, currentServerId, setCurrentServer } = useAuthStore();
   const clearMediaCache = useMediaStore((s) => s.clearMediaCache);
 
@@ -53,14 +53,16 @@ export const ServerSwitcherDropdown: React.FC<ServerSwitcherDropdownProps> = ({
   }, [isOpen]);
 
   const handleSelectServer = (server: SavedServer) => {
+    setIsOpen(false);
+    document.getElementById('main-scroll-container')?.scrollTo({ top: 0 });
     if (server.id === currentServer?.id) {
-      setIsOpen(false);
+      navigate('/', { replace: true });
       return;
     }
-    // 清除旧缓存并切换到新服务器
+    // 清除旧缓存、切换服务器并强制回到首页重新拉取数据
     clearMediaCache();
     setCurrentServer(server.id);
-    setIsOpen(false);
+    navigate('/', { replace: true });
   };
 
   if (!currentServer && servers.length === 0) {

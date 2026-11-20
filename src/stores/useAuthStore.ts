@@ -200,22 +200,20 @@ export const useAuthStore = create<AuthState>((set, get) => {
 
     setCurrentServer: (id: string) => {
       set((state) => {
-        const found = state.servers.find((s) => s.id === id);
-        if (found) {
-          found.lastActive = Date.now();
-          state.servers.sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0));
-          try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(state.servers));
-          } catch (e) {
-            console.error(e);
-          }
-        }
+        const now = Date.now();
+        const newServers = state.servers
+          .map((s) => (s.id === id ? { ...s, lastActive: now } : s))
+          .sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0));
         try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(newServers));
           localStorage.setItem(CURRENT_SERVER_KEY, id);
         } catch (e) {
           console.error(e);
         }
-        return { currentServerId: id };
+        return {
+          servers: newServers,
+          currentServerId: id,
+        };
       });
     },
 

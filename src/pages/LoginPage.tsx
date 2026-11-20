@@ -23,12 +23,14 @@ import {
   normalizeServerUrl,
 } from '../api/embyClient';
 import { useAuthStore } from '../stores/useAuthStore';
+import { useMediaStore } from '../stores/useMediaStore';
 import { EmbyServerModal } from '../components/settings/EmbyServerModal';
 import { NetworkProxyModal } from '../components/settings/NetworkProxyModal';
 
 export const LoginPage: React.FC = () => {
   const navigate = useNavigate();
   const { servers, addOrUpdateServer, removeServer, setCurrentServer } = useAuthStore();
+  const clearMediaCache = useMediaStore((s) => s.clearMediaCache);
 
   const [serverUrl, setServerUrl] = useState('');
   const [username, setUsername] = useState('');
@@ -54,6 +56,7 @@ export const LoginPage: React.FC = () => {
       const serverInfo = await testServerConnection(cleanUrl);
       const auth = await authenticateByName(cleanUrl, username.trim(), password);
 
+      clearMediaCache();
       addOrUpdateServer({
         id: auth.ServerId || serverInfo.Id || cleanUrl,
         name: serverInfo.ServerName || 'Emby Server',
@@ -76,6 +79,7 @@ export const LoginPage: React.FC = () => {
   };
 
   const handleQuickLogin = (serverId: string) => {
+    clearMediaCache();
     setCurrentServer(serverId);
     navigate('/');
   };

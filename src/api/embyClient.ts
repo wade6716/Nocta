@@ -332,9 +332,11 @@ export async function getResumeItems(
   serverUrl: string,
   userId: string,
   accessToken: string,
-  limit = 24
+  limit = 24,
+  options?: { throwOnError?: boolean }
 ): Promise<{ Items: EmbyItem[] }> {
   const base = normalizeServerUrl(serverUrl);
+  let lastError: unknown = null;
   // 1. 标准 Resume 接口
   try {
     const url = `${base}/emby/Users/${userId}/Items/Resume?MediaTypes=Video&Limit=${limit}&Fields=${PLAYBACK_MEDIA_FIELDS}`;
@@ -343,14 +345,18 @@ export async function getResumeItems(
       headers: buildEmbyHeaders(userId, accessToken),
     });
     if (res.ok) {
+      lastError = null;
       const data = await res.json();
       if (Array.isArray(data.Items) && data.Items.length > 0) {
         return {
           Items: data.Items.filter(isVideoMedia),
         };
       }
+    } else {
+      lastError = new Error(`HTTP ${res.status}`);
     }
   } catch (e) {
+    lastError = e;
     console.warn('[getResumeItems endpoint error, falling back]', e);
   }
 
@@ -362,17 +368,24 @@ export async function getResumeItems(
       headers: buildEmbyHeaders(userId, accessToken),
     });
     if (res.ok) {
+      lastError = null;
       const data = await res.json();
       if (Array.isArray(data.Items)) {
         return {
           Items: data.Items.filter(isVideoMedia),
         };
       }
+    } else {
+      lastError = new Error(`HTTP ${res.status}`);
     }
   } catch (e) {
+    lastError = e;
     console.warn('[getResumeItems fallback error]', e);
   }
 
+  if (options?.throwOnError && lastError) {
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  }
   return { Items: [] };
 }
 
@@ -384,7 +397,8 @@ export async function getRecentlyPlayedItems(
   serverUrl: string,
   userId: string,
   accessToken: string,
-  limit = 30
+  limit = 30,
+  options?: { throwOnError?: boolean }
 ): Promise<EmbyItem[]> {
   const base = normalizeServerUrl(serverUrl);
   try {
@@ -393,24 +407,28 @@ export async function getRecentlyPlayedItems(
       method: 'GET',
       headers: buildEmbyHeaders(userId, accessToken),
     });
-    if (res.ok) {
-      const data = await res.json();
-      const rawList: EmbyItem[] = data.Items || [];
-      // 客户端严格二次过滤：非音乐/音频，且具备播放记录
-      return rawList.filter((item) => {
-        if (!isVideoMedia(item)) return false;
-        const ud = item.UserData;
-        if (!ud) return false;
-        return (
-          !!ud.LastPlayedDate ||
-          !!ud.Played ||
-          (ud.PlayCount !== undefined && ud.PlayCount > 0) ||
-          (ud.PlaybackPositionTicks !== undefined && ud.PlaybackPositionTicks > 0)
-        );
-      });
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
     }
+    const data = await res.json();
+    const rawList: EmbyItem[] = data.Items || [];
+    // 客户端严格二次过滤：非音乐/音频，且具备播放记录
+    return rawList.filter((item) => {
+      if (!isVideoMedia(item)) return false;
+      const ud = item.UserData;
+      if (!ud) return false;
+      return (
+        !!ud.LastPlayedDate ||
+        !!ud.Played ||
+        (ud.PlayCount !== undefined && ud.PlayCount > 0) ||
+        (ud.PlaybackPositionTicks !== undefined && ud.PlaybackPositionTicks > 0)
+      );
+    });
   } catch (e) {
     console.warn('[getRecentlyPlayedItems error]', e);
+    if (options?.throwOnError) {
+      throw e instanceof Error ? e : new Error(String(e));
+    }
   }
   return [];
 }
@@ -1266,6 +1284,167 @@ export async function searchFederatedMediaItems(
 
   return {
     items: allResults,
+    stats,
+  };
+}
+
+export interface FederatedHistoryServerStat {
+  serverId: string;
+  serverName: string;
+  ok: boolean;
+  count: number;
+  durationMs: number;
+  error?: string;
+}
+
+export interface FederatedPlaybackHistoryResponse {
+  items: EmbyItem[];
+  stats: FederatedHistoryServerStat[];
+}
+
+function getLastPlayedMs(item: EmbyItem): number {
+  const raw = item.UserData?.LastPlayedDate;
+  if (!raw) return 0;
+  const ms = Date.parse(raw);
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function comparePlaybackRecency(a: EmbyItem, b: EmbyItem): number {
+  const aMs = getLastPlayedMs(a);
+  const bMs = getLastPlayedMs(b);
+  const aHasPos = (a.UserData?.PlaybackPositionTicks || 0) > 0;
+  const bHasPos = (b.UserData?.PlaybackPositionTicks || 0) > 0;
+  const aNoTimeResume = aMs === 0 && aHasPos;
+  const bNoTimeResume = bMs === 0 && bHasPos;
+
+  if (aNoTimeResume !== bNoTimeResume) return aNoTimeResume ? -1 : 1;
+  if (aMs !== bMs) return bMs - aMs;
+  if (aHasPos !== bHasPos) return aHasPos ? -1 : 1;
+  return 0;
+}
+
+/**
+ * 跨多个 Emby 服务器并发聚合「继续观看」与「最近播放记录」
+ * - 严格过滤非视频（排除音乐、音频、歌单）
+ * - 单服内同剧集按最新进度折叠（mergeMediaBySeries）
+ * - 跨服按最近播放时间与未完播断点智能排序，并注入 ServerId / ServerName / ServerUrl
+ */
+export async function getFederatedPlaybackHistory(
+  targets: FederatedServerTarget[],
+  limitPerServer = 30
+): Promise<FederatedPlaybackHistoryResponse> {
+  if (targets.length === 0) {
+    return { items: [], stats: [] };
+  }
+
+  const tasks = targets.map(async (target) => {
+    const startTime = performance.now();
+    if (!target.url || !target.userId || !target.accessToken) {
+      return {
+        serverId: target.id,
+        serverName: target.name,
+        ok: false,
+        count: 0,
+        durationMs: 0,
+        error: '未完成登录认证',
+        items: [] as EmbyItem[],
+      };
+    }
+
+    try {
+      const [resumeRes, recentItems] = await Promise.all([
+        getResumeItems(target.url, target.userId, target.accessToken, limitPerServer, {
+          throwOnError: true,
+        }),
+        getRecentlyPlayedItems(target.url, target.userId, target.accessToken, limitPerServer, {
+          throwOnError: true,
+        }),
+      ]);
+
+      const byId = new Map<string, EmbyItem>();
+      const rawCombined = [...(resumeRes.Items || []), ...(recentItems || [])];
+
+      for (const it of rawCombined) {
+        if (!it || !it.Id || !isVideoMedia(it)) continue;
+        const existing = byId.get(it.Id);
+        if (!existing) {
+          byId.set(it.Id, { ...it });
+          continue;
+        }
+
+        const existingPos = existing.UserData?.PlaybackPositionTicks || 0;
+        const incomingPos = it.UserData?.PlaybackPositionTicks || 0;
+        const existingMs = getLastPlayedMs(existing);
+        const incomingMs = getLastPlayedMs(it);
+
+        existing.UserData = {
+          ...(existing.UserData || {}),
+          ...(it.UserData || {}),
+          PlaybackPositionTicks: Math.max(existingPos, incomingPos),
+          Played:
+            existingPos > 0
+              ? existing.UserData?.Played
+              : incomingPos > 0
+              ? it.UserData?.Played
+              : existing.UserData?.Played || it.UserData?.Played,
+          LastPlayedDate:
+            incomingMs >= existingMs
+              ? it.UserData?.LastPlayedDate || existing.UserData?.LastPlayedDate
+              : existing.UserData?.LastPlayedDate,
+        };
+        if (!existing.Overview && it.Overview) existing.Overview = it.Overview;
+        if (!existing.RunTimeTicks && it.RunTimeTicks) existing.RunTimeTicks = it.RunTimeTicks;
+        if (!existing.MediaSources && it.MediaSources) existing.MediaSources = it.MediaSources;
+      }
+
+      const sortedSingleServer = Array.from(byId.values()).sort(comparePlaybackRecency);
+      const mergedBySeries = mergeMediaBySeries(sortedSingleServer).map((it) => ({
+        ...it,
+        ServerId: target.id,
+        ServerName: target.name,
+        ServerUrl: target.url,
+      }));
+
+      const durationMs = Math.round(performance.now() - startTime);
+      return {
+        serverId: target.id,
+        serverName: target.name,
+        ok: true,
+        count: mergedBySeries.length,
+        durationMs,
+        items: mergedBySeries,
+      };
+    } catch (err: any) {
+      const durationMs = Math.round(performance.now() - startTime);
+      console.warn(`[getFederatedPlaybackHistory] Server ${target.name} (${target.id}) error:`, err);
+      return {
+        serverId: target.id,
+        serverName: target.name,
+        ok: false,
+        count: 0,
+        durationMs,
+        error: err?.message || '连接失败或超时',
+        items: [] as EmbyItem[],
+      };
+    }
+  });
+
+  const settled = await Promise.allSettled(tasks);
+  const stats: FederatedHistoryServerStat[] = [];
+  const allItems: EmbyItem[] = [];
+
+  for (const s of settled) {
+    if (s.status === 'fulfilled') {
+      const { items, ...stat } = s.value;
+      stats.push(stat);
+      allItems.push(...items);
+    }
+  }
+
+  allItems.sort(comparePlaybackRecency);
+
+  return {
+    items: allItems,
     stats,
   };
 }

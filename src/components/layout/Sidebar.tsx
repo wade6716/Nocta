@@ -140,17 +140,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
             {/* 继续观看 */}
             <button
-              onClick={() => handleNavClick('/', 'continue-watching')}
+              onClick={() => handleNavClick('/continue-watching')}
               className={`w-full h-10 rounded-xl flex items-center text-sm transition-all cursor-pointer relative group ${
                 isCollapsed ? 'justify-center px-0' : 'px-3 gap-3'
               } ${
-                location.hash === '#continue-watching'
+                currentPath === '/continue-watching'
                   ? 'bg-[#38BDF8]/12 text-[#38BDF8] font-medium'
                   : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.04]'
               }`}
-              title="继续观看"
+              title="继续观看与最近播放"
             >
-              {location.hash === '#continue-watching' && (
+              {currentPath === '/continue-watching' && (
                 <span className="absolute left-0 w-1 h-5 rounded-full bg-[#38BDF8]" />
               )}
               <Play className="w-4 h-4 flex-shrink-0" />

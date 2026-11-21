@@ -3,6 +3,10 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 import fs from 'fs';
 
+const pkg = JSON.parse(
+  fs.readFileSync(path.resolve(__dirname, 'package.json'), 'utf-8')
+);
+
 const localDanmakuSrc = path.resolve(__dirname, '../Danmaku/src/index.js');
 const hasLocalDanmaku = fs.existsSync(localDanmakuSrc);
 const nodeModulesDanmakuSrc = path.resolve(__dirname, 'node_modules/danmaku/src/index.js');
@@ -17,6 +21,7 @@ export default defineConfig({
   clearScreen: false,
   define: {
     'process.env': {},
+    __APP_VERSION__: JSON.stringify(pkg.version || '0.1.0'),
   },
   server: {
     port: 1420,

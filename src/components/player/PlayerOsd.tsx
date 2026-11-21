@@ -449,7 +449,7 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
         {/* 左侧胶囊：返回、首页、标题与实时硬解/画质徽章 */}
         <div
           onClick={(e) => e.stopPropagation()}
-          className="flex items-center space-x-2.5 px-3.5 py-2 rounded-2xl bg-[#0B0E17]/82 backdrop-blur-2xl border border-white/[0.12] shadow-xl max-w-[55vw]"
+          className="flex items-center space-x-2.5 px-3.5 py-2 rounded-2xl bg-[#0B0E17]/90 backdrop-blur-2xl border border-white/15 shadow-xl max-w-[55vw]"
         >
           <button
             onClick={onBack}
@@ -511,7 +511,7 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
         {/* 右侧胶囊：实时时钟、弹幕状态、置顶、窗口控制 */}
         <div
           onClick={(e) => e.stopPropagation()}
-          className="flex items-center space-x-2 px-3 py-2 rounded-2xl bg-[#0B0E17]/82 backdrop-blur-2xl border border-white/[0.12] shadow-xl text-xs text-gray-300 shrink-0"
+          className="flex items-center space-x-2 px-3 py-2 rounded-2xl bg-[#0B0E17]/90 backdrop-blur-2xl border border-white/15 shadow-xl text-xs text-gray-300 shrink-0"
         >
           {/* 系统时间 */}
           <span className="hidden sm:inline font-mono tabular-nums text-slate-300 px-1.5 font-medium">
@@ -590,7 +590,7 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
       {/* 底部悬浮毛玻璃胶囊控制舱 */}
       <div
         onClick={(e) => e.stopPropagation()}
-        className={`fixed bottom-6 left-1/2 -translate-x-1/2 w-[min(95vw,1060px)] rounded-2xl bg-[#0B0E17]/84 backdrop-blur-2xl border border-white/[0.12] shadow-[0_20px_50px_rgba(0,0,0,0.75)] px-5 py-3.5 z-20 transition-all duration-300 pointer-events-auto flex flex-col space-y-2.5 ${
+        className={`fixed bottom-6 left-1/2 -translate-x-1/2 w-[min(95vw,1060px)] rounded-2xl bg-[#0B0E17]/95 backdrop-blur-2xl border border-white/15 shadow-[0_20px_50px_rgba(0,0,0,0.75)] px-5 py-3.5 z-20 transition-all duration-300 pointer-events-auto flex flex-col space-y-2.5 ${
           visible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4 pointer-events-none'
         }`}
       >

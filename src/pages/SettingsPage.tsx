@@ -41,6 +41,8 @@ import {
   X,
   SkipForward,
   Clock,
+  RotateCcw,
+  Sparkles,
 } from 'lucide-react';
 import { useAuthStore, SavedServer } from '../stores/useAuthStore';
 import { useDanmuStore, DanmuServerEntry } from '../stores/useDanmuStore';
@@ -58,6 +60,12 @@ import {
 } from '../player/preloadUtils';
 import { useMediaStore } from '../stores/useMediaStore';
 import { useSyncStore, SyncProviderType } from '../stores/useSyncStore';
+import {
+  formatUpdateBytes,
+  formatUpdateSpeed,
+  hasUnignoredUpdate,
+  useUpdaterStore,
+} from '../stores/useUpdaterStore';
 import {
   exportLocalConfig,
   parseBackupPayload,
@@ -111,6 +119,8 @@ export const SettingsPage: React.FC = () => {
   } = useAuthStore();
 
   const clearMediaCache = useMediaStore((s) => s.clearMediaCache);
+  const updater = useUpdaterStore();
+  const hasPendingUpdateBadge = useUpdaterStore(hasUnignoredUpdate);
 
   const {
     servers: danmuServers,
@@ -547,7 +557,7 @@ export const SettingsPage: React.FC = () => {
             { id: 'playback', label: '播放与内核', icon: PlaySquare },
             { id: 'network', label: '网络与代理', icon: Globe },
             { id: 'sync', label: '配置同步与备份', icon: FolderSync },
-            { id: 'about', label: '关于 Nocta', icon: Info },
+            { id: 'about', label: '关于与更新', icon: Info, hasBadge: hasPendingUpdateBadge },
           ].map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;
@@ -555,14 +565,23 @@ export const SettingsPage: React.FC = () => {
               <button
                 key={item.id}
                 onClick={() => handleTabChange(item.id as TabKey)}
-                className={`w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-xs font-medium transition cursor-pointer text-left ${
+                className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-medium transition cursor-pointer text-left ${
                   isActive
                     ? 'bg-primary text-white shadow-lg shadow-primary/20'
                     : 'text-gray-400 hover:text-white hover:bg-white/5'
                 }`}
               >
-                <Icon className="w-4 h-4 flex-shrink-0" />
-                <span>{item.label}</span>
+                <span className="flex items-center space-x-3">
+                  <Icon className="w-4 h-4 flex-shrink-0" />
+                  <span>{item.label}</span>
+                </span>
+                {item.hasBadge && (
+                  <span
+                    className={`w-2 h-2 rounded-full ${
+                      isActive ? 'bg-white' : 'bg-[#38BDF8] animate-pulse'
+                    }`}
+                  />
+                )}
               </button>
             );
           })}
@@ -2642,24 +2661,277 @@ export const SettingsPage: React.FC = () => {
             </div>
           )}
 
-          {/* 7. 关于 Nocta 面板 */}
+          {/* 7. 关于与更新面板 */}
           {activeTab === 'about' && (
             <div className="space-y-6">
-              <div className="flex items-center space-x-4 border-b border-white/10 pb-6">
-                <img
-                  src="/app-icon.svg"
-                  alt="Nocta"
-                  className="w-16 h-16 rounded-2xl p-1 bg-white/5 border border-white/10"
-                />
-                <div>
-                  <h2 className="text-xl font-bold text-white flex items-center space-x-2">
-                    <span>Nocta · 夜幕</span>
-                    <span className="text-xs px-2 py-0.5 rounded-full bg-white/10 text-gray-300 font-mono font-normal">
-                      v0.1.0-alpha.12
-                    </span>
-                  </h2>
-                  <p className="text-xs text-gray-400 mt-1">
-                    沉浸式暗色私人影院客户端 · 深度集成 Emby/Jellyfin 与高性能全网弹幕
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/10 pb-6">
+                <div className="flex items-center space-x-4">
+                  <img
+                    src="/app-icon.svg"
+                    alt="Nocta"
+                    className="w-16 h-16 rounded-2xl p-1 bg-white/5 border border-white/10"
+                  />
+                  <div>
+                    <h2 className="text-xl font-bold text-white flex flex-wrap items-center gap-2">
+                      <span>Nocta · 夜幕</span>
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-white/10 text-gray-200 font-mono font-normal">
+                        v{updater.runtimeVersion}
+                      </span>
+                      {updater.platformTarget && (
+                        <span className="text-[11px] px-2 py-0.5 rounded-full bg-sky-500/10 border border-sky-400/25 text-sky-300 font-mono font-normal">
+                          {updater.platformTarget}
+                        </span>
+                      )}
+                    </h2>
+                    <p className="text-xs text-gray-400 mt-1">
+                      沉浸式暗色私人影院客户端 · 深度集成 Emby/Jellyfin 与高性能全网弹幕
+                    </p>
+                    <p className="text-[11px] text-gray-500 mt-1 flex items-center space-x-1.5">
+                      <Clock className="w-3 h-3" />
+                      <span>
+                        上次检查：
+                        {updater.lastCheckedAt
+                          ? new Date(updater.lastCheckedAt).toLocaleString()
+                          : '尚未检查'}
+                      </span>
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => updater.checkForUpdates({ silent: false })}
+                  disabled={
+                    updater.status === 'checking' ||
+                    updater.status === 'downloading' ||
+                    updater.status === 'installing'
+                  }
+                  className="px-4 py-2 rounded-xl bg-primary hover:bg-sky-400 text-slate-950 font-semibold text-xs inline-flex items-center space-x-2 transition cursor-pointer disabled:opacity-50 self-start sm:self-center shadow-lg shadow-sky-500/20"
+                >
+                  <RefreshCw
+                    className={`w-3.5 h-3.5 ${updater.status === 'checking' ? 'animate-spin' : ''}`}
+                  />
+                  <span>
+                    {updater.status === 'checking' ? '正在检查更新...' : '检查更新'}
+                  </span>
+                </button>
+              </div>
+
+              {/* 更新状态展示卡 */}
+              {updater.status === 'up_to_date' && (
+                <div className="p-3.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center space-x-2.5 text-xs text-emerald-200">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+                  <span>当前 v{updater.runtimeVersion} 已是所选通道的最新版本。</span>
+                </div>
+              )}
+
+              {updater.status === 'error' && updater.error && (
+                <div className="p-3.5 rounded-xl bg-red-500/10 border border-red-500/30 flex items-start justify-between gap-3 text-xs text-red-200">
+                  <div className="flex items-start space-x-2.5 min-w-0">
+                    <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
+                    <div className="space-y-1 min-w-0">
+                      <p className="font-medium break-words">{updater.error}</p>
+                      <p className="text-[11px] text-red-300/80">
+                        请检查系统/手动代理设置，或尝试在下方配置 GitHub 下载加速镜像前缀。
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => updater.checkForUpdates({ silent: false })}
+                    className="px-2.5 py-1 rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-100 text-[11px] font-medium shrink-0 transition cursor-pointer"
+                  >
+                    重试
+                  </button>
+                </div>
+              )}
+
+              {updater.updateInfo &&
+                (updater.status === 'available' ||
+                  updater.status === 'downloading' ||
+                  updater.status === 'installing' ||
+                  updater.status === 'ready_to_restart') && (
+                  <div className="p-4 rounded-2xl bg-sky-500/[0.08] border border-sky-400/30 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center space-x-2">
+                        <Sparkles className="w-4 h-4 text-sky-400" />
+                        <span className="text-sm font-bold text-white">
+                          发现新版本 v{updater.updateInfo.version}
+                        </span>
+                        <span
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-semibold border ${
+                            updater.updateInfo.channel === 'prerelease'
+                              ? 'bg-amber-500/15 border-amber-400/30 text-amber-300'
+                              : 'bg-emerald-500/15 border-emerald-400/30 text-emerald-300'
+                          }`}
+                        >
+                          {updater.updateInfo.channel === 'prerelease' ? '预发布' : '正式版'}
+                        </span>
+                        <span className="px-1.5 py-0.5 rounded bg-white/5 border border-white/10 text-[10px] text-slate-300 font-mono">
+                          {updater.updateInfo.usedProxy ? '已走代理' : '直连'}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center space-x-2">
+                        <button
+                          onClick={() => updater.setDetailsModalOpen(true)}
+                          className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-slate-200 text-xs transition cursor-pointer"
+                        >
+                          完整详情
+                        </button>
+                        {updater.status === 'ready_to_restart' ? (
+                          <button
+                            onClick={() => updater.relaunchToApply()}
+                            className="px-3.5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs inline-flex items-center space-x-1.5 transition cursor-pointer"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                            <span>立即重启更新</span>
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => updater.installUpdate()}
+                            disabled={
+                              updater.status === 'downloading' || updater.status === 'installing'
+                            }
+                            className="px-3.5 py-1.5 rounded-lg bg-[#38BDF8] hover:bg-[#0ea5e9] text-slate-950 font-bold text-xs inline-flex items-center space-x-1.5 transition cursor-pointer disabled:opacity-60"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                            <span>
+                              {updater.status === 'installing'
+                                ? '正在安装...'
+                                : updater.status === 'downloading'
+                                ? '正在下载...'
+                                : '下载并安装'}
+                            </span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {updater.updateInfo.body && (
+                      <div className="max-h-36 overflow-y-auto custom-scrollbar rounded-xl bg-black/30 border border-white/[0.07] p-3 text-xs text-slate-300 leading-relaxed whitespace-pre-wrap">
+                        {updater.updateInfo.body}
+                      </div>
+                    )}
+
+                    {(updater.status === 'downloading' || updater.status === 'installing') && (
+                      <div className="space-y-1.5 pt-1">
+                        <div className="w-full h-2 rounded-full bg-black/40 overflow-hidden">
+                          <div
+                            className="h-full bg-gradient-to-r from-sky-400 to-cyan-300 transition-all duration-150"
+                            style={{
+                              width: `${
+                                typeof updater.progress?.percent === 'number'
+                                  ? Math.max(0, Math.min(100, Math.round(updater.progress.percent)))
+                                  : 12
+                              }%`,
+                            }}
+                          />
+                        </div>
+                        <div className="flex items-center justify-between text-[11px] text-slate-400 font-mono tabular-nums">
+                          <span>
+                            {formatUpdateBytes(updater.progress?.downloadedBytes)}
+                            {updater.progress?.totalBytes
+                              ? ` / ${formatUpdateBytes(updater.progress.totalBytes)}`
+                              : ''}
+                          </span>
+                          <span>
+                            {[
+                              typeof updater.progress?.percent === 'number'
+                                ? `${Math.round(updater.progress.percent)}%`
+                                : null,
+                              formatUpdateSpeed(updater.progress?.speedBps),
+                            ]
+                              .filter(Boolean)
+                              .join(' · ')}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+              {/* 自动更新偏好设置 */}
+              <div className="p-4 rounded-xl bg-white/[0.03] border border-white/10 space-y-4">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <h3 className="text-xs font-semibold text-white">启动时自动静默检查更新</h3>
+                    <p className="text-[11px] text-gray-400 mt-0.5">
+                      启动后延迟后台检查更新并智能复用全局代理，观影播放期间绝不打扰。
+                    </p>
+                  </div>
+                  <label className="relative inline-flex items-center cursor-pointer flex-shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={updater.autoCheckOnStartup}
+                      onChange={(e) =>
+                        updater.updatePreferences({ autoCheckOnStartup: e.target.checked })
+                      }
+                      className="sr-only peer"
+                    />
+                    <div className="w-10 h-5 bg-white/10 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary" />
+                  </label>
+                </div>
+
+                <div className="border-t border-white/[0.06] pt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-xs font-semibold text-white">更新通道</h3>
+                    <p className="text-[11px] text-gray-400 mt-0.5">
+                      Alpha / Beta 测试版默认订阅预发布通道，同时接收更高版本的正式版升级。
+                    </p>
+                  </div>
+                  <div className="inline-flex rounded-xl bg-black/40 p-1 border border-white/10 self-start">
+                    {(
+                      [
+                        { id: 'stable', label: '正式版 (Stable)' },
+                        { id: 'prerelease', label: '预发布尝鲜版' },
+                      ] as const
+                    ).map((opt) => {
+                      const active = updater.channel === opt.id;
+                      return (
+                        <button
+                          key={opt.id}
+                          onClick={() => updater.updatePreferences({ channel: opt.id })}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-medium transition cursor-pointer ${
+                            active
+                              ? 'bg-primary text-slate-950 font-semibold shadow'
+                              : 'text-gray-400 hover:text-white'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="border-t border-white/[0.06] pt-4 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xs font-semibold text-white">
+                      GitHub 下载加速镜像前缀（可选）
+                    </h3>
+                    {updater.ignoredVersion && (
+                      <div className="flex items-center space-x-2 text-[11px] text-amber-300">
+                        <span>已忽略 v{updater.ignoredVersion}</span>
+                        <button
+                          onClick={() => updater.clearIgnoredVersion()}
+                          className="text-sky-400 hover:underline cursor-pointer"
+                        >
+                          恢复提醒
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  <input
+                    type="text"
+                    value={updater.mirrorPrefix}
+                    onChange={(e) => updater.updatePreferences({ mirrorPrefix: e.target.value })}
+                    onBlur={(e) =>
+                      updater.updatePreferences({ mirrorPrefix: e.target.value.trim() })
+                    }
+                    placeholder="例如 https://gh-proxy.example.com/ （留空则直接连接或走全局代理）"
+                    className="w-full px-3 py-2 rounded-xl bg-black/40 border border-white/10 focus:border-sky-400/60 focus:outline-none text-xs text-gray-200 placeholder:text-gray-500 font-mono"
+                  />
+                  <p className="text-[11px] text-gray-500 leading-relaxed">
+                    所有更新安装包均强制通过内置 Ed25519 公钥验签，使用镜像仅作网络中转，任何未签名或篡改文件均会被自动拒绝。
                   </p>
                 </div>
               </div>

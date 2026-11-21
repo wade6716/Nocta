@@ -118,9 +118,9 @@
   - 提供一键复制全部纯文本参数功能，方便用户向服务端管理员或开发者提供完整的故障排查报告。
 
 ### 8. 版本发布与 GitHub Actions 自动化打包规范 (Release & Packaging Pipeline)
-- **版本号格式规范与 Windows MSI 避坑**：
-  - Windows MSI (WiX) 安装包生成器要求版本格式必须为纯数字（`major.minor.patch`，如 `0.1.0`），如果 `src-tauri/tauri.conf.json` 中配置了非数字后缀（如 `0.1.0-alpha.2`），打包时会直接报错中断。
-  - 因此，Pre-release 版本（Alpha / Beta / RC）必须将版本标记在 `package.json`（如 `0.1.0-alpha.10`）与 Git tag `v0.1.0-alpha.10`，由 CI 自动识别 `(alpha|beta|rc)` 为预发布状态，`tauri.conf.json` 保持为标准数字 SemVer（`0.1.0`）；
+- **版本号单一数据源 (`../package.json`)**：
+  - 由于项目桌面端打包已移除 Windows WiX MSI（仅保留 Windows NSIS、macOS `.app`/`.dmg`、Linux `.deb`），[`src-tauri/tauri.conf.json`](file:///d:/wade/code/emby-tauri-player/src-tauri/tauri.conf.json) 直接使用 `"version": "../package.json"`、前端通过 Vite `define.__APP_VERSION__` 注入同一版本号，实现全栈单一数据源。
+  - 若需兼容旧版 Pre-release 标签，仍保持在 `package.json`（如 `0.1.0-alpha.13`）与 Git tag `v0.1.0-alpha.13` 同步标记，CI 自动识别 `(alpha|beta|rc)` 为预发布状态。
 - **GitHub Actions Tag 缓存隔离避坑与推荐发版流程**：
   - **缓存作用域原理**：GitHub Actions 原生缓存严格按 `github.ref` 隔离——新推 Tag（`refs/tags/v0.1.0-alpha.11`）无法读取旧 Tag（`alpha.10`）的缓存，只能回退读取默认分支 `refs/heads/main`。若只在推 Tag 时构建 Release，`main` 作用域长期没有 Release 缓存，会导致 4 端每次 100% 冷编译。
   - **推荐日常发版方式（`workflow_dispatch` on `main`）**：
@@ -378,3 +378,21 @@
   - **严禁盲发无 `tag` 图片请求**：禁止任何组件直接用 `undefined` tag 调用 `buildItemImageUrl` 探测图片是否存在，也不得在 `onError` 中剥离 `&tag=` 重试（例如原 `DetailPage` 剥离 tag 重试与 [`MediaCard.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/media/MediaCard.tsx) 未带步进标记的 `onError` 死循环重试）。
   - 统一通过 [`embyClient.ts`](file:///d:/wade/code/emby-tauri-player/src/api/embyClient.ts) 提供的 `resolveEpisodeThumbnailUrl`、`resolveItemPosterUrl`、`resolveItemBackdropUrl` 按「自带 tag -> 父级/所属剧集已带 tag 背景/缩略图/封面 -> 空串」顺序寻址；若全部无可用 tag，直接渲染本地暗色占位视图，**零网络请求**。
   - 若带 `tag` 的图片仍偶发请求失败（例如服务端 WebP 编码异常），各视图的 `onError` 必须通过 `dataset.fallbackStep` 或阶段计数器限制重试上限：仅通过 `stripImageFormatWebp` 剥离 `&format=webp`（保留 `&tag=`）重试一次，必要时切换已校验的剧集大图，最终兜底本地内联 SVG 占位图或隐藏 `<img>` 并锁定 `'done'` 状态。
+
+### 27. 跨平台自动更新架构与发版清单规范 (Tauri v2 Updater)
+- **Ed25519 密钥与构建配置隔离红线**：
+  - `tauri-plugin-updater` 强制要求二进制签名验签：公钥写入 [`src-tauri/tauri.conf.json`](file:///d:/wade/code/emby-tauri-player/src-tauri/tauri.conf.json) 的 `plugins.updater.pubkey`；**私钥绝不提交入库**，保存在仓库外 `~/.tauri/nocta.key` 并由 GitHub Secrets `TAURI_SIGNING_PRIVATE_KEY`（及可选 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`）在 CI 中注入。
+  - `createUpdaterArtifacts: true` 仅配置在 [`src-tauri/tauri.ci.conf.json`](file:///d:/wade/code/emby-tauri-player/src-tauri/tauri.ci.conf.json)，禁止放入基础 `tauri.conf.json`，确保本地无私钥运行 `pnpm tauri build` 时不会因缺少私钥报错中断。
+- **版本号对齐与 `reqwest 0.13` SOCKS 特性统一**：
+  - `tauri-conf` 的 `version` 使用 `"../package.json"`，前端通过 [`vite.config.ts`](file:///d:/wade/code/emby-tauri-player/vite.config.ts) 注入 `__APP_VERSION__`，避免旧版硬编码 `0.1.0` 导致 SemVer 判定 `0.1.0-alpha.x < 0.1.0` 而永不提示升级。
+  - `tauri-plugin-updater` 2.14.1 本身不暴露 `socks` feature 且内部依赖 `reqwest 0.13`。在 [`src-tauri/Cargo.toml`](file:///d:/wade/code/emby-tauri-player/src-tauri/Cargo.toml) 中通过重命名依赖 `updater-reqwest-socks = { package = "reqwest", version = "0.13", default-features = false, features = ["socks"] }` 触发 Cargo 特性统一，使更新器完整支持全局配置中的 `socks5://` / `socks5h://` 代理，且在 [`updater.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/updater.rs) 中实现代理失败自动 `.no_proxy()` 直连回退。
+- **CI 并发竞态消除与预发布/正式双通道清单**：
+  - 4 端并发矩阵禁止在各 OS Job 中开启 `includeUpdaterJson: true`（会并发覆写删除 Release 下的 `latest.json` 触发 404）；统一在 [`release.yml`](file:///d:/wade/code/emby-tauri-player/.github/workflows/release.yml) 设置 `includeUpdaterJson: false`，macOS 必须传入 `--bundles app,dmg` 以生成 `.app.tar.gz` + `.sig`。
+  - 由单任务 `finalize-release` 清理旧资产时**务必豁免 `latest.json`、`*.sig`、`*.tar.gz`**，并通过 [`scripts/generate-updater-manifest.mjs`](file:///d:/wade/code/emby-tauri-player/scripts/generate-updater-manifest.mjs) 统一汇聚 4 端 `.sig` 与包 URL 生成 `latest.json`，同时推送 `prerelease.json`（及正式版 `stable.json`）至孤儿分支 `updater-manifests`，通过 `raw.githubusercontent.com` 实现无 API 限流的预发布更新检查。
+
+### 28. Tailwind CSS v3 透明度修饰符与透明 WebView 叠层可读性红线
+- **Tailwind v3 非 5 倍数透明度修饰符静默失效坑点**：
+  - 本项目使用 Tailwind CSS v3（`tailwindcss@3.4`），内置 `opacity` Scale 仅包含 5 的倍数（`/0`、`/5`、`/10`、…、`/95`、`/100`）；若编写裸非 5 倍数修饰符（如 `bg-[#0B0E17]/88`、`/92`、`/82`、`/84`、`/98` 或 `/12`、以及非内置 `z-35`），Tailwind 构建器不会报错，而是**直接丢弃整条 CSS 规则**，导致容器回退为 `background-color: transparent`（完全透明、无底色）。
+  - **强制规范**：所有透明度修饰符必须使用 5 的倍数（`/85`、`/90`、`/95` 等）或显式方括号任意值语法（如 `/[0.92]`、`z-[35]`）；修改样式后建议抽查 `dist/assets/*.css` 确认类规则实际生成。
+- **底层原生视频穿透视窗的可读性要求**：
+  - 在透明 WebView 叠加底层 `libmpv`（Win32/Direct3D 或 macOS NSWindow）渲染视频画面的架构下，CSS `backdrop-blur-*` **无法模糊原生底层视频像素**。因此播放器侧边抽屉（[`VideoProPanel.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/VideoProPanel.tsx)、[`DanmakuDrawer.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/DanmakuDrawer.tsx)、[`EpisodeDrawer.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/EpisodeDrawer.tsx)）、悬浮弹出层（[`NetworkProxyPopover.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/NetworkProxyPopover.tsx)、[`PlayerContextMenu.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/PlayerContextMenu.tsx)、[`MiniActionHud.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/MiniActionHud.tsx)、[`UpNextOverlay.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/UpNextOverlay.tsx)、[`SkipNoticeToast.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/SkipNoticeToast.tsx)）及 OSD 控制栏（[`PlayerOsd.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/PlayerOsd.tsx)）必须显式使用高不透明度深色底（`bg-[#0B0E17]/95` 或 `/90`）搭配高对比度边框（`border-white/15`），确保在高亮画面上文字依然清晰可读，同时保持点击空白处遮罩为 `bg-transparent` 以便实时预览调校画面。

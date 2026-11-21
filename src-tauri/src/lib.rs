@@ -3,6 +3,7 @@ mod sync;
 mod system;
 mod osd_overlay;
 mod preload;
+mod updater;
 #[cfg(target_os = "macos")]
 mod mpv_embed;
 
@@ -281,9 +282,11 @@ pub fn run() {
 
             Ok(())
         })
+        .manage(updater::UpdaterState::default())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_libmpv::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             attach_mpv_window,
             detach_mpv_window,
@@ -306,6 +309,10 @@ pub fn run() {
             preload::diagnose_stream_url,
             preload::start_stream_relay,
             preload::stop_stream_relay,
+            updater::get_updater_runtime_info,
+            updater::check_app_update,
+            updater::download_and_install_update,
+            updater::relaunch_app,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

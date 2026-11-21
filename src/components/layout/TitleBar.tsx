@@ -5,6 +5,7 @@ import { isTauriEnvironment } from '../../api/http';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { ServerSwitcherDropdown } from './ServerSwitcherDropdown';
 import { useAuthStore } from '../../stores/useAuthStore';
+import { hasUnignoredUpdate, useUpdaterStore } from '../../stores/useUpdaterStore';
 
 interface TitleBarProps {
   title?: string;
@@ -19,6 +20,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
   const location = useLocation();
   const isHomePage = location.pathname === '/';
   const currentServer = useAuthStore((s) => s.getCurrentServer());
+  const hasUpdate = useUpdaterStore(hasUnignoredUpdate);
   const [isMaximized, setIsMaximized] = useState(false);
   const isTauri = isTauriEnvironment();
   const isMac = typeof navigator !== 'undefined' && /macintosh|mac os x/i.test(navigator.userAgent);
@@ -125,12 +127,15 @@ export const TitleBar: React.FC<TitleBarProps> = ({
           )
         ) : (
           <button
-            onClick={() => navigate('/settings')}
-            className="flex items-center space-x-1.5 px-3 py-1.5 rounded-full bg-white/[0.04] hover:bg-white/[0.08] text-slate-300 hover:text-white border border-white/[0.08] hover:border-white/[0.15] transition cursor-pointer text-xs"
-            title="系统设置与备份配置导入"
+            onClick={() => navigate(hasUpdate ? '/settings?tab=about' : '/settings')}
+            className="relative flex items-center space-x-1.5 px-3 py-1.5 rounded-full bg-white/[0.04] hover:bg-white/[0.08] text-slate-300 hover:text-white border border-white/[0.08] hover:border-white/[0.15] transition cursor-pointer text-xs"
+            title={hasUpdate ? '发现新版本 · 点击前往更新与设置' : '系统设置与备份配置导入'}
           >
             <Settings className="w-3.5 h-3.5 text-sky-400" />
             <span>设置 & 导入</span>
+            {hasUpdate && (
+              <span className="w-2 h-2 rounded-full bg-[#38BDF8] animate-pulse" />
+            )}
           </button>
         )}
       </div>

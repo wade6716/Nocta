@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { useMediaStore } from '../../stores/useMediaStore';
 import { useAuthStore } from '../../stores/useAuthStore';
+import { hasUnignoredUpdate, useUpdaterStore } from '../../stores/useUpdaterStore';
 
 interface SidebarProps {
   collapsed?: boolean;
@@ -41,6 +42,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const { views, viewCounts } = useMediaStore();
   const currentServer = useAuthStore((s) => s.getCurrentServer());
+  const hasUpdate = useUpdaterStore(hasUnignoredUpdate);
 
   const currentPath = location.pathname;
 
@@ -126,7 +128,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 isCollapsed ? 'justify-center px-0' : 'px-3 gap-3'
               } ${
                 currentPath === '/' && !location.hash
-                  ? 'bg-[#38BDF8]/12 text-[#38BDF8] font-medium'
+                  ? 'bg-[#38BDF8]/15 text-[#38BDF8] font-medium'
                   : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.04]'
               }`}
               title="首页发现"
@@ -145,7 +147,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 isCollapsed ? 'justify-center px-0' : 'px-3 gap-3'
               } ${
                 currentPath === '/continue-watching'
-                  ? 'bg-[#38BDF8]/12 text-[#38BDF8] font-medium'
+                  ? 'bg-[#38BDF8]/15 text-[#38BDF8] font-medium'
                   : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.04]'
               }`}
               title="继续观看与最近播放"
@@ -164,7 +166,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 isCollapsed ? 'justify-center px-0' : 'justify-between px-3'
               } ${
                 currentPath === '/search'
-                  ? 'bg-[#38BDF8]/12 text-[#38BDF8] font-medium'
+                  ? 'bg-[#38BDF8]/15 text-[#38BDF8] font-medium'
                   : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.04]'
               }`}
               title="全库聚合搜索 (Ctrl+K)"
@@ -211,7 +213,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       isCollapsed ? 'justify-center px-0' : 'justify-between px-3'
                     } ${
                       isSelected
-                        ? 'bg-[#38BDF8]/12 text-[#38BDF8] font-medium'
+                        ? 'bg-[#38BDF8]/15 text-[#38BDF8] font-medium'
                         : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.04]'
                     }`}
                     title={v.Name}
@@ -247,21 +249,33 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="p-2 border-t border-white/[0.06] space-y-1">
         {/* 系统设置 */}
         <button
-          onClick={() => handleNavClick('/settings')}
+          onClick={() => handleNavClick('/settings', hasUpdate ? 'about' : undefined)}
           className={`w-full h-10 rounded-xl flex items-center text-sm transition-all cursor-pointer relative ${
-            isCollapsed ? 'justify-center px-0' : 'px-3 gap-3'
+            isCollapsed ? 'justify-center px-0' : 'justify-between px-3'
           } ${
             currentPath === '/settings'
-              ? 'bg-[#38BDF8]/12 text-[#38BDF8] font-medium'
+              ? 'bg-[#38BDF8]/15 text-[#38BDF8] font-medium'
               : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.04]'
           }`}
-          title="系统设置"
+          title={hasUpdate ? '系统设置 · 发现新版本' : '系统设置'}
         >
           {currentPath === '/settings' && (
             <span className="absolute left-0 w-1 h-5 rounded-full bg-[#38BDF8]" />
           )}
-          <Settings className="w-4 h-4 flex-shrink-0" />
-          {!isCollapsed && <span>系统设置</span>}
+          <div className={`flex items-center ${isCollapsed ? 'justify-center' : 'gap-3'}`}>
+            <div className="relative flex items-center justify-center">
+              <Settings className="w-4 h-4 flex-shrink-0" />
+              {hasUpdate && isCollapsed && (
+                <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-[#38BDF8] ring-2 ring-[#0B0E17] animate-pulse" />
+              )}
+            </div>
+            {!isCollapsed && <span>系统设置</span>}
+          </div>
+          {!isCollapsed && hasUpdate && (
+            <span className="px-1.5 py-0.5 rounded-full bg-[#38BDF8]/20 border border-[#38BDF8]/40 text-[#38BDF8] text-[10px] font-semibold">
+              新版本
+            </span>
+          )}
         </button>
 
         {/* 展开按钮（仅折叠时展示） */}

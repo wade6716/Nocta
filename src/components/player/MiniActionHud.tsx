@@ -78,7 +78,7 @@ export const MiniActionHud: React.FC<MiniActionHudProps> = ({ hud, fastForwardRa
       {/* 顶部居中：长按 → 临时倍速快进常驻动效胶囊 */}
       {fastForwardRate !== null && (
         <div className="fixed top-6 left-1/2 -translate-x-1/2 z-40 pointer-events-none select-none animate-in fade-in slide-in-from-top-2 duration-150">
-          <div className="flex items-center space-x-2 px-4 py-1.5 rounded-full bg-[#0B0E17]/90 backdrop-blur-2xl border border-sky-400/40 shadow-[0_8px_30px_rgba(56,189,248,0.25)] text-xs font-semibold text-white">
+          <div className="flex items-center space-x-2 px-4 py-1.5 rounded-full bg-[#0B0E17]/95 backdrop-blur-2xl border border-sky-400/40 shadow-[0_8px_30px_rgba(56,189,248,0.25)] text-xs font-semibold text-white">
             <FastForward className="w-3.5 h-3.5 text-sky-400 animate-pulse" />
             <span className="font-mono tabular-nums text-sky-300 font-bold">
               {fastForwardRate}x
@@ -94,7 +94,7 @@ export const MiniActionHud: React.FC<MiniActionHudProps> = ({ hud, fastForwardRa
           key={hud.id}
           className="fixed top-[20%] left-1/2 -translate-x-1/2 z-40 pointer-events-none select-none animate-in fade-in zoom-in-95 duration-150"
         >
-          <div className="min-w-[180px] max-w-sm px-4 py-2.5 rounded-2xl bg-[#0B0E17]/88 backdrop-blur-2xl border border-white/[0.14] shadow-[0_16px_40px_rgba(0,0,0,0.65)] flex flex-col space-y-2">
+          <div className="min-w-[180px] max-w-sm px-4 py-2.5 rounded-2xl bg-[#0B0E17]/95 backdrop-blur-2xl border border-white/15 shadow-[0_16px_40px_rgba(0,0,0,0.65)] flex flex-col space-y-2">
             <div className="flex items-center justify-between space-x-3">
               <div className="flex items-center space-x-2.5 min-w-0">
                 {renderIcon(hud.icon, hud.progressWarn)}

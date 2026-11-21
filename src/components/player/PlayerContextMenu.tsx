@@ -121,7 +121,7 @@ export const PlayerContextMenu: React.FC<PlayerContextMenuProps> = ({
         e.preventDefault();
         e.stopPropagation();
       }}
-      className="fixed z-50 rounded-2xl bg-[#0B0E17]/92 backdrop-blur-2xl border border-white/[0.14] shadow-[0_24px_60px_rgba(0,0,0,0.8)] p-1.5 text-xs text-slate-200 select-none animate-in fade-in zoom-in-95 duration-100"
+      className="fixed z-50 rounded-2xl bg-[#0B0E17]/95 backdrop-blur-2xl border border-white/15 shadow-[0_24px_60px_rgba(0,0,0,0.8)] p-1.5 text-xs text-slate-200 select-none animate-in fade-in zoom-in-95 duration-100"
     >
       {/* 播放与连播 */}
       <button

@@ -116,7 +116,7 @@ jobs:
 
           # 2. macOS Apple Silicon (M1/M2/M3/M4 系列芯片)
           - platform: macos-15
-            args: '--target aarch64-apple-darwin --bundles dmg --config src-tauri/tauri.ci.conf.json'
+            args: '--target aarch64-apple-darwin --bundles app,dmg --config src-tauri/tauri.ci.conf.json'
             rust_targets: 'aarch64-apple-darwin'
             name_suffix: 'macOS Apple Silicon'
             asset_name_pattern: '[name]_[version]_macos_aarch64[ext]'
@@ -126,7 +126,7 @@ jobs:
 
           # 3. macOS Intel (x86_64 系列芯片，使用原生 Intel Runner 确保 Homebrew dylib 架构一致)
           - platform: macos-15-intel
-            args: '--target x86_64-apple-darwin --bundles dmg --config src-tauri/tauri.ci.conf.json'
+            args: '--target x86_64-apple-darwin --bundles app,dmg --config src-tauri/tauri.ci.conf.json'
             rust_targets: 'x86_64-apple-darwin'
             name_suffix: 'macOS Intel'
             asset_name_pattern: '[name]_[version]_macos_x64[ext]'
@@ -369,19 +369,22 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tauriScript: 'cargo tauri'
           tagName: ${{ needs.build-frontend.outputs.tag_name }}
           releaseName: ${{ needs.build-frontend.outputs.release_name }}
           generateReleaseNotes: true
+          includeUpdaterJson: false
           assetNamePattern: ${{ matrix.asset_name_pattern }}
           releaseDraft: ${{ needs.build-frontend.outputs.release_draft }}
           prerelease: ${{ needs.build-frontend.outputs.is_prerelease }}
           args: ${{ matrix.args }}
 
-  # 阶段 3：无论 Release 是否已提前创建，构建完成后由该 Job 统一强制更新 Release 正文与清理旧名称产物
+  # 阶段 3：无论 Release 是否已提前创建，构建完成后由该 Job 统一强制更新 Release 正文、清理旧名称产物并汇总更新清单
   finalize-release:
-    name: Finalize Release Notes & Cleanup
+    name: Finalize Release Notes & Updater Manifest
     needs: [build-frontend, release-tauri]
     runs-on: ubuntu-latest
     permissions:
@@ -392,11 +395,20 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Sync Release Notes & Cleanup Legacy Assets
+      - name: Setup Node.js for Manifest Generation
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Sync Release Notes, Cleanup Legacy Assets & Publish Updater Manifests
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ needs.build-frontend.outputs.tag_name }}
+          IS_PRERELEASE: ${{ needs.build-frontend.outputs.is_prerelease }}
+          RELEASE_DRAFT: ${{ needs.build-frontend.outputs.release_draft }}
         run: |
+          set -euo pipefail
+
           # 1. 基于仓库模板生成正文头部与平台指引
           cp .github/release-template.md release_notes.md
 
@@ -408,14 +420,75 @@ jobs:
           if [ -n "$CHANGELOG" ]; then
             echo "" >> release_notes.md
             echo "$CHANGELOG" >> release_notes.md
+            printf '%s\n' "$CHANGELOG" > updater_notes.md
+          else
+            printf 'Nocta · 夜幕 %s 更新发布\n' "$TAG_NAME" > updater_notes.md
           fi
 
           # 3. 强制覆盖更新已有的 Release 正文与标题 (避免因 Release 已存在而漏更)
           gh release edit "$TAG_NAME" -F release_notes.md --title "Nocta · 夜幕 $TAG_NAME"
 
-          # 4. 自动清理旧格式遗留资产文件 (不包含 windows/macos/linux 关键词的文件)
-          OLD_ASSETS=$(gh release view "$TAG_NAME" --json assets --jq '.assets[] | select(.name | test("(windows|macos|linux)") | not) | .name' 2>/dev/null || true)
+          # 4. 自动清理旧格式遗留资产文件 (保留跨端安装包、.sig 签名、.tar.gz 与 latest.json)
+          OLD_ASSETS=$(gh release view "$TAG_NAME" --json assets --jq '.assets[] | select(.name | test("(windows|macos|linux|^latest\\.json$|\\.sig$|\\.tar\\.gz$)") | not) | .name' 2>/dev/null || true)
           for asset in $OLD_ASSETS; do
             echo "Deleting legacy unbranded asset: $asset"
             gh release delete-asset "$TAG_NAME" "$asset" -y || true
           done
+
+          # 5. 汇总 4 端 .sig 签名并生成无并发竞态的统一 latest.json
+          SIG_DIR=$(mktemp -d)
+          ASSETS_JSON=$(mktemp)
+          gh release view "$TAG_NAME" --json assets > "$ASSETS_JSON"
+          gh release download "$TAG_NAME" -p "*.sig" -D "$SIG_DIR" || true
+
+          node scripts/generate-updater-manifest.mjs \
+            --assets-json "$ASSETS_JSON" \
+            --sig-dir "$SIG_DIR" \
+            --version "$TAG_NAME" \
+            --notes-file updater_notes.md \
+            --output latest.json
+
+          PLATFORM_COUNT=$(node -e "const m = JSON.parse(require('fs').readFileSync('latest.json', 'utf8')); console.log(Object.keys(m.platforms || {}).length);")
+          if [ "$PLATFORM_COUNT" -eq 0 ]; then
+            echo "::warning::No signed updater platforms found in release assets (ensure TAURI_SIGNING_PRIVATE_KEY secret is configured). Skipping updater manifest upload."
+            rm -rf "$SIG_DIR" "$ASSETS_JSON"
+            exit 0
+          fi
+
+          gh release upload "$TAG_NAME" latest.json --clobber
+
+          # 6. 非草稿发布时同步推送至独立 updater-manifests 孤儿分支，支持 pre-release 无 API 限流检查更新
+          if [ "$RELEASE_DRAFT" != "true" ]; then
+            MANIFEST_REPO=$(mktemp -d)
+            REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+            if git clone --depth 1 --branch updater-manifests "$REPO_URL" "$MANIFEST_REPO" 2>/dev/null; then
+              pushd "$MANIFEST_REPO" >/dev/null
+            else
+              git clone --depth 1 "$REPO_URL" "$MANIFEST_REPO"
+              pushd "$MANIFEST_REPO" >/dev/null
+              git checkout --orphan updater-manifests
+              git rm -rf . >/dev/null 2>&1 || true
+            fi
+
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+            cp "${GITHUB_WORKSPACE}/latest.json" prerelease.json
+            git add prerelease.json
+
+            if [ "$IS_PRERELEASE" != "true" ]; then
+              cp "${GITHUB_WORKSPACE}/latest.json" stable.json
+              git add stable.json
+            fi
+
+            if ! git diff --cached --quiet; then
+              git commit -m "chore(updater): publish manifest for $TAG_NAME"
+              git push origin HEAD:refs/heads/updater-manifests
+            else
+              echo "Updater manifests unchanged for $TAG_NAME."
+            fi
+            popd >/dev/null
+            rm -rf "$MANIFEST_REPO"
+          fi
+
+          rm -rf "$SIG_DIR" "$ASSETS_JSON"

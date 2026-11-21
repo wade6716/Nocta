@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Nocta",
-  "version": "0.1.0",
+  "version": "../package.json",
   "identifier": "com.wade.nocta",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -46,5 +46,16 @@
       "icons/icon.ico"
     ],
     "resources": ["lib/**/*"]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDUxQzE0Rjg1RDk5NDUzQzAKUldUQVU1VFpoVS9CVVVMelpTc0RSZ2N0OHl5YjJiVnJGZy9pWkhidFZsQ0FaWCswbk16ZjQ0SlcK",
+      "endpoints": [
+        "https://github.com/wade6716/Nocta/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

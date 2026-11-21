@@ -10,7 +10,10 @@ import { PlayerPage } from './pages/PlayerPage';
 import { SearchPage } from './pages/SearchPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
+import { UpdateBannerModal } from './components/common/UpdateBannerModal';
 import { useSyncStore } from './stores/useSyncStore';
+import { useUpdaterStore } from './stores/useUpdaterStore';
+import { isTauriEnvironment } from './api/http';
 
 export const App: React.FC = () => {
   const location = useLocation();
@@ -34,6 +37,25 @@ export const App: React.FC = () => {
           console.error('[Nocta Sync] 启动同步异常:', err);
         });
     }
+  }, []);
+
+  // 应用启动 3 秒后静默检查客户端更新（不阻塞首页加载）
+  useEffect(() => {
+    const updater = useUpdaterStore.getState();
+    updater.initRuntimeInfo();
+
+    if (!isTauriEnvironment() || !updater.autoCheckOnStartup) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      const latestState = useUpdaterStore.getState();
+      if (latestState.autoCheckOnStartup) {
+        latestState.checkForUpdates({ silent: true });
+      }
+    }, 3000);
+
+    return () => window.clearTimeout(timer);
   }, []);
 
   return (
@@ -71,6 +93,9 @@ export const App: React.FC = () => {
             </Routes>
           </main>
         </div>
+
+        {/* 桌面端自动更新无打扰浮窗与详情弹窗 */}
+        <UpdateBannerModal />
       </div>
     </ErrorBoundary>
   );

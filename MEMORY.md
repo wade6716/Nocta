@@ -588,4 +588,12 @@ pnpm tauri build
 - **独立「继续观看与最近播放」页面（[`ContinueWatchingPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/ContinueWatchingPage.tsx)、[`App.tsx`](file:///d:/wade/code/emby-tauri-player/src/App.tsx)、[`Sidebar.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/layout/Sidebar.tsx)）**：新增 `/continue-watching` 路由及侧边栏入口，以单列横向卡片列表形式展示各服务器播放进度、剩余时间、体积与详情，支持按服务器、进行中/已看完与关键词过滤，支持跨服点击直连起播或跳转详情。
 - **仅允许在首页切换服务器与切服重拉闭环（[`TitleBar.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/layout/TitleBar.tsx)、[`ServerSwitcherDropdown.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/layout/ServerSwitcherDropdown.tsx)、[`SettingsPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/SettingsPage.tsx)、[`EmbyServerModal.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/settings/EmbyServerModal.tsx)、[`LoginPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/LoginPage.tsx)、[`useAuthStore.ts`](file:///d:/wade/code/emby-tauri-player/src/stores/useAuthStore.ts)、[`useMediaStore.ts`](file:///d:/wade/code/emby-tauri-player/src/stores/useMediaStore.ts)、[`HomePage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/HomePage.tsx)）**：非首页隐藏顶栏切服下拉与弹窗切换入口、移除设置页切服按钮；修复 `setCurrentServer` 原地变异，通过 `clearMediaCache` 自增 `cacheVersion` + `HomePage` `loadReqIdRef` 竞态锁，实现切服后清除旧缓存、置顶首页并全量刷新新服媒体库。
 
+## 29. WebDAV 协议自动升级 HTTPS、自签名证书兼容与自动建目录修复 (2026-11-20)
+
+- **根因诊断**：`http://192.168.1.100:5006/nocta/nocta-sync.json` 返回 `400 Bad Request` 系纯 HTTP 请求误连 HTTPS WebDAV 端口（服务端返回 `Client sent an HTTP request to an HTTPS server.`），同时目标 HTTPS 使用局域网自签名证书（`SEC_E_UNTRUSTED_ROOT`），且原 `tauri-plugin-http` 未开启 `dangerous-settings` 与 `unsafe-headers`。
+- **Rust HTTP 插件特性启用（[`src-tauri/Cargo.toml`](file:///d:/wade/code/emby-tauri-player/src-tauri/Cargo.toml)）**：开启 `dangerous-settings` 与 `unsafe-headers`。
+- **HTTP 客户端自签名 TLS 与代理旁路回退（[`http.ts`](file:///d:/wade/code/emby-tauri-player/src/api/http.ts)）**：统一注入 `danger: { acceptInvalidCerts: true, acceptInvalidHostnames: true }`；显式 `direct` 模式及代理异常兜底时使用 `noProxy: '*'` 彻底绕过代理与系统代理。
+- **WebDAV 协议自动升级与自动建目录（[`webdav.ts`](file:///d:/wade/code/emby-tauri-player/src/api/sync/webdav.ts)、[`useSyncStore.ts`](file:///d:/wade/code/emby-tauri-player/src/stores/useSyncStore.ts)）**：在 Tauri 环境置空 `Origin: ''` 剥离 `tauri://localhost`；`http://` 遇到 `400` / 协议层错误自动升级为 `https://` 重试并通过 `onUrlUpgraded` 回写表单配置；`PUT` 遇 `404`/`409` 自动发送 `MKCOL` 创建父级目录并重试；同步提取服务端响应正文片段以提供明确错误诊断。
+
+
 

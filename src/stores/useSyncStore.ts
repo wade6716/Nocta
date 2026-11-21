@@ -127,10 +127,13 @@ function persistSyncState(state: Partial<SyncState>) {
   }
 }
 
-function getSyncDriver(state: SyncState) {
+function getSyncDriver(
+  state: SyncState,
+  onWebDavUrlUpgraded?: (newUrl: string) => void
+) {
   switch (state.provider) {
     case 'webdav':
-      return new WebDavSyncDriver(state.webdav);
+      return new WebDavSyncDriver(state.webdav, { onUrlUpgraded: onWebDavUrlUpgraded });
     case 's3':
       return new S3SyncDriver(state.s3);
     case 'smb':
@@ -179,7 +182,9 @@ export const useSyncStore = create<SyncState>((set, get) => {
 
     testConnection: async () => {
       const state = get();
-      const driver = getSyncDriver(state);
+      const driver = getSyncDriver(state, (upgradedUrl) => {
+        get().updateWebDavConfig({ url: upgradedUrl });
+      });
       return await driver.testConnection();
     },
 
@@ -190,7 +195,9 @@ export const useSyncStore = create<SyncState>((set, get) => {
       }
 
       set({ isSyncing: true, lastSyncStatus: 'syncing' });
-      const driver = getSyncDriver(state);
+      const driver = getSyncDriver(state, (upgradedUrl) => {
+        get().updateWebDavConfig({ url: upgradedUrl });
+      });
       const passphrase = state.encryptionPassphrase?.trim() || undefined;
 
       try {

@@ -69,7 +69,8 @@
   - 在 Windows 平台，通过 Rust FFI 调用 Windows 原生 `WNetAddConnection2W` (链接系统库 `mpr`) 建立临时网络凭据会话，通过 UNC 路径 `\\host\share\path` 直接借助 `std::fs` 读写，完美支持 SMB 2/3、NTLMv2，无跨平台三方库的兼容性缺陷。
   - macOS / Linux 环境下直接使用标准挂载路径（如 `/Volumes/...` 或 `/mnt/...`）进行透明文件读写。
 - **WebDAV 与 S3 驱动架构**：
-  - WebDAV 直接依托统一 `httpClient` 发送 `PUT` / `GET` / Basic Auth，自动穿透全局代理并绕过 CORS。
+  - `src-tauri/Cargo.toml` 为 `tauri-plugin-http` 启用 `dangerous-settings` 与 `unsafe-headers` 特性；`httpClient` 默认配置 `danger: { acceptInvalidCerts: true, acceptInvalidHostnames: true }` 以兼容局域网 NAS / 自建 Emby 的自签名 HTTPS 证书，并在代理不可达时自动回退无代理直连（通过 `noProxy: '*'` 彻底旁路系统代理）。
+  - WebDAV 直接依托统一 `httpClient` 发送 `PUT` / `GET` / `MKCOL` / Basic Auth，在 Tauri 环境下显式置空 `Origin: ''` 去除 `tauri://localhost`Origin 校验风险；当 `http://` 请求遇到纯 HTTP 误连 HTTPS 端口返回的 `400 Bad Request`（如 Synology 5006 / Caddy 等）时自动升级为 `https://` 重试并回写同步配置；首次写入遇到 `404`/`409` 时自动尝试 `MKCOL` 创建父级子目录。
   - S3 采用轻量级 `aws4fetch` 计算 AWS SigV4 规范签名，随后将签名头交由 `httpClient` 发送，实现对 AWS S3、Cloudflare R2、MinIO、阿里云 OSS、腾讯云 COS 的全兼容与代理继承。
 - **双向智能合并算法 (Smart Merge)**：
   - Emby 服务器：按 `url + username` 联合唯一标识合并，去重保留并集；导入脱敏配置时必须自动保留本机已有密码与 Token；活跃时间戳更新的一方优先。

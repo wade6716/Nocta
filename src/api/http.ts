@@ -148,14 +148,54 @@ export async function httpClient(
   init?: HttpRequestOptions
 ): Promise<Response> {
   if (isTauriEnvironment()) {
+    const proxyDetail = await resolveEffectiveProxyDetailed(init?.proxy);
+    const effectiveProxy = proxyDetail.url;
+    const baseRequestOptions: any = {
+      ...init,
+      danger: {
+        acceptInvalidCerts: true,
+        acceptInvalidHostnames: true,
+        ...(init as any)?.danger,
+      },
+    };
+    delete baseRequestOptions.proxy;
+
+    // 显式选择 direct 时，通过 noProxy: '*' 强制旁路 reqwest 内置系统代理探测
+    if (proxyDetail.source === 'direct' && !effectiveProxy) {
+      baseRequestOptions.proxy = {
+        all: {
+          url: 'http://127.0.0.1:1',
+          noProxy: '*',
+        },
+      };
+    }
+
+    const requestOptions: any = { ...baseRequestOptions };
+    if (effectiveProxy) {
+      requestOptions.proxy = { all: effectiveProxy };
+    }
+
     try {
-      const effectiveProxy = await resolveEffectiveProxy(init?.proxy);
-      const requestOptions: any = { ...init };
-      if (effectiveProxy) {
-        requestOptions.proxy = { all: effectiveProxy };
-      }
       return await tauriFetch(input as any, requestOptions);
     } catch (err) {
+      // 代理不可用或局域网请求被代理中断时，自动退回无代理直连兜底一次
+      if (effectiveProxy && !init?.signal?.aborted) {
+        try {
+          console.warn('[Tauri HTTP Proxy Fallback -> Direct]', input, err);
+          return await tauriFetch(input as any, {
+            ...baseRequestOptions,
+            proxy: {
+              all: {
+                url: effectiveProxy,
+                noProxy: '*',
+              },
+            },
+          });
+        } catch (directErr) {
+          console.error('[Tauri HTTP Error (after proxy fallback)]', directErr);
+          throw err;
+        }
+      }
       console.error('[Tauri HTTP Error]', err);
       throw err;
     }

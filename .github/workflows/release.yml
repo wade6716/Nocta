@@ -227,7 +227,7 @@ jobs:
           cargo tauri --version
 
       - name: Save Prebuilt Tauri CLI Cache
-        if: github.ref == 'refs/heads/main' && steps.tauri-cli-cache.outputs.cache-hit != 'true'
+        if: steps.tauri-cli-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ~/.cargo/bin/cargo-tauri*
@@ -250,7 +250,6 @@ jobs:
         with:
           workspaces: './src-tauri -> target'
           shared-key: "release-${{ matrix.mpv_platform }}-${{ matrix.mpv_arch }}-v1"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Restore Self-Contained libmpv Bundle Cache
         id: mpv-cache
@@ -360,7 +359,7 @@ jobs:
           ls -lh src-tauri/lib/
 
       - name: Save Self-Contained libmpv Bundle Cache
-        if: github.ref == 'refs/heads/main' && steps.verify-mpv.outputs.ready != 'true'
+        if: steps.verify-mpv.outputs.ready != 'true'
         uses: actions/cache/save@v4
         with:
           path: src-tauri/lib

@@ -40,10 +40,22 @@ import {
   FolderOpen,
   X,
   SkipForward,
+  Clock,
 } from 'lucide-react';
 import { useAuthStore, SavedServer } from '../stores/useAuthStore';
 import { useDanmuStore, DanmuServerEntry } from '../stores/useDanmuStore';
 import { usePlayerStore, DanmakuColorMode } from '../stores/usePlayerStore';
+import {
+  BUFFER_DURATION_PRESETS_SEC,
+  MEMORY_CAP_PRESETS_MB,
+  PRELOAD_TRIGGER_MODE_OPTIONS,
+  TRIGGER_BUFFER_PRESETS_SEC,
+  TRIGGER_PROGRESS_PRESETS_PCT,
+  TRIGGER_REMAINING_PRESETS_SEC,
+  formatMemoryCapLabel,
+  formatMinutesLabel,
+  formatShortMinutesLabel,
+} from '../player/preloadUtils';
 import { useMediaStore } from '../stores/useMediaStore';
 import { useSyncStore, SyncProviderType } from '../stores/useSyncStore';
 import {
@@ -115,6 +127,8 @@ export const SettingsPage: React.FC = () => {
     setEngineType,
     skipSettings,
     updateSkipSettings,
+    playerPreferences,
+    updatePlayerPreferences,
   } = usePlayerStore();
 
   // Emby 编辑/新增状态
@@ -1155,6 +1169,366 @@ export const SettingsPage: React.FC = () => {
                       基于 Chromium / WebView2 原生 HTML5 播放器，仅在原画格式受浏览器原生支持（如 MP4/H.264）时直连播放。客户端严格禁止触发 Emby 服务端转码，遇不支持格式将明确提示并支持一键切换 MPV。
                     </p>
                   </div>
+                </div>
+              </div>
+
+              {/* 内存缓冲与下一集智能预加载 */}
+              <div className="p-4 bg-white/5 border border-white/10 rounded-xl space-y-5">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-start gap-2.5">
+                    <div className="w-8 h-8 flex-shrink-0 rounded-xl bg-sky-500/15 border border-sky-400/25 text-sky-400 flex items-center justify-center">
+                      <Clock className="w-4 h-4" />
+                    </div>
+                    <div>
+                      <h3 className="text-xs font-semibold text-white">内存缓冲与下一集智能预加载</h3>
+                      <p className="text-[11px] text-gray-400 mt-0.5 leading-relaxed">
+                        全部缓存纯驻留内存（零磁盘写入），默认按 5 分钟时长预缓存；切集后自动停止下载并释放旧内存
+                      </p>
+                    </div>
+                  </div>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 flex-shrink-0">
+                    纯内存模式
+                  </span>
+                </div>
+
+                {/* 当前播放缓冲时长 */}
+                <div className="p-3.5 rounded-xl bg-black/25 border border-white/5 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="text-xs font-medium text-gray-200 block">当前播放前向缓冲时长</span>
+                      <span className="text-[11px] text-gray-500">
+                        {engineType === 'mpv'
+                          ? '控制 libmpv 解复用向后预读时长（受内存安全上限保护）'
+                          : '仅在使用 libmpv 原生内核时生效'}
+                      </span>
+                    </div>
+                    <span className="text-xs font-mono font-bold text-primary">
+                      {formatMinutesLabel(playerPreferences.bufferDurationSeconds)}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min="60"
+                    max="1800"
+                    step="60"
+                    value={playerPreferences.bufferDurationSeconds}
+                    onChange={(e) =>
+                      updatePlayerPreferences({ bufferDurationSeconds: Number(e.target.value) })
+                    }
+                    className="w-full accent-primary cursor-pointer"
+                  />
+                  <div className="flex flex-wrap gap-1.5">
+                    {BUFFER_DURATION_PRESETS_SEC.map((sec) => {
+                      const active = playerPreferences.bufferDurationSeconds === sec;
+                      return (
+                        <button
+                          key={sec}
+                          type="button"
+                          onClick={() => updatePlayerPreferences({ bufferDurationSeconds: sec })}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition cursor-pointer ${
+                            active
+                              ? 'bg-primary text-white shadow-sm'
+                              : 'bg-white/5 hover:bg-white/10 text-gray-300'
+                          }`}
+                        >
+                          {formatMinutesLabel(sec)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* 单缓存内存安全上限 */}
+                <div className="p-3.5 rounded-xl bg-black/25 border border-white/5 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="text-xs font-medium text-gray-200 block">单缓存内存安全上限</span>
+                      <span className="text-[11px] text-gray-500">
+                        约束高码率 4K 原盘的单集内存峰值，防止长时间缓冲引起内存溢出
+                      </span>
+                    </div>
+                    <span className="text-xs font-mono font-bold text-sky-300">
+                      {formatMemoryCapLabel(playerPreferences.cacheMemoryCapMB)}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-5 gap-2">
+                    {MEMORY_CAP_PRESETS_MB.map((cap) => {
+                      const active = playerPreferences.cacheMemoryCapMB === cap.mb;
+                      return (
+                        <button
+                          key={cap.mb}
+                          type="button"
+                          onClick={() => updatePlayerPreferences({ cacheMemoryCapMB: cap.mb })}
+                          className={`py-1.5 rounded-lg text-xs font-mono font-semibold border transition cursor-pointer ${
+                            active
+                              ? 'bg-primary/20 border-primary text-white shadow-sm'
+                              : 'bg-white/5 border-white/10 text-gray-300 hover:border-white/20'
+                          }`}
+                        >
+                          {cap.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* 下一集内存预加载 */}
+                <div className="p-3.5 rounded-xl bg-black/25 border border-white/5 space-y-4">
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <p className="text-xs font-medium text-gray-200">
+                        下一集纯内存预加载（智能跳过已标记片头）
+                      </p>
+                      <p className="text-[11px] text-gray-500 mt-0.5 leading-relaxed">
+                        若已标记片头结束时长（或含章节片头），将跳过片头区间，仅在内存中缓存容器索引与片头后的正片内容；切集时立刻停止下载并在稳定播放后自动释放旧内存
+                      </p>
+                    </div>
+                    <button
+                      role="switch"
+                      aria-checked={playerPreferences.preloadNextEnabled}
+                      onClick={() =>
+                        updatePlayerPreferences({
+                          preloadNextEnabled: !playerPreferences.preloadNextEnabled,
+                        })
+                      }
+                      className={`relative w-11 h-6 flex-shrink-0 rounded-full transition cursor-pointer ${
+                        playerPreferences.preloadNextEnabled ? 'bg-primary' : 'bg-white/15'
+                      }`}
+                      title="下一集内存预加载开关"
+                    >
+                      <span
+                        className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
+                          playerPreferences.preloadNextEnabled ? 'translate-x-5' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
+
+                  {playerPreferences.preloadNextEnabled && (
+                    <div className="space-y-4 pt-3 border-t border-white/10">
+                      {/* 预加载时长 */}
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-medium text-gray-300">下一集预加载时长</span>
+                          <span className="text-xs font-mono font-bold text-primary">
+                            {formatMinutesLabel(playerPreferences.preloadNextDurationSeconds)}
+                          </span>
+                        </div>
+                        <input
+                          type="range"
+                          min="60"
+                          max="1800"
+                          step="60"
+                          value={playerPreferences.preloadNextDurationSeconds}
+                          onChange={(e) =>
+                            updatePlayerPreferences({
+                              preloadNextDurationSeconds: Number(e.target.value),
+                            })
+                          }
+                          className="w-full accent-primary cursor-pointer"
+                        />
+                        <div className="flex flex-wrap gap-1.5">
+                          {BUFFER_DURATION_PRESETS_SEC.map((sec) => {
+                            const active = playerPreferences.preloadNextDurationSeconds === sec;
+                            return (
+                              <button
+                                key={sec}
+                                type="button"
+                                onClick={() =>
+                                  updatePlayerPreferences({ preloadNextDurationSeconds: sec })
+                                }
+                                className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition cursor-pointer ${
+                                  active
+                                    ? 'bg-primary text-white shadow-sm'
+                                    : 'bg-white/5 hover:bg-white/10 text-gray-300'
+                                }`}
+                              >
+                                {formatMinutesLabel(sec)}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* 预加载触发时机模式 */}
+                      <div className="space-y-2.5 pt-3 border-t border-white/10">
+                        <label className="text-xs font-semibold text-white block">
+                          预加载触发时机
+                        </label>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                          {PRELOAD_TRIGGER_MODE_OPTIONS.map((opt) => {
+                            const active = playerPreferences.preloadTriggerMode === opt.id;
+                            return (
+                              <button
+                                key={opt.id}
+                                type="button"
+                                onClick={() =>
+                                  updatePlayerPreferences({ preloadTriggerMode: opt.id })
+                                }
+                                className={`p-3 rounded-lg border text-left transition cursor-pointer ${
+                                  active
+                                    ? 'bg-primary/15 border-primary/50 text-white'
+                                    : 'bg-white/[0.03] border-white/10 text-gray-300 hover:border-white/20'
+                                }`}
+                              >
+                                <span className="text-xs font-semibold block">{opt.label}</span>
+                                <span className="text-[10px] text-gray-400 mt-0.5 block leading-relaxed">
+                                  {opt.desc}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        {/* 对应触发阈值调节 */}
+                        <div className="grid grid-cols-1 gap-3 pt-1">
+                          {(playerPreferences.preloadTriggerMode === 'smart' ||
+                            playerPreferences.preloadTriggerMode === 'buffer_ready') && (
+                            <div className="p-3 rounded-lg bg-white/[0.03] border border-white/5 space-y-2">
+                              <div className="flex items-center justify-between text-[11px]">
+                                <span className="text-gray-300 font-medium">
+                                  当前集前向缓冲达标阈值
+                                </span>
+                                <span className="font-mono text-sky-300 font-semibold">
+                                  {playerPreferences.preloadTriggerBufferSeconds} 秒
+                                </span>
+                              </div>
+                              <input
+                                type="range"
+                                min="10"
+                                max="300"
+                                step="5"
+                                value={playerPreferences.preloadTriggerBufferSeconds}
+                                onChange={(e) =>
+                                  updatePlayerPreferences({
+                                    preloadTriggerBufferSeconds: Number(e.target.value),
+                                  })
+                                }
+                                className="w-full accent-primary cursor-pointer"
+                              />
+                              <div className="flex flex-wrap gap-1.5">
+                                {TRIGGER_BUFFER_PRESETS_SEC.map((sec) => (
+                                  <button
+                                    key={sec}
+                                    type="button"
+                                    onClick={() =>
+                                      updatePlayerPreferences({ preloadTriggerBufferSeconds: sec })
+                                    }
+                                    className={`px-2 py-0.5 rounded text-[11px] font-mono transition cursor-pointer ${
+                                      playerPreferences.preloadTriggerBufferSeconds === sec
+                                        ? 'bg-primary text-white'
+                                        : 'bg-white/5 hover:bg-white/10 text-gray-300'
+                                    }`}
+                                  >
+                                    {sec}秒
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {(playerPreferences.preloadTriggerMode === 'smart' ||
+                            playerPreferences.preloadTriggerMode === 'remaining_time') && (
+                            <div className="p-3 rounded-lg bg-white/[0.03] border border-white/5 space-y-2">
+                              <div className="flex items-center justify-between text-[11px]">
+                                <span className="text-gray-300 font-medium">
+                                  距本集结束剩余时长触发
+                                </span>
+                                <span className="font-mono text-sky-300 font-semibold">
+                                  剩余 &le;{' '}
+                                  {playerPreferences.preloadTriggerRemainingSeconds >= 60
+                                    ? formatMinutesLabel(
+                                        playerPreferences.preloadTriggerRemainingSeconds
+                                      )
+                                    : `${playerPreferences.preloadTriggerRemainingSeconds} 秒`}
+                                </span>
+                              </div>
+                              <input
+                                type="range"
+                                min="30"
+                                max="900"
+                                step="30"
+                                value={playerPreferences.preloadTriggerRemainingSeconds}
+                                onChange={(e) =>
+                                  updatePlayerPreferences({
+                                    preloadTriggerRemainingSeconds: Number(e.target.value),
+                                  })
+                                }
+                                className="w-full accent-primary cursor-pointer"
+                              />
+                              <div className="flex flex-wrap gap-1.5">
+                                {TRIGGER_REMAINING_PRESETS_SEC.map((sec) => (
+                                  <button
+                                    key={sec}
+                                    type="button"
+                                    onClick={() =>
+                                      updatePlayerPreferences({
+                                        preloadTriggerRemainingSeconds: sec,
+                                      })
+                                    }
+                                    className={`px-2 py-0.5 rounded text-[11px] font-mono transition cursor-pointer ${
+                                      playerPreferences.preloadTriggerRemainingSeconds === sec
+                                        ? 'bg-primary text-white'
+                                        : 'bg-white/5 hover:bg-white/10 text-gray-300'
+                                    }`}
+                                  >
+                                    {formatShortMinutesLabel(sec)}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {(playerPreferences.preloadTriggerMode === 'smart' ||
+                            playerPreferences.preloadTriggerMode === 'progress') && (
+                            <div className="p-3 rounded-lg bg-white/[0.03] border border-white/5 space-y-2">
+                              <div className="flex items-center justify-between text-[11px]">
+                                <span className="text-gray-300 font-medium">
+                                  本集播放进度比例触发
+                                </span>
+                                <span className="font-mono text-sky-300 font-semibold">
+                                  &ge; {playerPreferences.preloadTriggerProgressPercent}%
+                                </span>
+                              </div>
+                              <input
+                                type="range"
+                                min="10"
+                                max="95"
+                                step="5"
+                                value={playerPreferences.preloadTriggerProgressPercent}
+                                onChange={(e) =>
+                                  updatePlayerPreferences({
+                                    preloadTriggerProgressPercent: Number(e.target.value),
+                                  })
+                                }
+                                className="w-full accent-primary cursor-pointer"
+                              />
+                              <div className="flex flex-wrap gap-1.5">
+                                {TRIGGER_PROGRESS_PRESETS_PCT.map((pct) => (
+                                  <button
+                                    key={pct}
+                                    type="button"
+                                    onClick={() =>
+                                      updatePlayerPreferences({
+                                        preloadTriggerProgressPercent: pct,
+                                      })
+                                    }
+                                    className={`px-2 py-0.5 rounded text-[11px] font-mono transition cursor-pointer ${
+                                      playerPreferences.preloadTriggerProgressPercent === pct
+                                        ? 'bg-primary text-white'
+                                        : 'bg-white/5 hover:bg-white/10 text-gray-300'
+                                    }`}
+                                  >
+                                    {pct}%
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
 

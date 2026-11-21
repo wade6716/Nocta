@@ -25,13 +25,39 @@ export interface PlayerTelemetry {
   cacheForwardBytes?: number; // 前向缓冲字节数 (demuxer-cache-state['fw-bytes'])
 }
 
+export interface BufferConfigOptions {
+  bufferDurationSeconds: number; // 目标缓冲时长（秒），默认 300
+  mediaBitrateBps?: number; // 当前媒体平均码率（bps），用于推算解复用字节上限
+  cacheMemoryCapMB: number; // 单缓存内存安全上限（MB），默认 1024
+}
+
+export interface NextEpisodePreloadStatus {
+  token: string;
+  itemId: string;
+  itemName: string;
+  episodeNumber?: number;
+  status: 'idle' | 'probing' | 'downloading' | 'ready' | 'active' | 'released' | 'cancelled' | 'error';
+  totalSize: number;
+  targetBytes: number;
+  cachedBytes: number;
+  targetDurationSec: number;
+  cachedDurationSec: number;
+  startSeconds: number;
+  skippedIntro: boolean;
+  cappedByMemory: boolean;
+  memoryReleased: boolean;
+  error?: string;
+}
+
 export interface PlayerLoadOptions {
   url: string;
+  upstreamUrl?: string; // 当 url 为本机预加载代理地址时，保留真实 Emby 上游地址用于代理路由展示
   initialTime?: number;
   title?: string;
   headers?: Record<string, string>;
   isLive?: boolean;
   proxyOverride?: StreamProxyOverride;
+  bufferConfig?: BufferConfigOptions;
 }
 
 export interface IPlayerEngine {
@@ -113,6 +139,7 @@ export interface IPlayerEngine {
   onProxyResolved?(cb: (info: ResolvedStreamProxyInfo) => void): () => void;
 
   // Pro 控制能力（主要在 libmpv 原生硬解引擎下生效）
+  setBufferConfig?(config: BufferConfigOptions): Promise<void>;
   setHwdecMode?(mode: HwdecMode): Promise<void>;
   setVideoAspect?(preset: VideoAspectPreset): Promise<void>;
   setVideoEnhancement?(opts: {

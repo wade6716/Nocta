@@ -9,7 +9,10 @@ import {
   VideoLayoutConfig,
   SkipSegments,
   SkipSettings,
+  PlayerPreferences,
   DEFAULT_SKIP_SETTINGS,
+  DEFAULT_PLAYER_PREFERENCES,
+  normalizePlayerPreferences,
 } from '../stores/usePlayerStore';
 import { useMediaStore } from '../stores/useMediaStore';
 import { ProxyConfig, isTauriEnvironment } from '../api/http';
@@ -29,6 +32,7 @@ export interface NoctaConfigData {
   danmakuBindings: Record<string, DanmakuBinding>;
   skipSegments: Record<string, SkipSegments>;
   skipSettings: SkipSettings;
+  playerPreferences?: Partial<PlayerPreferences>;
 }
 
 export interface NoctaBackupPayload {
@@ -102,6 +106,7 @@ export function getLocalConfigSnapshot(options?: { includeSecrets?: boolean }): 
     danmakuBindings: { ...playerState.danmakuBindings },
     skipSegments: { ...playerState.skipSegments },
     skipSettings: { ...playerState.skipSettings },
+    playerPreferences: { ...playerState.playerPreferences },
   };
 }
 
@@ -288,6 +293,10 @@ export function mergeConfigData(local: NoctaConfigData, remote: NoctaConfigData)
       ...(local.skipSettings || {}),
       ...(remote.skipSettings || {}),
     },
+    playerPreferences: normalizePlayerPreferences(
+      remote.playerPreferences,
+      normalizePlayerPreferences(local.playerPreferences, DEFAULT_PLAYER_PREFERENCES)
+    ),
   };
 }
 
@@ -323,6 +332,7 @@ export function applyConfigToStores(data: NoctaConfigData, mode: 'merge' | 'repl
       videoLayouts: data.videoLayouts,
       skipSegments: data.skipSegments,
       skipSettings: data.skipSettings,
+      playerPreferences: data.playerPreferences,
       engineType: data.engineType,
     },
     mode

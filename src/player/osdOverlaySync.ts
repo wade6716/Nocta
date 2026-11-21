@@ -3,7 +3,12 @@ import type { FormattedDanmakuItem, RawDanmuComment } from '../api/danmuClient';
 import type { ProxyConfig } from '../api/http';
 import type { DanmuServerEntry } from '../stores/useDanmuStore';
 import type { PlayerOverlayStorePatch, SkipSegments } from '../stores/usePlayerStore';
-import type { PlayerTelemetry, ResolvedStreamProxyInfo, StreamProxyOverride } from './types';
+import type {
+  NextEpisodePreloadStatus,
+  PlayerTelemetry,
+  ResolvedStreamProxyInfo,
+  StreamProxyOverride,
+} from './types';
 import type { MiniHudIconType } from '../components/player/MiniActionHud';
 
 export const OSD_OVERLAY_SYNC_EVENT = 'osd:sync';
@@ -89,6 +94,7 @@ export interface OsdSyncPayload {
   hasNextEpisode?: boolean;
   hasPrevEpisode?: boolean;
   nextEpisode?: EmbyItem | null;
+  nextPreloadStatus?: NextEpisodePreloadStatus | null;
   showSkipIntro?: boolean;
   autoNextCountdown?: number | null;
   speedHistory?: number[];

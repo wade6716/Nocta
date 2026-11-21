@@ -14,8 +14,19 @@ import {
   Globe,
 } from 'lucide-react';
 import { EmbyItem, EmbyMediaSource, MappedTrack } from '../../api/embyClient';
-import { PlayerTelemetry, ResolvedStreamProxyInfo } from '../../player/types';
+import {
+  NextEpisodePreloadStatus,
+  PlayerTelemetry,
+  ResolvedStreamProxyInfo,
+} from '../../player/types';
 import { formatNetworkSpeed, formatTime } from './PlayerOsd';
+import { usePlayerStore } from '../../stores/usePlayerStore';
+import {
+  formatMemoryCapLabel,
+  formatMinutesLabel,
+  formatPreloadDurationMMSS,
+  formatPreloadStateText,
+} from '../../player/preloadUtils';
 
 interface PlaybackInfoModalProps {
   isOpen: boolean;
@@ -38,6 +49,7 @@ interface PlaybackInfoModalProps {
   networkSpeed?: number;
   telemetry?: PlayerTelemetry;
   proxyInfo?: ResolvedStreamProxyInfo | null;
+  nextPreloadStatus?: NextEpisodePreloadStatus | null;
 }
 
 function formatBytes(bytes?: number): string {
@@ -93,8 +105,10 @@ export const PlaybackInfoModal: React.FC<PlaybackInfoModalProps> = ({
   networkSpeed,
   telemetry,
   proxyInfo,
+  nextPreloadStatus,
 }) => {
   const [copied, setCopied] = useState(false);
+  const playerPreferences = usePlayerStore((s) => s.playerPreferences);
 
   if (!isOpen || !item) return null;
 
@@ -143,7 +157,10 @@ export const PlaybackInfoModal: React.FC<PlaybackInfoModalProps> = ({
       `来源服务器: ${currentServerName || item.ServerName || '当前服务器'}`,
       `网络代理路线: ${formatProxyLabel(proxyInfo)}`,
       `实时网速: ${formatNetworkSpeed(networkSpeed)}`,
-      `前向缓冲: ${telemetry?.cacheDuration !== undefined ? `${telemetry.cacheDuration.toFixed(1)}s` : '-'} (${formatBytes(telemetry?.cacheForwardBytes)})`,
+      `前向缓冲: ${telemetry?.cacheDuration !== undefined ? `${telemetry.cacheDuration.toFixed(1)}s` : '-'} / 目标 ${formatMinutesLabel(playerPreferences.bufferDurationSeconds)} (${formatBytes(telemetry?.cacheForwardBytes)} · 单缓存上限 ${formatMemoryCapLabel(playerPreferences.cacheMemoryCapMB)})`,
+      nextPreloadStatus
+        ? `下一集内存预加载: ${nextPreloadStatus.itemName} · ${formatPreloadStateText(nextPreloadStatus)} (${formatPreloadDurationMMSS(nextPreloadStatus.cachedDurationSec)} / ${formatPreloadDurationMMSS(nextPreloadStatus.targetDurationSec)}, ${formatBytes(nextPreloadStatus.cachedBytes)}${nextPreloadStatus.skippedIntro ? `, 已跳过片头至 ${formatTime(nextPreloadStatus.startSeconds)}` : ''})`
+        : `下一集内存预加载: ${playerPreferences.preloadNextEnabled ? `待触发 (${formatMinutesLabel(playerPreferences.preloadNextDurationSeconds)})` : '已关闭'}`,
       `播放内核: ${engineType === 'mpv' ? 'libmpv (原生渲染)' : 'HTML5 Video'}`,
       `实时硬件解码: ${hwdecLabel}`,
       `实时渲染帧率: ${telemetry?.fps ? `${telemetry.fps.toFixed(2)} fps` : '-'} (丢帧: ${telemetry?.droppedFrames ?? 0})`,
@@ -266,15 +283,19 @@ export const PlaybackInfoModal: React.FC<PlaybackInfoModalProps> = ({
               </div>
 
               <div>
-                <span className="text-slate-500 block text-[11px]">前向缓冲</span>
+                <span className="text-slate-500 block text-[11px]">前向内存缓冲</span>
                 <span className="font-mono text-emerald-300 font-medium text-xs tabular-nums">
                   {telemetry?.cacheDuration !== undefined ? `${telemetry.cacheDuration.toFixed(1)}s` : '-'}
                 </span>
-                {telemetry?.cacheForwardBytes !== undefined && telemetry.cacheForwardBytes > 0 && (
-                  <span className="text-[10px] text-slate-500 ml-1 font-mono">
-                    ({formatBytes(telemetry.cacheForwardBytes)})
-                  </span>
-                )}
+                <span className="text-[10px] text-slate-400 ml-1 font-mono">
+                  / {Math.round(playerPreferences.bufferDurationSeconds / 60)}分
+                </span>
+                <span className="text-[10px] text-slate-500 block font-mono">
+                  {telemetry?.cacheForwardBytes !== undefined && telemetry.cacheForwardBytes > 0
+                    ? `${formatBytes(telemetry.cacheForwardBytes)} · `
+                    : ''}
+                  上限 {formatMemoryCapLabel(playerPreferences.cacheMemoryCapMB)}
+                </span>
               </div>
 
               <div>
@@ -302,6 +323,40 @@ export const PlaybackInfoModal: React.FC<PlaybackInfoModalProps> = ({
               <span className="text-slate-500 shrink-0">网络代理路线:</span>
               <span className="font-mono text-emerald-300 truncate">{formatProxyLabel(proxyInfo)}</span>
             </div>
+
+            {item.Type === 'Episode' && (
+              <div className="pt-2 border-t border-white/[0.04] flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-300">
+                <Activity className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                <span className="text-slate-500 shrink-0">下一集内存预加载:</span>
+                {nextPreloadStatus ? (
+                  <>
+                    <span className="text-sky-300 font-medium truncate max-w-[200px]">
+                      {nextPreloadStatus.episodeNumber
+                        ? `E${nextPreloadStatus.episodeNumber} `
+                        : ''}
+                      {nextPreloadStatus.itemName}
+                    </span>
+                    <span className="font-mono text-emerald-300">
+                      {formatPreloadStateText(nextPreloadStatus)} (
+                      {formatPreloadDurationMMSS(nextPreloadStatus.cachedDurationSec)} /{' '}
+                      {formatPreloadDurationMMSS(nextPreloadStatus.targetDurationSec)} ·{' '}
+                      {formatBytes(nextPreloadStatus.cachedBytes)})
+                    </span>
+                    {nextPreloadStatus.skippedIntro && (
+                      <span className="px-1.5 py-0.5 rounded bg-violet-500/20 text-violet-300 border border-violet-500/30 font-mono text-[10px]">
+                        已跳片头 {formatTime(nextPreloadStatus.startSeconds)}
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  <span className="text-slate-400 font-mono">
+                    {playerPreferences.preloadNextEnabled
+                      ? `就绪待触发 (${formatMinutesLabel(playerPreferences.preloadNextDurationSeconds)})`
+                      : '已关闭'}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
 
           {/* 2. 实时解码遥测与内核 */}

@@ -780,6 +780,8 @@ export const OsdOverlayPage: React.FC = () => {
           onTakeScreenshot={() => send({ type: 'screenshot' })}
           volume={sync.volume}
           onVolumeChange={(volume) => send({ type: 'volume', volume })}
+          hasNextEpisode={Boolean(sync.hasNextEpisode)}
+          nextPreloadStatus={sync.nextPreloadStatus ?? null}
         />
       )}
 
@@ -849,6 +851,7 @@ export const OsdOverlayPage: React.FC = () => {
           networkSpeed={sync.networkSpeed}
           telemetry={sync.telemetry}
           proxyInfo={sync.proxyInfo}
+          nextPreloadStatus={sync.nextPreloadStatus ?? null}
         />
       )}
 

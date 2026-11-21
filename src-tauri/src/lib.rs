@@ -2,6 +2,7 @@ mod proxy;
 mod sync;
 mod system;
 mod osd_overlay;
+mod preload;
 #[cfg(target_os = "macos")]
 mod mpv_embed;
 
@@ -296,6 +297,12 @@ pub fn run() {
             system::save_backup_file,
             system::show_in_file_manager,
             system::get_screenshot_dir,
+            preload::start_next_episode_preload,
+            preload::activate_preloaded_episode,
+            preload::release_active_preload_memory,
+            preload::get_preload_status,
+            preload::cancel_next_episode_preload,
+            preload::clear_all_preloads,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -65,6 +65,7 @@ import {
 } from '../player/hooks/useSkipSegmentsController';
 import { useDanmakuSession } from '../player/hooks/useDanmakuSession';
 import { useMacOsdOverlaySync } from '../player/hooks/useMacOsdOverlaySync';
+import { useNextEpisodePreloader } from '../player/hooks/useNextEpisodePreloader';
 
 type ActivePanelType =
   | 'none'
@@ -105,6 +106,7 @@ export const PlayerPage: React.FC = () => {
   const selectedSecondarySubtitleId = usePlayerStore((s) => s.selectedSecondarySubtitleId);
   const videoLayouts = usePlayerStore((s) => s.videoLayouts);
   const playerPreferences = usePlayerStore((s) => s.playerPreferences);
+  const skipSegments = usePlayerStore((s) => s.skipSegments);
   const engineType = usePlayerStore((s) => s.engineType);
   const setEngineType = usePlayerStore((s) => s.setEngineType);
   const setPlaybackContext = usePlayerStore((s) => s.setPlaybackContext);
@@ -166,6 +168,9 @@ export const PlayerPage: React.FC = () => {
   const networkSpeedRef = useRef(0);
   const handleVideoErrorRef = useRef<(errMsg?: string) => void>(() => {});
   const proxyOverrideRef = useRef<StreamProxyOverride>('follow');
+  const upstreamStreamUrlRef = useRef<string | null>(
+    streamUrl && !/^https?:\/\/127\.0\.0\.1:\d+\/stream\//.test(streamUrl) ? streamUrl : null
+  );
   const seekRef = useRef<(targetSeconds: number) => void>(() => {});
   const seekDeltaRef = useRef<(delta: number) => void>(() => {});
 
@@ -268,6 +273,19 @@ export const PlayerPage: React.FC = () => {
 
   const effectiveDuration = duration || ticksToSeconds(item?.RunTimeTicks || 0);
 
+  const effectiveBitrateBps = useMemo(() => {
+    if (mediaSource?.Bitrate && mediaSource.Bitrate > 0) {
+      return mediaSource.Bitrate;
+    }
+    if (mediaSource?.Size && mediaSource.Size > 0 && effectiveDuration > 1) {
+      return Math.round((mediaSource.Size * 8) / effectiveDuration);
+    }
+    return undefined;
+  }, [mediaSource?.Bitrate, mediaSource?.Size, effectiveDuration]);
+
+  const effectiveBitrateBpsRef = useRef<number | undefined>(effectiveBitrateBps);
+  effectiveBitrateBpsRef.current = effectiveBitrateBps;
+
   // 领域 Hook 1：弹幕会话（竞态锁、同剧延续、零闪烁格式化与热力曲线）
   const {
     danmakuSettings,
@@ -342,6 +360,9 @@ export const PlayerPage: React.FC = () => {
   // Sync streamUrl when store changes
   useEffect(() => {
     if (streamUrl) {
+      if (!/^https?:\/\/127\.0\.0\.1:\d+\/stream\//.test(streamUrl)) {
+        upstreamStreamUrlRef.current = streamUrl;
+      }
       setCurrentStreamUrl(streamUrl);
       setIsLoadingVideo(true);
       setVideoError(null);
@@ -371,6 +392,11 @@ export const PlayerPage: React.FC = () => {
     const state = usePlayerStore.getState();
     const prefs = state.playerPreferences;
     engine.setVolume(state.volume);
+    engine.setBufferConfig?.({
+      bufferDurationSeconds: prefs.bufferDurationSeconds,
+      mediaBitrateBps: effectiveBitrateBpsRef.current,
+      cacheMemoryCapMB: prefs.cacheMemoryCapMB,
+    });
     engine.setHwdecMode?.(prefs.hwdecMode);
     engine.setVideoAspect?.(prefs.videoAspect);
     engine.setVideoEnhancement?.({
@@ -556,18 +582,38 @@ export const PlayerPage: React.FC = () => {
     if (currentStreamUrl && engineRef.current) {
       const resolved = resolveInitialPlaybackTime(initialTimeRef.current);
       initialTimeRef.current = resolved.seconds;
+      const prefs = usePlayerStore.getState().playerPreferences;
       engineRef.current
         .load({
           url: currentStreamUrl,
+          upstreamUrl: upstreamStreamUrlRef.current ?? undefined,
           initialTime: resolved.seconds,
           title: item?.Name,
           proxyOverride: proxyOverrideRef.current,
+          bufferConfig: {
+            bufferDurationSeconds: prefs.bufferDurationSeconds,
+            mediaBitrateBps: effectiveBitrateBpsRef.current,
+            cacheMemoryCapMB: prefs.cacheMemoryCapMB,
+          },
         })
         .then(() => {
           applyAllPreferencesToEngine(engineRef.current);
         });
     }
   }, [currentStreamUrl, reloadToken, resolveInitialPlaybackTime]);
+
+  // 响应缓冲时长与内存上限实时变化
+  useEffect(() => {
+    engineRef.current?.setBufferConfig?.({
+      bufferDurationSeconds: playerPreferences.bufferDurationSeconds,
+      mediaBitrateBps: effectiveBitrateBps,
+      cacheMemoryCapMB: playerPreferences.cacheMemoryCapMB,
+    });
+  }, [
+    playerPreferences.bufferDurationSeconds,
+    playerPreferences.cacheMemoryCapMB,
+    effectiveBitrateBps,
+  ]);
 
   // 响应 Pro 画质/字幕/音频偏好实时变化
   useEffect(() => {
@@ -799,6 +845,25 @@ export const PlayerPage: React.FC = () => {
       ? episodes[currentEpisodeIndex + 1]
       : null;
 
+  // 领域 Hook 4：下一集纯内存预加载与片头跳过缓存调度
+  const { nextPreloadStatus, consumePreloadedSession, releaseActivePreload } =
+    useNextEpisodePreloader({
+      currentServer,
+      currentItem: item,
+      nextEpisode,
+      engineType,
+      currentTime,
+      duration: effectiveDuration,
+      paused,
+      isLoadingVideo,
+      videoError,
+      telemetry,
+      proxyOverride,
+      playerPreferences,
+      skipSegments,
+      skipSettings,
+    });
+
   // 原地无缝切换到其它分集（带 ReqId 竞态防护，不销毁底层 mpv 实例）
   const switchToEpisode = useCallback(
     async (targetEp: EmbyItem) => {
@@ -814,6 +879,35 @@ export const PlayerPage: React.FC = () => {
         await reportStoppedNow(lastValidTimeRef.current || currentTime);
         if (reqId !== episodeSwitchReqIdRef.current) return;
 
+        const preloaded = await consumePreloadedSession(targetEp.Id);
+        if (reqId !== episodeSwitchReqIdRef.current) return;
+
+        if (preloaded) {
+          upstreamStreamUrlRef.current = preloaded.session.streamUrl;
+          const targetStart = Math.max(
+            preloaded.session.initialTime,
+            preloaded.skippedIntro ? preloaded.startSec : 0
+          );
+          hasInitialSeekedRef.current = targetStart <= 0;
+          initialTimeRef.current = targetStart;
+          lastValidTimeRef.current = targetStart;
+          setChapters(preloaded.session.item.Chapters || []);
+          setPlaybackContext({
+            ...preloaded.session,
+            streamUrl: preloaded.localStreamUrl,
+            initialTime: targetStart,
+          });
+          navigate(`/player/${preloaded.session.item.Id}`, { replace: true });
+          showMiniHud({
+            icon: 'info',
+            label: '已命中内存预加载',
+            subLabel: preloaded.skippedIntro
+              ? `已跳过片头 · 从 ${formatTime(preloaded.startSec)} 秒开`
+              : `已预载 ${Math.round(preloaded.status.cachedDurationSec)}s · 秒开就绪`,
+          });
+          return;
+        }
+
         const session = await fetchAndPreparePlaybackSession(
           currentServer,
           targetEp.Id,
@@ -821,6 +915,7 @@ export const PlayerPage: React.FC = () => {
         );
         if (reqId !== episodeSwitchReqIdRef.current) return;
 
+        upstreamStreamUrlRef.current = session.streamUrl;
         setChapters(session.item.Chapters || []);
         setPlaybackContext(session);
         navigate(`/player/${session.item.Id}`, { replace: true });
@@ -830,13 +925,23 @@ export const PlayerPage: React.FC = () => {
         setIsLoadingVideo(false);
       }
     },
-    [currentServer, currentTime, engineType, navigate, reportStoppedNow, setPlaybackContext]
+    [
+      currentServer,
+      currentTime,
+      engineType,
+      navigate,
+      reportStoppedNow,
+      consumePreloadedSession,
+      setPlaybackContext,
+      showMiniHud,
+    ]
   );
 
   // 原地切换多版本片源 (4K / 1080p 原画直连热切，保留播放进度)
   const switchMediaSource = useCallback(
     (ms: EmbyMediaSource) => {
       if (!currentServer || !item || !playSessionId) return;
+      releaseActivePreload();
       const liveSec = lastValidTimeRef.current || engineRef.current?.currentTime || currentTime;
       const sUrl = buildStreamUrlForEngine(
         currentServer.url,
@@ -846,6 +951,7 @@ export const PlayerPage: React.FC = () => {
         currentServer.accessToken,
         engineType
       );
+      upstreamStreamUrlRef.current = sUrl;
       const { audioTracks: aTracks, subtitleTracks: sTracks } = mapStreamTracks(
         currentServer.url,
         item.Id,
@@ -874,7 +980,17 @@ export const PlayerPage: React.FC = () => {
         subLabel: ms.Name || ms.Container?.toUpperCase(),
       });
     },
-    [currentServer, item, playSessionId, availableMediaSources, currentTime, engineType, setPlaybackContext, showMiniHud]
+    [
+      currentServer,
+      item,
+      playSessionId,
+      availableMediaSources,
+      currentTime,
+      engineType,
+      releaseActivePreload,
+      setPlaybackContext,
+      showMiniHud,
+    ]
   );
 
   // 自动连播下一集监听（距片尾 <= 15s 出现提示并在倒计时结束切换）
@@ -1304,7 +1420,12 @@ export const PlayerPage: React.FC = () => {
       hasInitialSeekedRef.current = liveSec <= 0;
       setIsLoadingVideo(true);
       setVideoError(null);
-      setReloadToken((t) => t + 1);
+      if (upstreamStreamUrlRef.current && upstreamStreamUrlRef.current !== currentStreamUrl) {
+        releaseActivePreload();
+        setCurrentStreamUrl(upstreamStreamUrlRef.current);
+      } else {
+        setReloadToken((t) => t + 1);
+      }
       showMiniHud({
         icon: 'info',
         label:
@@ -1315,7 +1436,7 @@ export const PlayerPage: React.FC = () => {
             : '正按全局代理配置重连...',
       });
     },
-    [currentStreamUrl, currentTime, showMiniHud]
+    [currentStreamUrl, currentTime, releaseActivePreload, showMiniHud]
   );
 
   const handleToggleFullscreen = async () => {
@@ -1807,7 +1928,7 @@ export const PlayerPage: React.FC = () => {
         item,
         mediaSource,
         availableMediaSources,
-        streamUrl: currentStreamUrl || streamUrl,
+        streamUrl: upstreamStreamUrlRef.current || currentStreamUrl || streamUrl,
         currentServerName: currentServer?.name,
         currentServerUrl: currentServer?.url,
         seasons,
@@ -1817,6 +1938,7 @@ export const PlayerPage: React.FC = () => {
         hasNextEpisode: !!nextEpisode,
         hasPrevEpisode: !!prevEpisode,
         nextEpisode,
+        nextPreloadStatus,
         showSkipIntro,
         autoNextCountdown,
         speedHistory,
@@ -1871,6 +1993,9 @@ export const PlayerPage: React.FC = () => {
     episodes.length,
     mediaSource?.Id ?? '',
     item?.Id ?? '',
+    nextPreloadStatus?.token ?? '',
+    nextPreloadStatus?.status ?? '',
+    Math.floor(nextPreloadStatus?.cachedDurationSec ?? 0),
     storeRevisionRef.current,
   ].join('|');
 
@@ -2465,6 +2590,8 @@ export const PlayerPage: React.FC = () => {
           onTakeScreenshot={handleTakeScreenshot}
           volume={volume}
           onVolumeChange={(v) => handleVolumeChange(v, false)}
+          hasNextEpisode={!!nextEpisode}
+          nextPreloadStatus={nextPreloadStatus}
         />
       )}
 
@@ -2512,7 +2639,7 @@ export const PlayerPage: React.FC = () => {
           onClose={() => setActivePanel('none')}
           item={item}
           mediaSource={mediaSource}
-          streamUrl={currentStreamUrl || streamUrl}
+          streamUrl={upstreamStreamUrlRef.current || currentStreamUrl || streamUrl}
           engineType={engineType}
           currentTime={currentTime}
           duration={effectiveDuration}
@@ -2528,6 +2655,7 @@ export const PlayerPage: React.FC = () => {
           networkSpeed={networkSpeed}
           telemetry={telemetry}
           proxyInfo={proxyInfo}
+          nextPreloadStatus={nextPreloadStatus}
         />
       )}
 

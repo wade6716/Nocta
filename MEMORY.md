@@ -595,5 +595,18 @@ pnpm tauri build
 - **HTTP 客户端自签名 TLS 与代理旁路回退（[`http.ts`](file:///d:/wade/code/emby-tauri-player/src/api/http.ts)）**：统一注入 `danger: { acceptInvalidCerts: true, acceptInvalidHostnames: true }`；显式 `direct` 模式及代理异常兜底时使用 `noProxy: '*'` 彻底绕过代理与系统代理。
 - **WebDAV 协议自动升级与自动建目录（[`webdav.ts`](file:///d:/wade/code/emby-tauri-player/src/api/sync/webdav.ts)、[`useSyncStore.ts`](file:///d:/wade/code/emby-tauri-player/src/stores/useSyncStore.ts)）**：在 Tauri 环境置空 `Origin: ''` 剥离 `tauri://localhost`；`http://` 遇到 `400` / 协议层错误自动升级为 `https://` 重试并通过 `onUrlUpgraded` 回写表单配置；`PUT` 遇 `404`/`409` 自动发送 `MKCOL` 创建父级目录并重试；同步提取服务端响应正文片段以提供明确错误诊断。
 
+## 31. 内存时长缓冲与下一集纯内存智能预加载（跳过片头、可调触发与自动释内存）(2026-11-21)
+
+- **统一按时长缓冲（默认 5 分钟）与内存安全上限**：
+  - [`usePlayerStore.ts`](file:///d:/wade/code/emby-tauri-player/src/stores/usePlayerStore.ts) & [`configBackupService.ts`](file:///d:/wade/code/emby-tauri-player/src/services/configBackupService.ts)：新增 `bufferDurationSeconds`（默认 `300s` = 5 分钟，`60~1800s`）、`preloadNextEnabled`（默认 `true`）、`preloadNextDurationSeconds`（默认 `300s` = 5 分钟，`60~1800s`）、`cacheMemoryCapMB`（默认 `1024 MB` = `1G`，设置档位含 `256M / 512M / 1G / 1.5G / 2G`）、`preloadTriggerMode`（`smart` / `buffer_ready` / `remaining_time` / `progress`）及对应 3 项可调阈值，纳入持久化、校验钳制及导出/导入/同步。
+  - [`types.ts`](file:///d:/wade/code/emby-tauri-player/src/player/types.ts) & [`MpvPlayerEngine.ts`](file:///d:/wade/code/emby-tauri-player/src/player/MpvPlayerEngine.ts)：新增 `setBufferConfig`，按当前媒体码率（缺失兜底 16 Mbps）结合 `bufferDurationSeconds` 与 `cacheMemoryCapMB` 动态下发 `demuxer-readahead-secs`、`demuxer-max-bytes` 与 `demuxer-max-back-bytes`，突破旧版 60s/400MB 截断并在调节后实时生效；支持透传 `upstreamUrl` 保持代理路线准确。
+- **Rust 纯内存 1 MiB 分块预加载与本机 HTTP/1.1 Range 代理**：
+  - [`src-tauri/Cargo.toml`](file:///d:/wade/code/emby-tauri-player/src-tauri/Cargo.toml) 复用 `Cargo.lock` 既有依赖 `tokio`、`reqwest (0.12 rustls-tls stream http2)`、`uuid`，新增 **[`src-tauri/src/preload.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/preload.rs)** 与 [`src-tauri/src/lib.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/lib.rs) 注册 6 个控制命令。
+  - 纯内存 `ExtentStore` 按 `1 MiB` 块存储（零磁盘临时文件）；`plan_preload_ranges_by_duration` 感知跳过片头（优先缓存容器头 4 MiB + 索引尾 4 MiB + 片头后偏移减 12s VBR 余量的 5 分钟正片）；本机 `127.0.0.1:0` Range 服务支持内存命中微秒级返回（部分预载亦可瞬切）与未命中区间无缝回源。
+- **可调触发时机与切集后即停下载/自动释内存**：
+  - [`useNextEpisodePreloader.ts`](file:///d:/wade/code/emby-tauri-player/src/player/hooks/useNextEpisodePreloader.ts)、[`PlayerPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/PlayerPage.tsx)、[`osdOverlaySync.ts`](file:///d:/wade/code/emby-tauri-player/src/player/osdOverlaySync.ts) & [`OsdOverlayPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/OsdOverlayPage.tsx)：支持智能与单项触发、动态感知手动/章节片头变更并自动取消重拉；切集调用 `activate_preloaded_episode` 立即终止后台下载，稳定播放后通过 `release_active_preload_memory` 自动清空旧集内存块，同时保留上游透传防回拖断流。
+- **UI 设置页与播放器监控联调**：
+  - 新增共用工具 [`preloadUtils.ts`](file:///d:/wade/code/emby-tauri-player/src/player/preloadUtils.ts)，完善 [`SettingsPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/SettingsPage.tsx) 缓冲/预加载/256M~2G安全上限与触发时机设置卡、[`VideoProPanel.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/VideoProPanel.tsx) 快捷开关与实时预加载进度条、[`PlaybackInfoModal.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/PlaybackInfoModal.tsx) 前向缓冲目标与下一集预载状态展示及剪贴板导出。
+
 
 

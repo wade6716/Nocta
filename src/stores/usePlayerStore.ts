@@ -60,6 +60,8 @@ export interface ColorAdjustConfig {
   gamma: number; // -50 ~ 50
 }
 
+export type PreloadTriggerMode = 'smart' | 'buffer_ready' | 'remaining_time' | 'progress';
+
 export interface PlayerPreferences {
   hwdecMode: HwdecMode;
   toneMapping: ToneMappingMode;
@@ -77,6 +79,14 @@ export interface PlayerPreferences {
   showRemainingTime: boolean; // 是否显示剩余时间
   preferredAudioLang?: string;
   preferredSubLang?: string;
+  bufferDurationSeconds: number; // 当前播放内存缓冲时长（秒），默认 300 (5 分钟)，60 ~ 1800
+  preloadNextEnabled: boolean; // 是否开启下一集纯内存预加载，默认 true
+  preloadNextDurationSeconds: number; // 下一集预加载时长（秒），默认 300 (5 分钟)，60 ~ 1800
+  cacheMemoryCapMB: number; // 单缓存内存安全上限 (MB)，默认 1024，256 ~ 4096
+  preloadTriggerMode: PreloadTriggerMode; // 预加载触发时机模式，默认 'smart'
+  preloadTriggerBufferSeconds: number; // 当前集缓冲达标触发秒数，默认 30 (10 ~ 300)
+  preloadTriggerRemainingSeconds: number; // 距本集结束剩余秒数触发阈值，默认 180 (30 ~ 900)
+  preloadTriggerProgressPercent: number; // 播放进度百分比触发阈值，默认 60 (10 ~ 95)
 }
 
 export type SkipOutroAction = 'ask' | 'auto';
@@ -200,6 +210,7 @@ interface PlayerState {
       videoLayouts?: Record<string, VideoLayoutConfig>;
       skipSegments?: Record<string, SkipSegments>;
       skipSettings?: Partial<SkipSettings>;
+      playerPreferences?: Partial<PlayerPreferences>;
       engineType?: 'mpv' | 'html5';
     },
     mode?: 'merge' | 'replace'
@@ -225,7 +236,7 @@ const DEFAULT_COLOR_ADJUST: ColorAdjustConfig = {
   gamma: 0,
 };
 
-const DEFAULT_PLAYER_PREFERENCES: PlayerPreferences = {
+export const DEFAULT_PLAYER_PREFERENCES: PlayerPreferences = {
   hwdecMode: 'auto-safe',
   toneMapping: 'auto',
   deband: false,
@@ -240,7 +251,82 @@ const DEFAULT_PLAYER_PREFERENCES: PlayerPreferences = {
   longPressSpeed: 2.5,
   skipIntroSeconds: 85,
   showRemainingTime: false,
+  bufferDurationSeconds: 300,
+  preloadNextEnabled: true,
+  preloadNextDurationSeconds: 300,
+  cacheMemoryCapMB: 1024,
+  preloadTriggerMode: 'smart',
+  preloadTriggerBufferSeconds: 30,
+  preloadTriggerRemainingSeconds: 180,
+  preloadTriggerProgressPercent: 60,
 };
+
+function clampInt(val: unknown, min: number, max: number, fallback: number): number {
+  const num = Number(val);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(num)));
+}
+
+function isValidTriggerMode(mode: unknown): mode is PreloadTriggerMode {
+  return (
+    mode === 'smart' ||
+    mode === 'buffer_ready' ||
+    mode === 'remaining_time' ||
+    mode === 'progress'
+  );
+}
+
+/**
+ * 规范化播放器偏好设置并钳制数值安全边界。
+ */
+export function normalizePlayerPreferences(
+  raw?: Partial<PlayerPreferences>,
+  base: PlayerPreferences = DEFAULT_PLAYER_PREFERENCES
+): PlayerPreferences {
+  const merged = {
+    ...base,
+    ...(raw || {}),
+  };
+  return {
+    ...merged,
+    colorAdjust: raw?.colorAdjust
+      ? { ...base.colorAdjust, ...raw.colorAdjust }
+      : { ...base.colorAdjust },
+    bufferDurationSeconds: clampInt(merged.bufferDurationSeconds, 60, 1800, base.bufferDurationSeconds),
+    preloadNextEnabled:
+      typeof merged.preloadNextEnabled === 'boolean'
+        ? merged.preloadNextEnabled
+        : base.preloadNextEnabled,
+    preloadNextDurationSeconds: clampInt(
+      merged.preloadNextDurationSeconds,
+      60,
+      1800,
+      base.preloadNextDurationSeconds
+    ),
+    cacheMemoryCapMB: clampInt(merged.cacheMemoryCapMB, 256, 4096, base.cacheMemoryCapMB),
+    preloadTriggerMode: isValidTriggerMode(merged.preloadTriggerMode)
+      ? merged.preloadTriggerMode
+      : base.preloadTriggerMode,
+    preloadTriggerBufferSeconds: clampInt(
+      merged.preloadTriggerBufferSeconds,
+      10,
+      300,
+      base.preloadTriggerBufferSeconds
+    ),
+    preloadTriggerRemainingSeconds: clampInt(
+      merged.preloadTriggerRemainingSeconds,
+      30,
+      900,
+      base.preloadTriggerRemainingSeconds
+    ),
+    preloadTriggerProgressPercent: clampInt(
+      merged.preloadTriggerProgressPercent,
+      10,
+      95,
+      base.preloadTriggerProgressPercent
+    ),
+  };
+}
 
 function loadEngineType(): 'mpv' | 'html5' {
   try {
@@ -266,16 +352,9 @@ function loadPlayerPreferences(): PlayerPreferences {
   try {
     const raw = localStorage.getItem(PREFERENCES_KEY);
     const parsed = raw ? JSON.parse(raw) : {};
-    return {
-      ...DEFAULT_PLAYER_PREFERENCES,
-      ...parsed,
-      colorAdjust: {
-        ...DEFAULT_COLOR_ADJUST,
-        ...(parsed.colorAdjust || {}),
-      },
-    };
+    return normalizePlayerPreferences(parsed, DEFAULT_PLAYER_PREFERENCES);
   } catch {
-    return { ...DEFAULT_PLAYER_PREFERENCES, colorAdjust: { ...DEFAULT_COLOR_ADJUST } };
+    return normalizePlayerPreferences(undefined, DEFAULT_PLAYER_PREFERENCES);
   }
 }
 
@@ -665,13 +744,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 
   updatePlayerPreferences: (prefs) => {
     set((state) => {
-      const updated: PlayerPreferences = {
-        ...state.playerPreferences,
-        ...prefs,
-        colorAdjust: prefs.colorAdjust
-          ? { ...state.playerPreferences.colorAdjust, ...prefs.colorAdjust }
-          : state.playerPreferences.colorAdjust,
-      };
+      const updated = normalizePlayerPreferences(prefs, state.playerPreferences);
       saveStorageDebounced(PREFERENCES_KEY, updated);
       return { playerPreferences: updated };
     });
@@ -766,6 +839,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       let nextLayouts = state.videoLayouts;
       let nextSkipSegments = state.skipSegments;
       let nextSkipSettings = state.skipSettings;
+      let nextPreferences = state.playerPreferences;
       let nextEngine = state.engineType;
 
       if (mode === 'replace') {
@@ -779,6 +853,9 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         nextSkipSettings = configs.skipSettings
           ? { ...DEFAULT_SKIP_SETTINGS, ...configs.skipSettings }
           : { ...DEFAULT_SKIP_SETTINGS };
+        nextPreferences = configs.playerPreferences
+          ? normalizePlayerPreferences(configs.playerPreferences, DEFAULT_PLAYER_PREFERENCES)
+          : normalizePlayerPreferences(undefined, DEFAULT_PLAYER_PREFERENCES);
         if (configs.engineType) {
           nextEngine = configs.engineType;
         }
@@ -830,6 +907,13 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
           nextSkipSettings = { ...state.skipSettings, ...configs.skipSettings };
         }
 
+        if (configs.playerPreferences) {
+          nextPreferences = normalizePlayerPreferences(
+            configs.playerPreferences,
+            state.playerPreferences
+          );
+        }
+
         if (configs.engineType) {
           nextEngine = configs.engineType;
         }
@@ -841,6 +925,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       saveStorageImmediate(VIDEO_LAYOUTS_KEY, nextLayouts);
       saveStorageImmediate(SKIP_SEGMENTS_KEY, nextSkipSegments);
       saveStorageImmediate(SKIP_SETTINGS_KEY, nextSkipSettings);
+      saveStorageImmediate(PREFERENCES_KEY, nextPreferences);
       saveStorageImmediate(ENGINE_TYPE_KEY, nextEngine);
 
       return {
@@ -850,6 +935,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         videoLayouts: nextLayouts,
         skipSegments: nextSkipSegments,
         skipSettings: nextSkipSettings,
+        playerPreferences: nextPreferences,
         engineType: nextEngine,
       };
     });
@@ -864,8 +950,9 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         if (shouldPersist) saveStorageDebounced(SETTINGS_KEY, patch.danmakuSettings);
       }
       if (patch.playerPreferences !== undefined) {
-        next.playerPreferences = patch.playerPreferences;
-        if (shouldPersist) saveStorageDebounced(PREFERENCES_KEY, patch.playerPreferences);
+        const normalized = normalizePlayerPreferences(patch.playerPreferences, state.playerPreferences);
+        next.playerPreferences = normalized;
+        if (shouldPersist) saveStorageDebounced(PREFERENCES_KEY, normalized);
       }
       if (patch.videoLayouts !== undefined) {
         next.videoLayouts = patch.videoLayouts;

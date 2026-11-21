@@ -10,6 +10,7 @@ import {
 import { UnlistenFn } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import {
+  BufferConfigOptions,
   HwdecMode,
   IPlayerEngine,
   PlayerLoadOptions,
@@ -75,7 +76,7 @@ function isLanOrLoopbackUrl(rawUrl?: string): boolean {
   }
 }
 
-async function resolveMpvProxyDetailed(
+export async function resolveMpvProxyDetailed(
   targetUrl?: string,
   override: StreamProxyOverride = 'follow'
 ): Promise<ResolvedStreamProxyInfo> {
@@ -132,6 +133,23 @@ async function resolveMpvProxyDetailed(
   }
 }
 
+function computeMpvBufferProperties(config: BufferConfigOptions) {
+  const durationSec = Math.max(60, Math.min(1800, Math.round(config.bufferDurationSeconds || 300)));
+  const capMB = Math.max(256, Math.min(4096, Math.round(config.cacheMemoryCapMB || 1024)));
+  const capBytes = capMB * 1024 * 1024;
+  const bitrateBps =
+    config.mediaBitrateBps && config.mediaBitrateBps > 0
+      ? config.mediaBitrateBps
+      : 16 * 1000 * 1000; // 未提供码率时按 16 Mbps 保底估算
+  const estForwardBytes = Math.ceil((bitrateBps / 8) * durationSec * 1.25);
+  const maxForwardBytes = Math.max(128 * 1024 * 1024, Math.min(capBytes, estForwardBytes));
+  const maxBackBytes = Math.max(
+    64 * 1024 * 1024,
+    Math.min(256 * 1024 * 1024, Math.round(maxForwardBytes * 0.25))
+  );
+  return { durationSec, maxForwardBytes, maxBackBytes };
+}
+
 export class MpvPlayerEngine implements IPlayerEngine {
   // 全局串行队列：防止跨页面停止旧播放与初始化新实例在底层 'main' 窗口发生并发冲突
   private static lifecycleQueue: Promise<void> = Promise.resolve();
@@ -145,6 +163,10 @@ export class MpvPlayerEngine implements IPlayerEngine {
   private initPromise: Promise<void> | null = null;
   private pendingSeekTime: number | null = null;
   private pendingAlignment: { verticalOffsetPercent: number; bottomAlign: boolean } | null = null;
+  private bufferConfig: BufferConfigOptions = {
+    bufferDurationSeconds: 300,
+    cacheMemoryCapMB: 1024,
+  };
   private loadEpoch = 0;
   private macWindowAttachPromise: Promise<void> | null = null;
 
@@ -289,9 +311,7 @@ export class MpvPlayerEngine implements IPlayerEngine {
       await setProperty('force-seekable', 'yes').catch(() => {});
       await setProperty('cache', 'yes').catch(() => {});
       await setProperty('demuxer-seekable-cache', 'yes').catch(() => {});
-      await setProperty('demuxer-max-bytes', 419430400).catch(() => {}); // 400MB 解复用缓存
-      await setProperty('demuxer-max-back-bytes', 157286400).catch(() => {}); // 150MB 后退缓存
-      await setProperty('demuxer-readahead-secs', 60).catch(() => {});
+      await this.applyBufferConfigToMpv();
       await setProperty('hr-seek', 'default').catch(() => {});
       await setProperty('hr-seek-framedrop', 'yes').catch(() => {}); // 4K 60fps HEVC HDR 跳转避免解码器拥塞黑屏
       await setProperty('demuxer-mkv-subtitle-preroll', 'no').catch(() => {}); // 杜绝 MKV 内嵌字幕反向扫描拖垮网络流
@@ -645,17 +665,28 @@ export class MpvPlayerEngine implements IPlayerEngine {
 
     if (this.isDestroyed || currentEpoch !== this.loadEpoch) return;
 
+    if (options.bufferConfig) {
+      this.bufferConfig = { ...options.bufferConfig };
+    }
+    await this.applyBufferConfigToMpv();
+
     // 解析并应用播放流网络代理路线，并向 UI 广播透明代理诊断状态
     let resolvedProxyInfo: ResolvedStreamProxyInfo = {
       mode: 'direct',
       effectiveProxy: '',
       overrideMode: options.proxyOverride ?? 'follow',
     };
+    let mpvEffectiveProxy = '';
     try {
-      resolvedProxyInfo = await resolveMpvProxyDetailed(options.url, options.proxyOverride ?? 'follow');
+      const proxyTargetUrl = options.upstreamUrl || options.url;
+      resolvedProxyInfo = await resolveMpvProxyDetailed(
+        proxyTargetUrl,
+        options.proxyOverride ?? 'follow'
+      );
+      mpvEffectiveProxy = isLanOrLoopbackUrl(options.url) ? '' : resolvedProxyInfo.effectiveProxy;
       this._lastProxyInfo = resolvedProxyInfo;
       this.proxyResolvedListeners.forEach((cb) => cb(resolvedProxyInfo));
-      await setProperty('http-proxy', resolvedProxyInfo.effectiveProxy);
+      await setProperty('http-proxy', mpvEffectiveProxy);
     } catch (e) {
       console.warn('[MpvEngine Sync Proxy Warning]', e);
     }
@@ -699,7 +730,8 @@ export class MpvPlayerEngine implements IPlayerEngine {
           this.isInitialized = false;
           MpvPlayerEngine.mpvInstanceCreated = false;
           await this.init(null);
-          await setProperty('http-proxy', resolvedProxyInfo.effectiveProxy).catch(() => {});
+          await this.applyBufferConfigToMpv();
+          await setProperty('http-proxy', mpvEffectiveProxy).catch(() => {});
           if (this.pendingSeekTime && this.pendingSeekTime > 0) {
             await setProperty('start', `+${Math.floor(this.pendingSeekTime)}`).catch(() => {});
           }
@@ -838,6 +870,21 @@ export class MpvPlayerEngine implements IPlayerEngine {
   }
 
   // ==================== Pro 硬解 / 画质 / 音字幕调校接口 ====================
+
+  private async applyBufferConfigToMpv(): Promise<void> {
+    const { durationSec, maxForwardBytes, maxBackBytes } = computeMpvBufferProperties(
+      this.bufferConfig
+    );
+    await setProperty('demuxer-max-bytes', maxForwardBytes).catch(() => {});
+    await setProperty('demuxer-max-back-bytes', maxBackBytes).catch(() => {});
+    await setProperty('demuxer-readahead-secs', durationSec).catch(() => {});
+  }
+
+  async setBufferConfig(config: BufferConfigOptions): Promise<void> {
+    this.bufferConfig = { ...config };
+    if (!this.isInitialized || this.isDestroyed) return;
+    await this.applyBufferConfigToMpv();
+  }
 
   async setHwdecMode(mode: HwdecMode): Promise<void> {
     if (!this.isInitialized || this.isDestroyed) return;

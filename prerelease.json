@@ -1,0 +1,31 @@
+{
+  "version": "0.1.0-alpha.13",
+  "notes": "<!-- Release notes generated using configuration in .github/release.yml at v0.1.0-alpha.13 -->\n\n\n\n**Full Changelog**: https://github.com/wade6716/Nocta/compare/v0.1.0-alpha.12...v0.1.0-alpha.13",
+  "pub_date": "2026-11-21T13:11:29.540Z",
+  "platforms": {
+    "linux-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUQVU1VFpoVS9CVVFvc3V6VWJPbEYvbEhsVTR5aUd1QkhrQURyaWdtRHF1bkFHaGMwT2hjVFJzWHRzMmJOZC8rRCtrbFU2aVQyNkpzZUdoM0ZOK2hQNkgvcHFJMUE5K3djPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1MjY2MjEyCWZpbGU6Tm9jdGFfMC4xLjAtYWxwaGEuMTNfYW1kNjQuZGViCXZlcnNpb246MC4xLjAtYWxwaGEuMTMKQTBoblh2WUpUWFV1enZHWDZuZHNXOENURlljRld5bzBLZEYvK2h2V09rZGNoYkJ0KzZKN1pXcUlXUVN0bmt4MkJxayswK1VOTUM4NEFQSWlEU1lHQkE9PQo=",
+      "url": "https://github.com/wade6716/Nocta/releases/download/v0.1.0-alpha.13/Nocta_0.1.0-alpha.13_linux_amd64.deb"
+    },
+    "linux-x86_64-deb": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUQVU1VFpoVS9CVVFvc3V6VWJPbEYvbEhsVTR5aUd1QkhrQURyaWdtRHF1bkFHaGMwT2hjVFJzWHRzMmJOZC8rRCtrbFU2aVQyNkpzZUdoM0ZOK2hQNkgvcHFJMUE5K3djPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1MjY2MjEyCWZpbGU6Tm9jdGFfMC4xLjAtYWxwaGEuMTNfYW1kNjQuZGViCXZlcnNpb246MC4xLjAtYWxwaGEuMTMKQTBoblh2WUpUWFV1enZHWDZuZHNXOENURlljRld5bzBLZEYvK2h2V09rZGNoYkJ0KzZKN1pXcUlXUVN0bmt4MkJxayswK1VOTUM4NEFQSWlEU1lHQkE9PQo=",
+      "url": "https://github.com/wade6716/Nocta/releases/download/v0.1.0-alpha.13/Nocta_0.1.0-alpha.13_linux_amd64.deb"
+    },
+    "darwin-aarch64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUQVU1VFpoVS9CVVlwT2c5R09FV3psUzNYaEFzWmlnbm5zc3REcVVXUG5HS0pnTDdvK2tYclNuTkI4S1Q1akNSVVl4Q2liYXJGTkhFbDNBRm4yeGVjZHFoL0VkRVJUWlFFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1MjY2MDU1CWZpbGU6Tm9jdGEuYXBwLnRhci5negl2ZXJzaW9uOjAuMS4wLWFscGhhLjEzCkVwdm1YOWxaM1NRTDdFMEQ4eTNRcTMzQlFITVJyS2I3UW5qbXBEMEN0U1J0R0RqY1cxU2ZkSjBmOVgwdTJqd1NnUzBJc3ZQMndZOFgwc0JLVDVwTEJRPT0K",
+      "url": "https://github.com/wade6716/Nocta/releases/download/v0.1.0-alpha.13/Nocta_0.1.0-alpha.13_macos_aarch64.app.tar.gz"
+    },
+    "darwin-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUQVU1VFpoVS9CVWZMT3BNME04Y29WdUpFeUZVT29hTll6VWgvMnBweDg1SzAwUS8xb0RaUmk3ZkZoelFhTGlTTlBYRG9UNXNHczg1ODZyM1B4aFJ4Q25JSEtmWWk5RGdFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1MjY2MzkxCWZpbGU6Tm9jdGEuYXBwLnRhci5negl2ZXJzaW9uOjAuMS4wLWFscGhhLjEzCjkyZWlzdzlaREtSMWJPdmZuaDYrejVmTG1PSWtmZzE0YlFvREZUT3hmVlhoQTQ2QTBqTmdORU1qaUcraTN5NGlVYlJXQzJCOFZydjcyT3ZQQ3k5UkRBPT0K",
+      "url": "https://github.com/wade6716/Nocta/releases/download/v0.1.0-alpha.13/Nocta_0.1.0-alpha.13_macos_x64.app.tar.gz"
+    },
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUQVU1VFpoVS9CVVFFbTNmMnhELzcrcDd4azdVdG1PMEtnK0ZkS0xwNElPMEhNcE4waUpOaWcwd3ZUZHEra25JazJxOGw3TURldy9iT2F2V2NTYVdzWFFzdWN5T0NBNmcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1MjY2NjE2CWZpbGU6Tm9jdGFfMC4xLjAtYWxwaGEuMTNfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuMS4wLWFscGhhLjEzCnJDdDFaNW9TeDFsVk1hL05PTmMyTWVaZ1RtRzhmK0gwU09QVG5IUDZQR1FrU2hJQ0pLbFRSZWsxYXJab01POWxZRjdkclo0eTRaWWs5akRNdEVtT0N3PT0K",
+      "url": "https://github.com/wade6716/Nocta/releases/download/v0.1.0-alpha.13/Nocta_0.1.0-alpha.13_windows_x64-setup.exe"
+    },
+    "windows-x86_64-nsis": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUQVU1VFpoVS9CVVFFbTNmMnhELzcrcDd4azdVdG1PMEtnK0ZkS0xwNElPMEhNcE4waUpOaWcwd3ZUZHEra25JazJxOGw3TURldy9iT2F2V2NTYVdzWFFzdWN5T0NBNmcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1MjY2NjE2CWZpbGU6Tm9jdGFfMC4xLjAtYWxwaGEuMTNfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuMS4wLWFscGhhLjEzCnJDdDFaNW9TeDFsVk1hL05PTmMyTWVaZ1RtRzhmK0gwU09QVG5IUDZQR1FrU2hJQ0pLbFRSZWsxYXJab01POWxZRjdkclo0eTRaWWs5akRNdEVtT0N3PT0K",
+      "url": "https://github.com/wade6716/Nocta/releases/download/v0.1.0-alpha.13/Nocta_0.1.0-alpha.13_windows_x64-setup.exe"
+    }
+  }
+}

@@ -12,6 +12,8 @@ import {
 } from 'lucide-react';
 import { useAuthStore, SavedServer } from '../stores/useAuthStore';
 import { useMediaStore } from '../stores/useMediaStore';
+import { usePlayerStore } from '../stores/usePlayerStore';
+import { fetchAndPreparePlaybackSession } from '../player/playbackSessionService';
 import { DanmuServerModal } from '../components/danmu/DanmuServerModal';
 import { EmbyServerModal } from '../components/settings/EmbyServerModal';
 import { NetworkProxyModal } from '../components/settings/NetworkProxyModal';
@@ -26,7 +28,9 @@ import {
   ViewCounts,
   mergeMediaBySeries,
   isVideoMedia,
-  buildItemImageUrl,
+  resolveItemBackdropUrl,
+  resolveItemPosterUrl,
+  stripImageFormatWebp,
   formatSeriesEpisodeBadge,
 } from '../api/embyClient';
 import { MediaCard } from '../components/media/MediaCard';
@@ -78,9 +82,11 @@ export const HomePage: React.FC = () => {
 
   const isCached = isLoaded && serverId === currentServer?.id;
   const [loading, setLoading] = useState(!isCached);
+  const [startingSpotlightPlay, setStartingSpotlightPlay] = useState(false);
   const [isDanmuModalOpen, setIsDanmuModalOpen] = useState(false);
   const [isServerModalOpen, setIsServerModalOpen] = useState(false);
   const [isProxyModalOpen, setIsProxyModalOpen] = useState(false);
+  const setPlaybackContext = usePlayerStore((s) => s.setPlaybackContext);
   const loadReqIdRef = useRef(0);
 
   const fetchCountsForViews = useCallback(
@@ -273,12 +279,47 @@ export const HomePage: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [navigate]);
 
-  const handleCardClick = (item: EmbyItem) => {
+  const saveHomeScroll = useCallback(() => {
     const container = document.getElementById('main-scroll-container');
     if (container) {
       setHomeScrollY(container.scrollTop);
     }
+  }, [setHomeScrollY]);
+
+  const handleCardClick = (item: EmbyItem) => {
+    saveHomeScroll();
     navigate(`/detail/${item.Id}`);
+  };
+
+  const handleSpotlightDetail = (item: EmbyItem) => {
+    saveHomeScroll();
+    const targetId = item.Type === 'Episode' && item.SeriesId ? item.SeriesId : item.Id;
+    navigate(`/detail/${targetId}`);
+  };
+
+  const handleSpotlightPlay = async (item: EmbyItem) => {
+    if (!currentServer || startingSpotlightPlay) return;
+    saveHomeScroll();
+    if (item.Type !== 'Movie' && item.Type !== 'Episode') {
+      navigate(`/detail/${item.Id}`);
+      return;
+    }
+    try {
+      setStartingSpotlightPlay(true);
+      const engineType = usePlayerStore.getState().engineType;
+      const session = await fetchAndPreparePlaybackSession(
+        currentServer,
+        item.Id,
+        engineType,
+        item
+      );
+      setPlaybackContext(session);
+      navigate(`/player/${item.Id}`);
+    } catch (err: any) {
+      alert(`无法起播: ${err?.message || '请检查服务器连接'}`);
+    } finally {
+      setStartingSpotlightPlay(false);
+    }
   };
 
   // 用于 Hero Spotlight 的精选候选计算
@@ -306,12 +347,20 @@ export const HomePage: React.FC = () => {
 
   const spotlightBackdropUrl = useMemo(() => {
     if (!spotlightItem || !currentServer) return '';
-    return buildItemImageUrl(
-      currentServer.url,
-      spotlightItem.SeriesId || spotlightItem.Id,
-      spotlightItem.ImageTags?.Backdrop || spotlightItem.BackdropImageTags?.[0],
-      { type: 'Backdrop', maxWidth: 1920, quality: 90 }
-    );
+    return resolveItemBackdropUrl(currentServer.url, spotlightItem, {
+      maxWidth: 1920,
+      quality: 90,
+      mode: 'hero',
+      allowPrimaryFallback: true,
+    });
+  }, [spotlightItem, currentServer]);
+
+  const spotlightPrimaryFallbackUrl = useMemo(() => {
+    if (!spotlightItem || !currentServer) return '';
+    return resolveItemPosterUrl(currentServer.url, spotlightItem, {
+      maxWidth: 1200,
+      quality: 85,
+    });
   }, [spotlightItem, currentServer]);
 
   return (
@@ -375,14 +424,45 @@ export const HomePage: React.FC = () => {
       ) : (
         <div className="space-y-10">
           {/* 1. Hero Spotlight Banner (精选全宽大屏 + 双层渐变遮罩) */}
-          {spotlightItem && spotlightBackdropUrl && (
-            <div className="h-[360px] md:h-[420px] rounded-2xl overflow-hidden relative border border-white/[0.08] shadow-2xl group">
+          {spotlightItem && (
+            <div className="h-[360px] md:h-[420px] rounded-2xl overflow-hidden relative border border-white/[0.08] bg-[#131826] shadow-2xl group">
               {/* 背景剧照 */}
-              <img
-                src={spotlightBackdropUrl}
-                alt={spotlightItem.Name}
-                className="absolute inset-0 w-full h-full object-cover object-top filter brightness-90 group-hover:scale-105 transition-transform duration-700 ease-out"
-              />
+              {spotlightBackdropUrl && (
+                <img
+                  key={spotlightBackdropUrl}
+                  src={spotlightBackdropUrl}
+                  alt={spotlightItem.SeriesName || spotlightItem.Name}
+                  onError={(e) => {
+                    const target = e.currentTarget;
+                    const step = target.dataset.fallbackStep;
+                    if (step === 'done') return;
+
+                    if (!step) {
+                      const noWebp = stripImageFormatWebp(target.src);
+                      if (noWebp) {
+                        target.dataset.fallbackStep = '1';
+                        target.src = noWebp;
+                        return;
+                      }
+                    }
+
+                    if (
+                      step !== '2' &&
+                      spotlightPrimaryFallbackUrl &&
+                      spotlightPrimaryFallbackUrl !== spotlightBackdropUrl &&
+                      target.src !== spotlightPrimaryFallbackUrl
+                    ) {
+                      target.dataset.fallbackStep = '2';
+                      target.src = spotlightPrimaryFallbackUrl;
+                      return;
+                    }
+
+                    target.dataset.fallbackStep = 'done';
+                    target.style.display = 'none';
+                  }}
+                  className="absolute inset-0 w-full h-full object-cover object-top filter brightness-90 group-hover:scale-105 transition-transform duration-700 ease-out"
+                />
+              )}
 
               {/* 左侧文字保护渐变遮罩 */}
               <div className="absolute inset-0 bg-gradient-to-r from-[#0B0E17] via-[#0B0E17]/75 to-transparent" />
@@ -431,14 +511,15 @@ export const HomePage: React.FC = () => {
                 {/* 主行动按钮组 */}
                 <div className="flex items-center space-x-3 mt-5">
                   <button
-                    onClick={() => handleCardClick(spotlightItem)}
-                    className="px-6 py-2.5 rounded-full bg-[#38BDF8] hover:bg-[#0ea5e9] text-slate-950 font-bold text-xs sm:text-sm shadow-lg shadow-sky-500/25 transition flex items-center space-x-2 cursor-pointer"
+                    onClick={() => handleSpotlightPlay(spotlightItem)}
+                    disabled={startingSpotlightPlay}
+                    className="px-6 py-2.5 rounded-full bg-[#38BDF8] hover:bg-[#0ea5e9] text-slate-950 font-bold text-xs sm:text-sm shadow-lg shadow-sky-500/25 transition flex items-center space-x-2 cursor-pointer disabled:opacity-60"
                   >
                     <Play className="w-4 h-4 fill-current" />
-                    <span>立即播放</span>
+                    <span>{startingSpotlightPlay ? '准备播放...' : '立即播放'}</span>
                   </button>
                   <button
-                    onClick={() => handleCardClick(spotlightItem)}
+                    onClick={() => handleSpotlightDetail(spotlightItem)}
                     className="px-5 py-2.5 rounded-full bg-white/10 hover:bg-white/20 text-slate-100 font-medium text-xs sm:text-sm backdrop-blur-md border border-white/10 transition flex items-center space-x-1.5 cursor-pointer"
                   >
                     <Info className="w-4 h-4" />

@@ -21,7 +21,7 @@ import {
   ToneMappingMode,
   VideoAspectPreset,
 } from './types';
-import { MappedTrack } from '../api/embyClient';
+import { DEFAULT_EMBY_USER_AGENT, MappedTrack } from '../api/embyClient';
 import { resolveEffectiveProxyDetailed } from '../api/http';
 
 const IS_MACOS = /Macintosh|Mac OS X/i.test(navigator.userAgent);
@@ -130,6 +130,30 @@ export async function resolveMpvProxyDetailed(
   } catch (e) {
     console.warn('[MpvEngine Resolve Proxy Warning]', e);
     return { mode: 'direct', effectiveProxy: '', overrideMode: override };
+  }
+}
+
+function formatMpvEndFileError(errorCode?: number, fileError?: string): string {
+  switch (errorCode) {
+    case -13:
+      return '媒体流加载失败 (libmpv error -13)：服务器可能拦截了当前 User-Agent/鉴权头，或直链/网络代理异常';
+    case -14:
+      return '音频输出初始化失败 (libmpv error -14)';
+    case -15:
+      return '视频渲染初始化失败 (libmpv error -15)';
+    case -16:
+      return '无可播放的音视频轨道 (libmpv error -16)';
+    case -17:
+      return '无法识别的媒体格式 (libmpv error -17)';
+    case -18:
+      return '不支持的媒体协议或格式 (libmpv error -18)';
+    default:
+      if (typeof errorCode === 'number') {
+        return fileError
+          ? `libmpv 播放出错 (${errorCode}): ${fileError}`
+          : `libmpv 播放出错 (code ${errorCode})`;
+      }
+      return fileError ? `libmpv 播放出错: ${fileError}` : 'libmpv 播放出错或媒体流异常中断';
   }
 }
 
@@ -303,6 +327,8 @@ export class MpvPlayerEngine implements IPlayerEngine {
       await setProperty('screenshot-format', 'png').catch(() => {});
       await setProperty('screenshot-high-bit-depth', 'yes').catch(() => {});
       await setProperty('target-peak', 'auto').catch(() => {});
+      await setProperty('user-agent', DEFAULT_EMBY_USER_AGENT).catch(() => {});
+      await setProperty('tls-verify', 'no').catch(() => {});
       if (effectiveProxy) {
         await setProperty('http-proxy', effectiveProxy).catch(() => {});
       }
@@ -528,12 +554,13 @@ export class MpvPlayerEngine implements IPlayerEngine {
         } else if (evName === 'end-file') {
           const reason = (ev as any).reason;
           if (reason === 'error') {
+            const errorCode =
+              typeof (ev as any).error === 'number' ? (ev as any).error : undefined;
             const fileError = (ev as any).file_error;
             console.error('[MpvEngine End-File Error]', ev);
             this.setState('idle');
-            this.errorListeners.forEach((cb) =>
-              cb(fileError ? `libmpv 播放出错: ${fileError}` : 'libmpv 播放出错或媒体流异常中断')
-            );
+            const errText = formatMpvEndFileError(errorCode, fileError);
+            this.errorListeners.forEach((cb) => cb(errText));
           } else if (reason === 'eof') {
             this.setState('ended');
           }
@@ -705,6 +732,7 @@ export class MpvPlayerEngine implements IPlayerEngine {
     await setProperty('force-seekable', 'yes').catch(() => {});
     await setProperty('hr-seek-framedrop', 'yes').catch(() => {});
     await setProperty('demuxer-mkv-subtitle-preroll', 'no').catch(() => {});
+    await this.applyNetworkHeadersToMpv(options.userAgent, options.headers);
 
     this.setState('loading');
     this.pendingSeekTime = options.initialTime && options.initialTime > 0 ? options.initialTime : null;
@@ -732,6 +760,7 @@ export class MpvPlayerEngine implements IPlayerEngine {
           await this.init(null);
           await this.applyBufferConfigToMpv();
           await setProperty('http-proxy', mpvEffectiveProxy).catch(() => {});
+          await this.applyNetworkHeadersToMpv(options.userAgent, options.headers);
           if (this.pendingSeekTime && this.pendingSeekTime > 0) {
             await setProperty('start', `+${Math.floor(this.pendingSeekTime)}`).catch(() => {});
           }
@@ -871,12 +900,47 @@ export class MpvPlayerEngine implements IPlayerEngine {
 
   // ==================== Pro 硬解 / 画质 / 音字幕调校接口 ====================
 
+  private async applyNetworkHeadersToMpv(
+    userAgent?: string,
+    headers?: Record<string, string>
+  ): Promise<void> {
+    let effectiveUa = (userAgent || DEFAULT_EMBY_USER_AGENT).trim() || DEFAULT_EMBY_USER_AGENT;
+    if (headers) {
+      for (const [k, v] of Object.entries(headers)) {
+        if (k.trim().toLowerCase() === 'user-agent' && v && v.trim()) {
+          effectiveUa = v.trim();
+        }
+      }
+    }
+
+    await setProperty('user-agent', effectiveUa).catch((e) =>
+      console.warn('[MpvEngine Set UA Warning]', e)
+    );
+
+    // 必须使用 change-list clr + append 逐条注入请求头：X-Emby-Authorization 内含逗号，
+    // 若直接 setProperty('http-header-fields', ...) 会被 mpv 按逗号拆分成多个非法头导致 HTTP 400
+    await command('change-list', ['http-header-fields', 'clr', '']).catch(() =>
+      setProperty('http-header-fields', '').catch(() => {})
+    );
+
+    if (headers) {
+      for (const [rawKey, rawVal] of Object.entries(headers)) {
+        const key = rawKey.trim();
+        const val = rawVal?.trim();
+        if (!key || !val || key.toLowerCase() === 'user-agent') continue;
+        await command('change-list', ['http-header-fields', 'append', `${key}: ${val}`]).catch(
+          (e) => console.warn('[MpvEngine Set Header Warning]', key, e)
+        );
+      }
+    }
+  }
+
   private async applyBufferConfigToMpv(): Promise<void> {
     const { durationSec, maxForwardBytes, maxBackBytes } = computeMpvBufferProperties(
       this.bufferConfig
     );
-    await setProperty('demuxer-max-bytes', maxForwardBytes).catch(() => {});
-    await setProperty('demuxer-max-back-bytes', maxBackBytes).catch(() => {});
+    await setProperty('demuxer-max-bytes', String(maxForwardBytes)).catch(() => {});
+    await setProperty('demuxer-max-back-bytes', String(maxBackBytes)).catch(() => {});
     await setProperty('demuxer-readahead-secs', durationSec).catch(() => {});
   }
 

@@ -87,6 +87,7 @@ export interface OsdSyncPayload {
   streamUrl?: string | null;
   currentServerName?: string;
   currentServerUrl?: string;
+  userAgent?: string;
   seasons?: EmbyItem[];
   selectedSeasonId?: string | null;
   episodes?: EmbyItem[];

@@ -344,3 +344,37 @@
 - **可调触发时机、切集即停下载与防双份内存堆积**：
   - [`useNextEpisodePreloader.ts`](file:///d:/wade/code/emby-tauri-player/src/player/hooks/useNextEpisodePreloader.ts) 支持 4 种设置页与播放器面板可调触发时机（`smart` / `buffer_ready` / `remaining_time` / `progress` 及对应阈值）并感知手动 `skipSegments` 与 Emby `Chapters` 片头（若下一集已有更靠后观看进度则优先续播位置；播放中途新增/修改片头标记自动作废并重算重拉）。
   - 切入下一集调用 `activate_preloaded_episode` 时，Rust 后端**立即设置 `cancelled` 并 `abort()` 后台下载任务**，仅将已有分块暴露给本机 `127.0.0.1:0` HTTP/1.1 Range 服务瞬间秒开；新集稳定推进后（推进 `>= 15s` 且缓冲 `>= 10s` 或切集 `>= 25s`），或启动再下一集预加载时，自动调用 `release_active_preload_memory` **释放内存分块并保留轻量上游透明 Range 回源代理**；切入非目标集、切换多版本片源/代理或离开播放页立即停止下载并彻底清零内存。
+
+### 24. 全链路 Emby User-Agent / 鉴权头统一与 MPV `-13` 诊断规范 (Unified User-Agent & Stream Headers)
+- **禁止放任 `libmpv` 使用裸默认 `User-Agent: libmpv`**：
+  - 大量套用 Cloudflare WAF、客户端白名单或 302 网盘直链（如 115 / Alist）的 Emby 公益服会直接拦截 `libmpv` 默认 UA，表现为 API 接口正常但起播立即返回 `end-file` `error: -13 (MPV_ERROR_LOADING_FAILED)`。
+  - [`embyClient.ts`](file:///d:/wade/code/emby-tauri-player/src/api/embyClient.ts) 统一提供 `DEFAULT_EMBY_USER_AGENT`（桌面 Chrome UA）、`EMBY_USER_AGENT_PRESETS`、解耦解析器 `registerEmbyUserAgentGetter` / `resolveEmbyUserAgent` 以及 `buildEmbyStreamHeaders`；[`useAuthStore.ts`](file:///d:/wade/code/emby-tauri-player/src/stores/useAuthStore.ts) 支持按服务器持久化 `userAgent` 并在备份合并时向后兼容保留。
+  - 在 Tauri 环境下，`buildEmbyHeaders`、`MpvPlayerEngine`（`user-agent` + `tls-verify=no`）、[`useNextEpisodePreloader.ts`](file:///d:/wade/code/emby-tauri-player/src/player/hooks/useNextEpisodePreloader.ts) 与 Rust [`preload.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/preload.rs)（`reqwest::ClientBuilder::user_agent`）必须全链路发送同一 `User-Agent`；`buildEmbyHeaders` 仅在 `isTauriEnvironment()` 为 `true` 时注入 `User-Agent`，避免纯浏览器 Dev 模式触发 Fetch 禁改头警告。
+- **MPV `http-header-fields` 含逗号头注入红线 (`change-list append`)**：
+  - `X-Emby-Authorization` 值内部包含多个逗号分隔字段（`Client="...", Device="...", Token="..."`）。**严禁直接调用 `setProperty('http-header-fields', ...)`**（mpv 会按逗号把字符串列表拆分，导致将 `Device="..."` 当成非法 HTTP 头引发 `400 Bad Request`）。
+  - 必须在 [`MpvPlayerEngine.ts`](file:///d:/wade/code/emby-tauri-player/src/player/MpvPlayerEngine.ts) 的 `applyNetworkHeadersToMpv` 中先执行 `command('change-list', ['http-header-fields', 'clr', ''])`，再对每个非 `user-agent` 头逐条调用 `command('change-list', ['http-header-fields', 'append', `${key}: ${val}`])`；同时保留 `MpvPlayerEngine` 初始化后 `user-agent` 与 `end-file` 数字错误码（`-13` ~ `-18`）中文解析。
+- **直链构造与 `.strm` 私网防误判**：
+  - `buildNativeDirectStreamUrl` 优先透传 `http(s)://` 形式的 `mediaSource.DirectStreamUrl`；若 `IsRemote && Path` 为私网或回环地址（如 `127.0.0.1` / `192.168.x.x`）而服务器地址本身为公网域名，禁止客户端直接请求该内网 `Path`，应回退经 Emby `/emby/Videos/{id}/stream.{ext}?static=true` 代理拉流，且路径与查询参数必须做 `encodeURIComponent`。
+- **MPV `demuxer-max-bytes` 属性类型避坑**：
+  - `demuxer-max-bytes` 与 `demuxer-max-back-bytes` 在 `mpv` 中属于 `OPT_BYTE_SIZE` 选项，通过 `tauri-plugin-libmpv` 传入 JSON 数字易在某些平台触发 `Failed to set property 'demuxer-max-bytes': error accessing property`。必须在 [`MpvPlayerEngine.ts`](file:///d:/wade/code/emby-tauri-player/src/player/MpvPlayerEngine.ts) 中以 `String(bytes)` 字符串下发。
+- **Emby 客户端 `Client` 标识联动与 `PlaybackInfo` 重协商**：
+  - 仅改 HTTP `User-Agent` 而不改 `X-Emby-Authorization` 中的 `Client="..."` 仍可能被部分公益服客户端白名单拦截。[`embyClient.ts`](file:///d:/wade/code/emby-tauri-player/src/api/embyClient.ts) 通过 `resolveEmbyClientName` 将自定义 UA/预设自动同步至 `Client`（默认配置保持 `EmbyTauriPlayer` 不破坏存量会话）；播放页切换客户端预设后需重新调用 `fetchAndPreparePlaybackSession` 重拉 `PlaybackInfo`。
+- **`libmpv` `-13` 自动逐跳诊断与 Rust 零内存透明中转 (`preload.rs`)**：
+  - 当 `libmpv` 触发 `-13` 时，[`PlayerPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/PlayerPage.tsx) 自动调用 [`preload.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/preload.rs) 的 `diagnose_stream_url` 逐跳执行 `GET Range: bytes=0-0`（禁用自动重定向，302 跨域自动剥离 `X-Emby-*` / `authorization` 头防网盘拒收，且 URL 敏感 Query 参数强制脱敏）。若 Rust 探测可达（问题出在 `libmpv`/FFmpeg TLS 或跳转兼容），自动切入零内存透明 Range 中转 `start_stream_relay`（单次流仅自动回退一次，离开/切集及时 `stop_stream_relay`）；否则呈现逐跳 HTTP 状态码、`cf-ray` / `cf-mitigated`、响应体片段与无转码 `DirectStreamUrl` 备选重试。
+
+### 25. 首页大图与剧集详情页的 `Episode` 归属与图片降级规范
+- **禁止对 `Episode` 直接使用分集自身标题与横版剧照冒充整部剧详情**：
+  - 首页 Hero Spotlight 优先取「继续观看」首位，往往为 `Type === 'Episode'`。若直接以 `episode.Id` 跳转详情页并渲染 `item.Name`、`Primary`/`Backdrop`，会出现「大标题显示单集名、2:3 竖版海报拉伸或 404、背景图 404」问题。
+  - [`DetailPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/DetailPage.tsx) 在检测到 `item.Type === 'Episode' && item.SeriesId` 时必须并发拉取父级 `Series` 详情（附带 `loadReqIdRef` 防竞态）：大标题、竖版 2:3 海报、全屏氛围背景、年份与剧集主简介优先取 `seriesItem`（并在主标题下方附加单集副标题及「立即/继续播放 第 X 集」按钮）。
+- **分集 `Backdrop` 寻址与多级 `onError` 降级**：
+  - Emby 分集条目通常没有独立的 `Backdrop`，请求分集 `Backdrop/0` 会返 404。[`HomePage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/HomePage.tsx)、[`DetailPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/DetailPage.tsx) 与 [`PlayerPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/PlayerPage.tsx) 对分集背景图统一优先取 `ParentBackdropItemId || SeriesId` 配合 `ParentBackdropImageTags?.[0]`，禁止把分集的 `BackdropImageTags` 错配给剧集 ID；同时所有海报与背景图必须配置带防重入标记（`dataset.fallbackStep`/`fallbackStage`）的 `onError` 降级链，避免裂图或控制台报错。
+  - 首页大图操作分工明确：「立即播放」针对 `Movie`/`Episode` 直接起播进入播放器，「剧集详情」对 `Episode` 自动跳转至 `/detail/${item.SeriesId}`。
+
+### 26. Emby 无标签图片请求触发 500 `NullReferenceException` 防护与统一寻址规范
+- **根因机制（无 `&tag=` 盲请求导致大量 HTTP 500）**：
+  - 部分 `.strm` / 未完整刮削分集剧照的 Emby 服务端在收到不带 `&tag=` 的图片请求（如 `GET /emby/Items/{id}/Images/Primary?maxWidth=640&quality=85&format=webp`）或强制 `&format=webp` 转码无对应缓存文件条目时，后端图像处理管线不会返回 404，而是直接抛出 `.NET System.NullReferenceException: Object reference not set to an instance of an object.` 返回 **500 Internal Server Error**；当分集列表（[`EpisodeGrid.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/media/EpisodeGrid.tsx)）一次性渲染整季几十上百集时，会瞬间触发海量 500 刷屏报错。
+  - 此外，`getSeriesEpisodes` 若未在 `Fields` 中显式声明 `ImageTags,BackdropImageTags,ParentBackdropImageTags`，也可能丢失本已存在的剧照标签。
+- **强制 tag 校验与统一图片解析入口 ([`embyClient.ts`](file:///d:/wade/code/emby-tauri-player/src/api/embyClient.ts))**：
+  - **严禁盲发无 `tag` 图片请求**：禁止任何组件直接用 `undefined` tag 调用 `buildItemImageUrl` 探测图片是否存在，也不得在 `onError` 中剥离 `&tag=` 重试（例如原 `DetailPage` 剥离 tag 重试与 [`MediaCard.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/media/MediaCard.tsx) 未带步进标记的 `onError` 死循环重试）。
+  - 统一通过 [`embyClient.ts`](file:///d:/wade/code/emby-tauri-player/src/api/embyClient.ts) 提供的 `resolveEpisodeThumbnailUrl`、`resolveItemPosterUrl`、`resolveItemBackdropUrl` 按「自带 tag -> 父级/所属剧集已带 tag 背景/缩略图/封面 -> 空串」顺序寻址；若全部无可用 tag，直接渲染本地暗色占位视图，**零网络请求**。
+  - 若带 `tag` 的图片仍偶发请求失败（例如服务端 WebP 编码异常），各视图的 `onError` 必须通过 `dataset.fallbackStep` 或阶段计数器限制重试上限：仅通过 `stripImageFormatWebp` 剥离 `&format=webp`（保留 `&tag=`）重试一次，必要时切换已校验的剧集大图，最终兜底本地内联 SVG 占位图或隐藏 `<img>` 并锁定 `'done'` 状态。

@@ -49,6 +49,7 @@ interface PlaybackInfoModalProps {
   networkSpeed?: number;
   telemetry?: PlayerTelemetry;
   proxyInfo?: ResolvedStreamProxyInfo | null;
+  userAgent?: string;
   nextPreloadStatus?: NextEpisodePreloadStatus | null;
 }
 
@@ -105,6 +106,7 @@ export const PlaybackInfoModal: React.FC<PlaybackInfoModalProps> = ({
   networkSpeed,
   telemetry,
   proxyInfo,
+  userAgent,
   nextPreloadStatus,
 }) => {
   const [copied, setCopied] = useState(false);
@@ -156,6 +158,7 @@ export const PlaybackInfoModal: React.FC<PlaybackInfoModalProps> = ({
       item.SeriesName ? `剧集归属: ${item.SeriesName} (第 ${item.IndexNumber || 1} 集)` : null,
       `来源服务器: ${currentServerName || item.ServerName || '当前服务器'}`,
       `网络代理路线: ${formatProxyLabel(proxyInfo)}`,
+      userAgent ? `User-Agent: ${userAgent}` : null,
       `实时网速: ${formatNetworkSpeed(networkSpeed)}`,
       `前向缓冲: ${telemetry?.cacheDuration !== undefined ? `${telemetry.cacheDuration.toFixed(1)}s` : '-'} / 目标 ${formatMinutesLabel(playerPreferences.bufferDurationSeconds)} (${formatBytes(telemetry?.cacheForwardBytes)} · 单缓存上限 ${formatMemoryCapLabel(playerPreferences.cacheMemoryCapMB)})`,
       nextPreloadStatus
@@ -323,6 +326,16 @@ export const PlaybackInfoModal: React.FC<PlaybackInfoModalProps> = ({
               <span className="text-slate-500 shrink-0">网络代理路线:</span>
               <span className="font-mono text-emerald-300 truncate">{formatProxyLabel(proxyInfo)}</span>
             </div>
+
+            {userAgent && (
+              <div className="pt-2 border-t border-white/[0.04] flex items-center space-x-2 text-[11px] text-slate-300">
+                <Globe className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                <span className="text-slate-500 shrink-0">User-Agent:</span>
+                <span className="font-mono text-slate-200 truncate" title={userAgent}>
+                  {userAgent}
+                </span>
+              </div>
+            )}
 
             {item.Type === 'Episode' && (
               <div className="pt-2 border-t border-white/[0.04] flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-300">

@@ -303,6 +303,9 @@ pub fn run() {
             preload::get_preload_status,
             preload::cancel_next_episode_preload,
             preload::clear_all_preloads,
+            preload::diagnose_stream_url,
+            preload::start_stream_relay,
+            preload::stop_stream_relay,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

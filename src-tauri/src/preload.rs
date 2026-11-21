@@ -4,7 +4,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_RANGE, CONTENT_TYPE, RANGE};
+use reqwest::header::{
+    HeaderMap, HeaderName, HeaderValue, ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE,
+    CONTENT_TYPE, LOCATION, RANGE, SERVER,
+};
+use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
@@ -15,6 +19,59 @@ const HEAD_WARMUP_BYTES: u64 = 4 * 1024 * 1024; // 4 MiB 容器头探测/轨道�
 const TAIL_INDEX_BYTES: u64 = 4 * 1024 * 1024; // 4 MiB 容器尾索引 (MKV Cues / MP4 moov)
 const SMALL_FULL_FILE_THRESHOLD: u64 = 16 * 1024 * 1024; // 16 MiB 以下文件直接整文件拉取
 const PROXY_READ_SLICE_BYTES: usize = 64 * 1024; // 64 KiB 回环切片读取粒度
+const MAX_STREAM_REDIRECTS: usize = 6;
+const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnoseStreamRequest {
+    pub url: String,
+    pub proxy_url: Option<String>,
+    pub headers: Option<HashMap<String, String>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagnosticHopDto {
+    pub hop: usize,
+    pub url: String,
+    pub status: Option<u16>,
+    pub status_text: Option<String>,
+    pub location: Option<String>,
+    pub server: Option<String>,
+    pub content_type: Option<String>,
+    pub content_range: Option<String>,
+    pub accept_ranges: Option<String>,
+    pub cf_ray: Option<String>,
+    pub cf_mitigated: Option<String>,
+    pub body_snippet: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamDiagnosticReport {
+    pub reachable: bool,
+    pub final_status: Option<u16>,
+    pub user_agent: String,
+    pub summary: String,
+    pub hops: Vec<DiagnosticHopDto>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartRelayRequest {
+    pub url: String,
+    pub proxy_url: Option<String>,
+    pub headers: Option<HashMap<String, String>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartedRelayDto {
+    pub token: String,
+    pub local_url: String,
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -557,10 +614,18 @@ impl SessionRuntime {
     }
 }
 
+struct RelaySession {
+    token: String,
+    upstream_url: String,
+    client: reqwest::Client,
+    headers: HeaderMap,
+}
+
 #[derive(Default)]
 struct ManagerInner {
     pending: Option<Arc<PreloadSession>>,
     active: Option<Arc<PreloadSession>>,
+    relay: Option<Arc<RelaySession>>,
     server_port: Option<u16>,
 }
 
@@ -574,6 +639,15 @@ fn manager() -> &'static PreloadManager {
     PRELOAD_MANAGER.get_or_init(|| PreloadManager {
         inner: RwLock::new(ManagerInner::default()),
     })
+}
+
+fn find_relay_by_token(token: &str) -> Option<Arc<RelaySession>> {
+    let guard = manager().inner.read().ok()?;
+    guard
+        .relay
+        .as_ref()
+        .filter(|r| r.token == token)
+        .cloned()
 }
 
 fn find_session_by_token(token: &str) -> Option<Arc<PreloadSession>> {
@@ -671,6 +745,10 @@ async fn handle_proxy_connection(mut stream: TcpStream) -> Result<(), ()> {
     }
 
     let path = raw_path.split('?').next().unwrap_or(raw_path);
+    if let Some(relay_token) = path.strip_prefix("/relay/") {
+        return handle_relay_connection(stream, method, relay_token, range_header).await;
+    }
+
     let token = path.strip_prefix("/stream/").unwrap_or("");
     let Some(session) = find_session_by_token(token) else {
         let resp = "HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
@@ -813,8 +891,264 @@ async fn handle_proxy_connection(mut stream: TcpStream) -> Result<(), ()> {
     Ok(())
 }
 
-fn build_http_client(proxy_url: Option<&str>) -> Result<reqwest::Client, String> {
+fn parse_request_headers(raw_headers: Option<HashMap<String, String>>) -> (String, HeaderMap) {
+    let mut user_agent: Option<String> = None;
+    let mut header_map = HeaderMap::new();
+
+    if let Some(headers) = raw_headers {
+        for (raw_key, raw_val) in headers {
+            let key_lower = raw_key.trim().to_ascii_lowercase();
+            let val_trimmed = raw_val.trim();
+            if key_lower.is_empty() || val_trimmed.is_empty() {
+                continue;
+            }
+            if key_lower == "user-agent" {
+                user_agent = Some(val_trimmed.to_string());
+                continue;
+            }
+            if let (Ok(name), Ok(val)) = (
+                HeaderName::from_bytes(key_lower.as_bytes()),
+                HeaderValue::from_str(val_trimmed),
+            ) {
+                header_map.insert(name, val);
+            }
+        }
+    }
+
+    (
+        user_agent.unwrap_or_else(|| DEFAULT_USER_AGENT.to_string()),
+        header_map,
+    )
+}
+
+fn is_secret_query_key(key: &str) -> bool {
+    matches!(
+        key.to_ascii_lowercase().as_str(),
+        "api_key"
+            | "x-emby-token"
+            | "token"
+            | "auth"
+            | "signature"
+            | "sig"
+            | "sign"
+            | "x-amz-signature"
+    )
+}
+
+fn redact_url_secrets(raw: &str) -> String {
+    let Ok(parsed) = Url::parse(raw) else {
+        return raw.to_string();
+    };
+    if !parsed.query_pairs().any(|(k, _)| is_secret_query_key(&k)) {
+        return raw.to_string();
+    }
+
+    let mut base = parsed.clone();
+    base.set_query(None);
+    base.set_fragment(None);
+
+    let mut query_parts = Vec::new();
+    for (k, v) in parsed.query_pairs() {
+        let mut tmp = base.clone();
+        if is_secret_query_key(&k) {
+            tmp.query_pairs_mut().append_pair(&k, "");
+            if let Some(q) = tmp.query() {
+                query_parts.push(format!("{q}***"));
+            }
+        } else {
+            tmp.query_pairs_mut().append_pair(&k, &v);
+            if let Some(q) = tmp.query() {
+                query_parts.push(q.to_string());
+            }
+        }
+    }
+
+    let mut result: String = base.into();
+    if !query_parts.is_empty() {
+        result.push('?');
+        result.push_str(&query_parts.join("&"));
+    }
+    if let Some(frag) = parsed.fragment() {
+        result.push('#');
+        result.push_str(frag);
+    }
+    result
+}
+
+fn same_origin(a: &Url, b: &Url) -> bool {
+    a.scheme().eq_ignore_ascii_case(b.scheme())
+        && a.host_str()
+            .zip(b.host_str())
+            .map(|(ha, hb)| ha.eq_ignore_ascii_case(hb))
+            .unwrap_or(false)
+        && a.port_or_known_default() == b.port_or_known_default()
+}
+
+fn build_no_redirect_http_client(
+    proxy_url: Option<&str>,
+    user_agent: &str,
+) -> Result<reqwest::Client, String> {
     let mut builder = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .user_agent(user_agent)
+        .danger_accept_invalid_certs(true)
+        .danger_accept_invalid_hostnames(true)
+        .connect_timeout(Duration::from_secs(15))
+        .read_timeout(Duration::from_secs(30));
+
+    if let Some(px) = proxy_url
+        .map(str::trim)
+        .filter(|s| s.starts_with("http://") || s.starts_with("https://"))
+    {
+        let proxy = reqwest::Proxy::all(px).map_err(|e| format!("代理地址无效 ({px}): {e}"))?;
+        builder = builder.proxy(proxy);
+    } else {
+        builder = builder.no_proxy();
+    }
+
+    builder
+        .build()
+        .map_err(|e| format!("创建 HTTP 诊断/中转客户端失败: {e}"))
+}
+
+fn apply_origin_safe_headers(
+    mut req: reqwest::RequestBuilder,
+    base_headers: &HeaderMap,
+    is_same_origin: bool,
+) -> reqwest::RequestBuilder {
+    for (k, v) in base_headers.iter() {
+        let lower = k.as_str().to_ascii_lowercase();
+        if !is_same_origin && (lower == "authorization" || lower.starts_with("x-emby-")) {
+            continue;
+        }
+        req = req.header(k, v);
+    }
+    req
+}
+
+async fn send_with_safe_redirects(
+    client: &reqwest::Client,
+    start_url: &str,
+    base_headers: &HeaderMap,
+    range_header: Option<&str>,
+    is_head: bool,
+) -> Result<(reqwest::Response, String), String> {
+    let origin_url = Url::parse(start_url).map_err(|e| format!("流地址格式无效: {e}"))?;
+    let mut current_url = origin_url.clone();
+
+    for step in 0..=MAX_STREAM_REDIRECTS {
+        let mut req = if is_head {
+            client.head(current_url.as_str())
+        } else {
+            client.get(current_url.as_str())
+        };
+        let is_same = same_origin(&origin_url, &current_url);
+        req = apply_origin_safe_headers(req, base_headers, is_same);
+        if let Some(rng) = range_header {
+            req = req.header(RANGE, rng);
+        }
+
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| format!("请求媒体流失败: {e}"))?;
+
+        if matches!(resp.status().as_u16(), 301 | 302 | 303 | 307 | 308) {
+            if let Some(loc) = resp
+                .headers()
+                .get(LOCATION)
+                .and_then(|v| v.to_str().ok())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                if step >= MAX_STREAM_REDIRECTS {
+                    return Err("媒体流重定向次数过多".to_string());
+                }
+                current_url = current_url
+                    .join(loc)
+                    .map_err(|e| format!("解析重定向地址失败: {e}"))?;
+                continue;
+            }
+        }
+
+        return Ok((resp, current_url.into()));
+    }
+
+    Err("媒体流重定向次数过多".to_string())
+}
+
+async fn handle_relay_connection(
+    mut stream: TcpStream,
+    method: &str,
+    token: &str,
+    range_header: Option<String>,
+) -> Result<(), ()> {
+    let Some(session) = find_relay_by_token(token) else {
+        let resp = "HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+        let _ = stream.write_all(resp.as_bytes()).await;
+        return Ok(());
+    };
+
+    let is_head = method.eq_ignore_ascii_case("HEAD");
+    let Ok((mut resp, _final_url)) = send_with_safe_redirects(
+        &session.client,
+        &session.upstream_url,
+        &session.headers,
+        range_header.as_deref(),
+        is_head,
+    )
+    .await
+    else {
+        let err_resp = "HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+        let _ = stream.write_all(err_resp.as_bytes()).await;
+        return Ok(());
+    };
+
+    let status = resp.status();
+    let reason = status.canonical_reason().unwrap_or("OK");
+    let mut header_buf = format!(
+        "HTTP/1.1 {} {}\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n",
+        status.as_u16(),
+        reason
+    );
+
+    if let Some(ct) = resp.headers().get(CONTENT_TYPE).and_then(|v| v.to_str().ok()) {
+        header_buf.push_str(&format!("Content-Type: {ct}\r\n"));
+    }
+    if let Some(cl) = resp.headers().get(CONTENT_LENGTH).and_then(|v| v.to_str().ok()) {
+        header_buf.push_str(&format!("Content-Length: {cl}\r\n"));
+    }
+    if let Some(cr) = resp.headers().get(CONTENT_RANGE).and_then(|v| v.to_str().ok()) {
+        header_buf.push_str(&format!("Content-Range: {cr}\r\n"));
+    }
+    let accept_ranges = resp
+        .headers()
+        .get(ACCEPT_RANGES)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("bytes");
+    header_buf.push_str(&format!("Accept-Ranges: {accept_ranges}\r\n\r\n"));
+
+    if stream.write_all(header_buf.as_bytes()).await.is_err() {
+        return Ok(());
+    }
+
+    if is_head {
+        return Ok(());
+    }
+
+    while let Ok(Some(chunk)) = resp.chunk().await {
+        if stream.write_all(&chunk).await.is_err() {
+            return Ok(());
+        }
+    }
+
+    let _ = stream.flush().await;
+    Ok(())
+}
+
+fn build_http_client(proxy_url: Option<&str>, user_agent: &str) -> Result<reqwest::Client, String> {
+    let mut builder = reqwest::Client::builder()
+        .user_agent(user_agent)
         .danger_accept_invalid_certs(true)
         .danger_accept_invalid_hostnames(true)
         .connect_timeout(Duration::from_secs(15))
@@ -1107,18 +1441,8 @@ async fn run_preload_worker(session: Arc<PreloadSession>) {
 pub async fn start_next_episode_preload(
     request: StartPreloadRequest,
 ) -> Result<PreloadStatusDto, String> {
-    let client = build_http_client(request.proxy_url.as_deref())?;
-    let mut header_map = HeaderMap::new();
-    if let Some(raw_headers) = request.headers {
-        for (k, v) in raw_headers {
-            if let (Ok(name), Ok(val)) = (
-                HeaderName::from_bytes(k.as_bytes()),
-                HeaderValue::from_str(&v),
-            ) {
-                header_map.insert(name, val);
-            }
-        }
-    }
+    let (user_agent, header_map) = parse_request_headers(request.headers);
+    let client = build_http_client(request.proxy_url.as_deref(), &user_agent)?;
 
     let token = Uuid::new_v4().to_string();
     let max_mem = request.max_memory_bytes.max(64 * 1024 * 1024);
@@ -1309,18 +1633,325 @@ pub async fn cancel_next_episode_preload(token: Option<String>) -> Result<(), St
 
 #[tauri::command]
 pub async fn clear_all_preloads() -> Result<(), String> {
-    let (pending, active) = {
+    let (pending, active, _relay) = {
         let mut guard = manager()
             .inner
             .write()
             .map_err(|_| "PreloadManager 锁异常".to_string())?;
-        (guard.pending.take(), guard.active.take())
+        (guard.pending.take(), guard.active.take(), guard.relay.take())
     };
     if let Some(p) = pending {
         p.destroy_all();
     }
     if let Some(a) = active {
         a.destroy_all();
+    }
+    Ok(())
+}
+
+fn read_header_str(headers: &HeaderMap, key: &HeaderName) -> Option<String> {
+    headers
+        .get(key)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+fn read_header_name_str(headers: &HeaderMap, key: &str) -> Option<String> {
+    headers
+        .get(key)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+async fn read_body_snippet(mut resp: reqwest::Response) -> Option<String> {
+    let mut buf: Vec<u8> = Vec::new();
+    while buf.len() < 2048 {
+        match resp.chunk().await {
+            Ok(Some(chunk)) => {
+                let take = (2048 - buf.len()).min(chunk.len());
+                buf.extend_from_slice(&chunk[..take]);
+                if take < chunk.len() {
+                    break;
+                }
+            }
+            _ => break,
+        }
+    }
+    if buf.is_empty() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&buf);
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let snippet: String = trimmed.chars().take(300).collect();
+    Some(snippet)
+}
+
+#[tauri::command]
+pub async fn diagnose_stream_url(
+    request: DiagnoseStreamRequest,
+) -> Result<StreamDiagnosticReport, String> {
+    let (user_agent, header_map) = parse_request_headers(request.headers);
+    let client = build_no_redirect_http_client(request.proxy_url.as_deref(), &user_agent)?;
+
+    let origin_url = match Url::parse(&request.url) {
+        Ok(u) => u,
+        Err(e) => {
+            return Ok(StreamDiagnosticReport {
+                reachable: false,
+                final_status: None,
+                user_agent,
+                summary: format!("流地址格式无效：{e}"),
+                hops: vec![DiagnosticHopDto {
+                    hop: 1,
+                    url: redact_url_secrets(&request.url),
+                    status: None,
+                    status_text: None,
+                    location: None,
+                    server: None,
+                    content_type: None,
+                    content_range: None,
+                    accept_ranges: None,
+                    cf_ray: None,
+                    cf_mitigated: None,
+                    body_snippet: None,
+                    error: Some(e.to_string()),
+                }],
+            });
+        }
+    };
+
+    let mut current_url = origin_url.clone();
+    let mut hops: Vec<DiagnosticHopDto> = Vec::new();
+    let mut exceeded_redirects = false;
+
+    for hop_idx in 1..=(MAX_STREAM_REDIRECTS + 1) {
+        let is_same = same_origin(&origin_url, &current_url);
+        let req = apply_origin_safe_headers(
+            client.get(current_url.as_str()),
+            &header_map,
+            is_same,
+        )
+        .header(RANGE, "bytes=0-0");
+
+        let resp = match req.send().await {
+            Ok(r) => r,
+            Err(e) => {
+                hops.push(DiagnosticHopDto {
+                    hop: hop_idx,
+                    url: redact_url_secrets(current_url.as_str()),
+                    status: None,
+                    status_text: None,
+                    location: None,
+                    server: None,
+                    content_type: None,
+                    content_range: None,
+                    accept_ranges: None,
+                    cf_ray: None,
+                    cf_mitigated: None,
+                    body_snippet: None,
+                    error: Some(e.to_string()),
+                });
+                break;
+            }
+        };
+
+        let status = resp.status();
+        let status_code = status.as_u16();
+        let status_text = status.canonical_reason().map(str::to_string);
+        let resp_headers = resp.headers().clone();
+        let raw_location = read_header_str(&resp_headers, &LOCATION);
+        let server = read_header_str(&resp_headers, &SERVER);
+        let content_type = read_header_str(&resp_headers, &CONTENT_TYPE);
+        let content_range = read_header_str(&resp_headers, &CONTENT_RANGE);
+        let accept_ranges = read_header_str(&resp_headers, &ACCEPT_RANGES);
+        let cf_ray = read_header_name_str(&resp_headers, "cf-ray");
+        let cf_mitigated = read_header_name_str(&resp_headers, "cf-mitigated");
+
+        if matches!(status_code, 301 | 302 | 303 | 307 | 308) {
+            if let Some(ref loc) = raw_location {
+                let redacted_loc = match current_url.join(loc) {
+                    Ok(joined) => redact_url_secrets(joined.as_str()),
+                    Err(_) => redact_url_secrets(loc),
+                };
+                hops.push(DiagnosticHopDto {
+                    hop: hop_idx,
+                    url: redact_url_secrets(current_url.as_str()),
+                    status: Some(status_code),
+                    status_text,
+                    location: Some(redacted_loc),
+                    server,
+                    content_type,
+                    content_range,
+                    accept_ranges,
+                    cf_ray,
+                    cf_mitigated,
+                    body_snippet: None,
+                    error: None,
+                });
+
+                if hop_idx > MAX_STREAM_REDIRECTS {
+                    exceeded_redirects = true;
+                    break;
+                }
+                match current_url.join(loc) {
+                    Ok(next_url) => {
+                        current_url = next_url;
+                        continue;
+                    }
+                    Err(e) => {
+                        hops.push(DiagnosticHopDto {
+                            hop: hop_idx + 1,
+                            url: redact_url_secrets(loc),
+                            status: None,
+                            status_text: None,
+                            location: None,
+                            server: None,
+                            content_type: None,
+                            content_range: None,
+                            accept_ranges: None,
+                            cf_ray: None,
+                            cf_mitigated: None,
+                            body_snippet: None,
+                            error: Some(format!("重定向地址解析失败: {e}")),
+                        });
+                        break;
+                    }
+                }
+            }
+        }
+
+        let is_html = content_type
+            .as_deref()
+            .map(|ct| ct.to_ascii_lowercase().contains("text/html"))
+            .unwrap_or(false);
+        let body_snippet = if status_code >= 400 || is_html {
+            read_body_snippet(resp).await
+        } else {
+            None
+        };
+
+        hops.push(DiagnosticHopDto {
+            hop: hop_idx,
+            url: redact_url_secrets(current_url.as_str()),
+            status: Some(status_code),
+            status_text,
+            location: raw_location.map(|l| redact_url_secrets(&l)),
+            server,
+            content_type,
+            content_range,
+            accept_ranges,
+            cf_ray,
+            cf_mitigated,
+            body_snippet,
+            error: None,
+        });
+        break;
+    }
+
+    let last = hops.last();
+    let final_status = last.and_then(|h| h.status);
+    let final_is_html = last
+        .and_then(|h| h.content_type.as_deref())
+        .map(|ct| ct.to_ascii_lowercase().contains("text/html"))
+        .unwrap_or(false);
+    let reachable = matches!(final_status, Some(200 | 206)) && !final_is_html && !exceeded_redirects;
+
+    let summary = if exceeded_redirects {
+        "媒体流重定向次数超过限制，请检查反代或直链配置".to_string()
+    } else if reachable {
+        "Rust 网络栈探测成功（问题可能位于 libmpv 网络/TLS/302 跳转兼容），可使用内置中转通道播放"
+            .to_string()
+    } else if let Some(err) = last.and_then(|h| h.error.as_deref()) {
+        format!("网络或 TLS 连接失败：{err}")
+    } else {
+        let cf_challenge = last
+            .and_then(|h| h.cf_mitigated.as_deref())
+            .map(|v| v.eq_ignore_ascii_case("challenge"))
+            .unwrap_or(false)
+            || last
+                .and_then(|h| h.body_snippet.as_deref())
+                .map(|b| {
+                    let lb = b.to_ascii_lowercase();
+                    lb.contains("cf-challenge")
+                        || lb.contains("just a moment")
+                        || lb.contains("attention required")
+                })
+                .unwrap_or(false);
+
+        if cf_challenge {
+            "命中 Cloudflare 人机/WAF 质询拦截，请切换代理出口或检查服务端规则".to_string()
+        } else if final_is_html {
+            "服务器返回了 HTML 页面而非视频流（可能被防盗链、WAF 或登录页拦截）".to_string()
+        } else {
+            match final_status {
+                Some(403) => "服务器返回 HTTP 403 拒绝访问（常见原因：客户端/UA 白名单拦截、Token 失效或 302 网盘风控）".to_string(),
+                Some(401) => "服务器返回 HTTP 401 未授权，请重新登录或检查服务器 Token".to_string(),
+                Some(404) => "服务器返回 HTTP 404 资源不存在，可尝试改用服务端 DirectStreamUrl 重试".to_string(),
+                Some(400) => "服务器返回 HTTP 400 请求参数异常".to_string(),
+                Some(code) if code >= 500 => format!("上游服务器或直链返回服务端错误 (HTTP {code})"),
+                Some(code) => format!("上游返回非预期 HTTP 状态码 ({code})"),
+                None => "未能建立有效的 HTTP 响应，请检查网络连接或代理设置".to_string(),
+            }
+        }
+    };
+
+    Ok(StreamDiagnosticReport {
+        reachable,
+        final_status,
+        user_agent,
+        summary,
+        hops,
+    })
+}
+
+#[tauri::command]
+pub async fn start_stream_relay(request: StartRelayRequest) -> Result<StartedRelayDto, String> {
+    let (user_agent, header_map) = parse_request_headers(request.headers);
+    let client = build_no_redirect_http_client(request.proxy_url.as_deref(), &user_agent)?;
+    let token = Uuid::new_v4().to_string();
+
+    let session = Arc::new(RelaySession {
+        token: token.clone(),
+        upstream_url: request.url,
+        client,
+        headers: header_map,
+    });
+
+    {
+        let mut guard = manager()
+            .inner
+            .write()
+            .map_err(|_| "PreloadManager 锁异常".to_string())?;
+        guard.relay = Some(session);
+    }
+
+    let port = ensure_proxy_server_started().await?;
+    Ok(StartedRelayDto {
+        token: token.clone(),
+        local_url: format!("http://127.0.0.1:{port}/relay/{token}"),
+    })
+}
+
+#[tauri::command]
+pub async fn stop_stream_relay(token: Option<String>) -> Result<(), String> {
+    let mut guard = manager()
+        .inner
+        .write()
+        .map_err(|_| "PreloadManager 锁异常".to_string())?;
+    let should_clear = match (&guard.relay, &token) {
+        (Some(cur), Some(target)) => &cur.token == target,
+        (Some(_), None) => true,
+        (None, _) => false,
+    };
+    if should_clear {
+        guard.relay = None;
     }
     Ok(())
 }
@@ -1442,5 +2073,68 @@ mod tests {
             RangeParseResult::Unsatisfiable
         );
         assert_eq!(parse_http_range(None, 10000), RangeParseResult::None);
+    }
+
+    #[test]
+    fn test_parse_request_headers_extracts_ua_and_auth() {
+        let mut raw = HashMap::new();
+        raw.insert("uSeR-aGeNt".to_string(), "  Infuse-Direct/7.8.2  ".to_string());
+        raw.insert(
+            "X-Emby-Authorization".to_string(),
+            "Emby Client=\"EmbyTauriPlayer\", Token=\"abc\"".to_string(),
+        );
+        raw.insert("X-Emby-Token".to_string(), "abc".to_string());
+
+        let (ua, headers) = parse_request_headers(Some(raw));
+        assert_eq!(ua, "Infuse-Direct/7.8.2");
+        assert!(headers.get("user-agent").is_none());
+        assert_eq!(
+            headers
+                .get("x-emby-authorization")
+                .and_then(|v| v.to_str().ok()),
+            Some("Emby Client=\"EmbyTauriPlayer\", Token=\"abc\"")
+        );
+        assert_eq!(
+            headers.get("x-emby-token").and_then(|v| v.to_str().ok()),
+            Some("abc")
+        );
+
+        let (fallback_ua, empty_headers) = parse_request_headers(None);
+        assert_eq!(fallback_ua, DEFAULT_USER_AGENT);
+        assert!(empty_headers.is_empty());
+
+        let mut blank_ua = HashMap::new();
+        blank_ua.insert("User-Agent".to_string(), "   ".to_string());
+        let (blank_fallback_ua, blank_headers) = parse_request_headers(Some(blank_ua));
+        assert_eq!(blank_fallback_ua, DEFAULT_USER_AGENT);
+        assert!(blank_headers.is_empty());
+    }
+
+    #[test]
+    fn test_redact_url_secrets_masks_tokens() {
+        let raw = "https://emby.example.com/emby/Videos/909105/stream.mkv?static=true&MediaSourceId=123&api_key=secretApiKey&X-Emby-Token=secretToken&Signature=sigVal";
+        let redacted = redact_url_secrets(raw);
+        assert!(redacted.contains("static=true"));
+        assert!(redacted.contains("MediaSourceId=123"));
+        assert!(redacted.contains("api_key=***"));
+        assert!(redacted.contains("X-Emby-Token=***"));
+        assert!(redacted.contains("Signature=***"));
+        assert!(!redacted.contains("secretApiKey"));
+        assert!(!redacted.contains("secretToken"));
+        assert!(!redacted.contains("sigVal"));
+
+        assert_eq!(redact_url_secrets("not a valid url"), "not a valid url");
+    }
+
+    #[test]
+    fn test_same_origin_comparison() {
+        let a = Url::parse("https://emby.example.com:443/emby/Videos/1/stream.mkv").unwrap();
+        let b = Url::parse("https://EMBY.EXAMPLE.COM/other/path").unwrap();
+        let c = Url::parse("https://cdn.example.com/file.mkv").unwrap();
+        let d = Url::parse("http://emby.example.com/emby/Videos/1/stream.mkv").unwrap();
+
+        assert!(same_origin(&a, &b));
+        assert!(!same_origin(&a, &c));
+        assert!(!same_origin(&a, &d));
     }
 }

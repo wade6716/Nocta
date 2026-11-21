@@ -1,4 +1,85 @@
-import { httpClient, ProxyConfig } from './http';
+import { httpClient, isTauriEnvironment, ProxyConfig } from './http';
+
+export const DEFAULT_EMBY_USER_AGENT =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+
+export const EMBY_USER_AGENT_PRESETS: ReadonlyArray<{
+  id: string;
+  label: string;
+  value: string;
+  clientName?: string;
+}> = [
+  { id: 'default', label: '默认 (Chrome)', value: '' },
+  {
+    id: 'emby',
+    label: 'Emby 官方',
+    value: 'Emby/4.8.10 (Windows; Desktop)',
+    clientName: 'Emby Theater',
+  },
+  {
+    id: 'infuse',
+    label: 'Infuse',
+    value: 'Infuse-Direct/7.8.2',
+    clientName: 'Infuse',
+  },
+  {
+    id: 'vidhub',
+    label: 'VidHub',
+    value: 'VidHub/1.7.0',
+    clientName: 'VidHub',
+  },
+  {
+    id: 'senplayer',
+    label: 'SenPlayer',
+    value: 'SenPlayer/5.0',
+    clientName: 'SenPlayer',
+  },
+  {
+    id: 'yamby',
+    label: 'Yamby',
+    value: 'Yamby/1.0.0',
+    clientName: 'Yamby',
+  },
+];
+
+// 自定义 User-Agent 外部注入解耦机制，避免与 useAuthStore 产生循环依赖
+let activeUserAgentGetter: ((serverUrl?: string) => string | undefined) | null = null;
+
+export function registerEmbyUserAgentGetter(
+  fn: (serverUrl?: string) => string | undefined
+): void {
+  activeUserAgentGetter = fn;
+}
+
+export function resolveEmbyUserAgent(
+  explicitUserAgent?: string,
+  serverUrl?: string
+): string {
+  const explicit = explicitUserAgent?.trim();
+  if (explicit) return explicit;
+  const fromStore = activeUserAgentGetter?.(serverUrl)?.trim();
+  if (fromStore) return fromStore;
+  return DEFAULT_EMBY_USER_AGENT;
+}
+
+export function resolveEmbyClientName(
+  explicitUserAgent?: string,
+  serverUrl?: string
+): string {
+  const customUa =
+    explicitUserAgent?.trim() || activeUserAgentGetter?.(serverUrl)?.trim() || '';
+  if (!customUa) return 'EmbyTauriPlayer';
+
+  const preset = EMBY_USER_AGENT_PRESETS.find((p) => p.value && p.value === customUa);
+  if (preset?.clientName) return preset.clientName;
+
+  if (/^Mozilla\//i.test(customUa)) return 'Emby Web';
+
+  const token = customUa
+    .split(/[\s/]/)[0]
+    .replace(/[^A-Za-z0-9._-]/g, '');
+  return token || 'EmbyTauriPlayer';
+}
 
 export interface EmbyServerInfo {
   ServerName?: string;
@@ -61,6 +142,7 @@ export interface EmbyMediaSource {
   Size?: number;
   Bitrate?: number;
   IsRemote?: boolean;
+  DirectStreamUrl?: string;
   MediaStreams?: EmbyMediaStream[];
 }
 
@@ -106,6 +188,9 @@ export interface EmbyItem {
   SeriesPrimaryImageTag?: string;
   SeriesThumbImageTag?: string;
   ParentThumbImageTag?: string;
+  ParentThumbItemId?: string;
+  ParentBackdropItemId?: string;
+  ParentBackdropImageTags?: string[];
   Size?: number;
   MediaSources?: EmbyMediaSource[];
   LibraryName?: string;
@@ -213,10 +298,11 @@ export interface MappedTrack {
   originalIndex: number;
 }
 
-/**
- * 构造标准 Emby 认证请求头
- */
-export function buildEmbyHeaders(userId?: string, accessToken?: string): Record<string, string> {
+function buildEmbyAuthorizationValue(
+  userId?: string,
+  accessToken?: string,
+  options?: { userAgent?: string; serverUrl?: string }
+): string {
   let deviceId = '';
   try {
     deviceId = localStorage.getItem('emby_device_id') || '';
@@ -228,8 +314,9 @@ export function buildEmbyHeaders(userId?: string, accessToken?: string): Record<
     deviceId = 'desktop-default-id';
   }
 
+  const clientName = resolveEmbyClientName(options?.userAgent, options?.serverUrl);
   const authParts = [
-    'Client="EmbyTauriPlayer"',
+    `Client="${clientName}"`,
     'Device="Desktop"',
     `DeviceId="${deviceId}"`,
     'Version="0.1.0"',
@@ -238,9 +325,41 @@ export function buildEmbyHeaders(userId?: string, accessToken?: string): Record<
   if (userId) authParts.push(`UserId="${userId}"`);
   if (accessToken) authParts.push(`Token="${accessToken}"`);
 
-  return {
+  return `Emby ${authParts.join(', ')}`;
+}
+
+/**
+ * 构造标准 Emby 认证请求头
+ */
+export function buildEmbyHeaders(
+  userId?: string,
+  accessToken?: string,
+  options?: { userAgent?: string; serverUrl?: string }
+): Record<string, string> {
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    'X-Emby-Authorization': `Emby ${authParts.join(', ')}`,
+    'X-Emby-Authorization': buildEmbyAuthorizationValue(userId, accessToken, options),
+  };
+
+  // 仅在 Tauri 环境下注入自定义 User-Agent，避免浏览器 fetch 禁止修改 UA 或引发额外预检
+  if (isTauriEnvironment()) {
+    headers['User-Agent'] = resolveEmbyUserAgent(options?.userAgent, options?.serverUrl);
+  }
+
+  return headers;
+}
+
+/**
+ * 构造供 libmpv 与 Rust 内存预加载器使用的 Emby 媒体流请求头（不附加 Content-Type）
+ */
+export function buildEmbyStreamHeaders(
+  userId?: string,
+  accessToken?: string,
+  options?: { userAgent?: string; serverUrl?: string }
+): Record<string, string> {
+  return {
+    'X-Emby-Authorization': buildEmbyAuthorizationValue(userId, accessToken, options),
+    ...(accessToken ? { 'X-Emby-Token': accessToken } : {}),
   };
 }
 
@@ -260,12 +379,15 @@ export function normalizeServerUrl(url: string): string {
  */
 export async function testServerConnection(
   serverUrl: string,
-  options?: { proxy?: ProxyConfig }
+  options?: { proxy?: ProxyConfig; userAgent?: string }
 ): Promise<EmbyServerInfo> {
   const base = normalizeServerUrl(serverUrl);
   const res = await httpClient(`${base}/emby/System/Info/Public`, {
     method: 'GET',
-    headers: buildEmbyHeaders(),
+    headers: buildEmbyHeaders(undefined, undefined, {
+      userAgent: options?.userAgent,
+      serverUrl: base,
+    }),
     proxy: options?.proxy,
   });
   if (!res.ok) {
@@ -281,12 +403,15 @@ export async function authenticateByName(
   serverUrl: string,
   username: string,
   password?: string,
-  options?: { proxy?: ProxyConfig }
+  options?: { proxy?: ProxyConfig; userAgent?: string }
 ): Promise<EmbyAuthResponse> {
   const base = normalizeServerUrl(serverUrl);
   const res = await httpClient(`${base}/emby/Users/AuthenticateByName`, {
     method: 'POST',
-    headers: buildEmbyHeaders(),
+    headers: buildEmbyHeaders(undefined, undefined, {
+      userAgent: options?.userAgent,
+      serverUrl: base,
+    }),
     body: JSON.stringify({
       Username: username.trim(),
       Pw: password || '',
@@ -311,7 +436,7 @@ export async function getUserViews(
   const base = normalizeServerUrl(serverUrl);
   const res = await httpClient(`${base}/emby/Users/${userId}/Views`, {
     method: 'GET',
-    headers: buildEmbyHeaders(userId, accessToken),
+    headers: buildEmbyHeaders(userId, accessToken, { serverUrl: base }),
   });
   if (!res.ok) throw new Error(`获取媒体库分类失败: ${res.status}`);
   return res.json();
@@ -322,7 +447,7 @@ export async function getUserViews(
  * 支持双重降级兜底，兼容所有 Emby 服务器版本
  */
 const PLAYBACK_MEDIA_FIELDS =
-  'PrimaryImageAspectRatio,BasicSyncInfo,MediaSources,Path,Overview,UserData,SeriesPrimaryImageTag,SeriesThumbImageTag,ParentThumbImageTag,ImageTags,BackdropImageTags,SeriesInfo,ChildCount,RecursiveItemCount,Status';
+  'PrimaryImageAspectRatio,BasicSyncInfo,MediaSources,Path,Overview,UserData,SeriesPrimaryImageTag,SeriesThumbImageTag,ParentThumbImageTag,ParentBackdropImageTags,ImageTags,BackdropImageTags,SeriesInfo,ChildCount,RecursiveItemCount,Status';
 
 /**
  * 获取继续观看列表 (GET /emby/Users/{UserId}/Items/Resume)
@@ -342,7 +467,7 @@ export async function getResumeItems(
     const url = `${base}/emby/Users/${userId}/Items/Resume?MediaTypes=Video&Limit=${limit}&Fields=${PLAYBACK_MEDIA_FIELDS}`;
     const res = await httpClient(url, {
       method: 'GET',
-      headers: buildEmbyHeaders(userId, accessToken),
+      headers: buildEmbyHeaders(userId, accessToken, { serverUrl: base }),
     });
     if (res.ok) {
       lastError = null;
@@ -365,7 +490,7 @@ export async function getResumeItems(
     const fallbackUrl = `${base}/emby/Users/${userId}/Items?Recursive=true&MediaTypes=Video&IncludeItemTypes=Movie,Episode&IsResumable=true&SortBy=DatePlayed&SortOrder=Descending&Limit=${limit}&Fields=${PLAYBACK_MEDIA_FIELDS}`;
     const res = await httpClient(fallbackUrl, {
       method: 'GET',
-      headers: buildEmbyHeaders(userId, accessToken),
+      headers: buildEmbyHeaders(userId, accessToken, { serverUrl: base }),
     });
     if (res.ok) {
       lastError = null;
@@ -405,7 +530,7 @@ export async function getRecentlyPlayedItems(
     const url = `${base}/emby/Users/${userId}/Items?Recursive=true&MediaTypes=Video&IncludeItemTypes=Movie,Episode&SortBy=DatePlayed&SortOrder=Descending&Limit=${limit}&Fields=${PLAYBACK_MEDIA_FIELDS}`;
     const res = await httpClient(url, {
       method: 'GET',
-      headers: buildEmbyHeaders(userId, accessToken),
+      headers: buildEmbyHeaders(userId, accessToken, { serverUrl: base }),
     });
     if (!res.ok) {
       throw new Error(`HTTP ${res.status}`);
@@ -448,7 +573,7 @@ export async function getNextUpEpisodes(
     const url = `${base}/emby/Shows/NextUp?UserId=${userId}&Limit=${limit}&Fields=${PLAYBACK_MEDIA_FIELDS}`;
     const res = await httpClient(url, {
       method: 'GET',
-      headers: buildEmbyHeaders(userId, accessToken),
+      headers: buildEmbyHeaders(userId, accessToken, { serverUrl: base }),
     });
     if (res.ok) {
       const data = await res.json();
@@ -499,7 +624,7 @@ export async function getLatestItems(
   const url = `${base}/emby/Users/${userId}/Items/Latest?ParentId=${parentId}&Limit=${limit}&Fields=PrimaryImageAspectRatio,BasicSyncInfo,Overview,ChildCount,RecursiveItemCount,Status`;
   const res = await httpClient(url, {
     method: 'GET',
-    headers: buildEmbyHeaders(userId, accessToken),
+    headers: buildEmbyHeaders(userId, accessToken, { serverUrl: base }),
   });
   if (!res.ok) throw new Error(`获取最新入库失败: ${res.status}`);
   return res.json();
@@ -515,10 +640,10 @@ export async function getItemDetail(
   accessToken: string
 ): Promise<EmbyItem> {
   const base = normalizeServerUrl(serverUrl);
-  const url = `${base}/emby/Users/${userId}/Items/${itemId}?Fields=Overview,MediaSources,Path,People,Genres,Chapters`;
+  const url = `${base}/emby/Users/${userId}/Items/${itemId}?Fields=Overview,MediaSources,Path,People,Genres,Chapters,ParentBackdropImageTags,ImageTags,BackdropImageTags`;
   const res = await httpClient(url, {
     method: 'GET',
-    headers: buildEmbyHeaders(userId, accessToken),
+    headers: buildEmbyHeaders(userId, accessToken, { serverUrl: base }),
   });
   if (!res.ok) throw new Error(`获取条目详情失败: ${res.status}`);
   return res.json();
@@ -585,10 +710,10 @@ export async function getSeriesEpisodes(
   accessToken: string
 ): Promise<{ Items: EmbyItem[] }> {
   const base = normalizeServerUrl(serverUrl);
-  const url = `${base}/emby/Shows/${seriesId}/Episodes?SeasonId=${seasonId}&UserId=${userId}&Fields=Overview,MediaSources,Path,PrimaryImageAspectRatio`;
+  const url = `${base}/emby/Shows/${seriesId}/Episodes?SeasonId=${seasonId}&UserId=${userId}&Fields=Overview,MediaSources,Path,PrimaryImageAspectRatio,ParentBackdropImageTags,ImageTags,BackdropImageTags`;
   const res = await httpClient(url, {
     method: 'GET',
-    headers: buildEmbyHeaders(userId, accessToken),
+    headers: buildEmbyHeaders(userId, accessToken, { serverUrl: base }),
   });
   if (!res.ok) throw new Error(`获取分集列表失败: ${res.status}`);
   return res.json();
@@ -607,7 +732,7 @@ export async function getSeriesSeasons(
   const url = `${base}/emby/Shows/${seriesId}/Seasons?UserId=${userId}&Fields=Overview,PrimaryImageAspectRatio`;
   const res = await httpClient(url, {
     method: 'GET',
-    headers: buildEmbyHeaders(userId, accessToken),
+    headers: buildEmbyHeaders(userId, accessToken, { serverUrl: base }),
   });
   if (!res.ok) throw new Error(`获取季列表失败: ${res.status}`);
   return res.json();
@@ -627,7 +752,7 @@ export async function getPlaybackInfo(
   const url = `${base}/emby/Items/${itemId}/PlaybackInfo?UserId=${userId}`;
   const res = await httpClient(url, {
     method: 'POST',
-    headers: buildEmbyHeaders(userId, accessToken),
+    headers: buildEmbyHeaders(userId, accessToken, { serverUrl: base }),
     body: JSON.stringify({
       DeviceProfile: {
         MaxStreamingBitrate: 200000000,
@@ -662,6 +787,36 @@ export function buildDirectStreamUrl(
   return buildNativeDirectStreamUrl(serverUrl, itemId, mediaSource, playSessionId, accessToken);
 }
 
+function isLoopbackOrPrivateHost(rawUrl: string): boolean {
+  try {
+    const u = new URL(rawUrl);
+    const host = u.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+    if (
+      host === 'localhost' ||
+      host === '::1' ||
+      host === '0.0.0.0' ||
+      host.endsWith('.local') ||
+      host.endsWith('.lan') ||
+      /^127\./.test(host) ||
+      /^10\./.test(host) ||
+      /^192\.168\./.test(host) ||
+      /^169\.254\./.test(host) ||
+      /^fe80:/i.test(host) ||
+      /^f[cd][0-9a-f]{2}:/i.test(host)
+    ) {
+      return true;
+    }
+    const match172 = host.match(/^172\.(\d+)\./);
+    if (match172) {
+      const secondOctet = Number(match172[1]);
+      if (secondOctet >= 16 && secondOctet <= 31) return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * 生成原生硬解播放器 (libmpv) 直连流地址
  * 100% 原始容器直出 (static=true)，无任何服务端重封装与音频转码，保留 DTS/TrueHD/Atmos 多声道与全画质
@@ -674,16 +829,58 @@ export function buildNativeDirectStreamUrl(
   accessToken: string
 ): string {
   const base = normalizeServerUrl(serverUrl);
-  if (mediaSource.IsRemote && mediaSource.Path && mediaSource.Path.startsWith('http')) {
-    return mediaSource.Path;
+  if (mediaSource.DirectStreamUrl && /^https?:\/\//i.test(mediaSource.DirectStreamUrl)) {
+    return mediaSource.DirectStreamUrl;
+  }
+  if (mediaSource.IsRemote && mediaSource.Path && /^https?:\/\//i.test(mediaSource.Path)) {
+    if (!isLoopbackOrPrivateHost(mediaSource.Path) || isLoopbackOrPrivateHost(base)) {
+      return mediaSource.Path;
+    }
   }
   const rawContainer = (mediaSource.Container || 'mkv').toLowerCase().split(',')[0].trim();
   const normalizedContainer = rawContainer === 'matroska' ? 'mkv' : rawContainer || 'mkv';
-  return `${base}/emby/Videos/${itemId}/stream.${normalizedContainer}?static=true&MediaSourceId=${mediaSource.Id}&PlaySessionId=${playSessionId}&api_key=${accessToken}&X-Emby-Token=${accessToken}`;
+  return `${base}/emby/Videos/${encodeURIComponent(itemId)}/stream.${normalizedContainer}?static=true&MediaSourceId=${encodeURIComponent(mediaSource.Id)}&PlaySessionId=${encodeURIComponent(playSessionId)}&api_key=${encodeURIComponent(accessToken)}&X-Emby-Token=${encodeURIComponent(accessToken)}`;
 }
 
 /**
- * 构造海报封面图片 URL (自动添加 webp 与尺寸优化)
+ * 解析服务端 PlaybackInfo 返回的 DirectStreamUrl 作为备选无转码直链地址
+ * 严格排除含 VideoCodec/AudioCodec/TranscodingProtocol 的转码流，防止触发服务端转码
+ */
+export function resolveEmbyDirectStreamCandidate(
+  serverUrl: string,
+  mediaSource: EmbyMediaSource,
+  accessToken: string
+): string | null {
+  const raw = mediaSource.DirectStreamUrl?.trim();
+  if (!raw) return null;
+
+  if (/(?:^|[?&])(VideoCodec|AudioCodec|TranscodingProtocol)=/i.test(raw)) {
+    return null;
+  }
+
+  if (/^https?:\/\//i.test(raw)) {
+    return raw;
+  }
+
+  if (!raw.startsWith('/')) {
+    return null;
+  }
+
+  const base = normalizeServerUrl(serverUrl);
+  let joined =
+    base.toLowerCase().endsWith('/emby') && raw.toLowerCase().startsWith('/emby/')
+      ? `${base}${raw.slice(5)}`
+      : `${base}${raw}`;
+
+  if (accessToken && !/[?&](api_key|X-Emby-Token)=/i.test(joined)) {
+    joined += `${joined.includes('?') ? '&' : '?'}api_key=${encodeURIComponent(accessToken)}`;
+  }
+
+  return joined;
+}
+
+/**
+ * 构造海报封面图片 URL (默认自动添加 webp 与尺寸优化)
  */
 export function buildItemImageUrl(
   serverUrl: string,
@@ -693,16 +890,279 @@ export function buildItemImageUrl(
     type?: 'Primary' | 'Backdrop' | 'Thumb';
     maxWidth?: number;
     quality?: number;
+    format?: 'webp' | 'jpg' | 'png' | 'original';
   } = {}
 ): string {
   const base = normalizeServerUrl(serverUrl);
   const type = options.type || 'Primary';
   const maxWidth = options.maxWidth || (type === 'Backdrop' ? 1920 : 400);
   const quality = options.quality || 85;
+  const format = options.format ?? 'webp';
+  const formatParam = format === 'original' ? '' : `&format=${format}`;
   const tagParam = imageTag ? `&tag=${imageTag}` : '';
   const indexSegment = type === 'Backdrop' ? '/0' : '';
 
-  return `${base}/emby/Items/${itemId}/Images/${type}${indexSegment}?maxWidth=${maxWidth}&quality=${quality}&format=webp${tagParam}`;
+  return `${base}/emby/Items/${itemId}/Images/${type}${indexSegment}?maxWidth=${maxWidth}&quality=${quality}${formatParam}${tagParam}`;
+}
+
+/**
+ * 剥离图片 URL 中的 format=webp 参数（保留 tag 与尺寸），用于部分 Emby 服务端 WebP 编码异常时的一次性重试
+ */
+export function stripImageFormatWebp(url?: string | null): string | null {
+  if (!url || !/[?&]format=webp(?:&|$)/i.test(url)) return null;
+  const next = url
+    .replace(/([?&])format=webp(?:&|$)/i, (match, sep: string, offset: number, str: string) => {
+      if (sep === '?') {
+        return offset + match.length < str.length ? '?' : '';
+      }
+      return match.endsWith('&') ? '&' : '';
+    })
+    .replace(/\?&/, '?')
+    .replace(/[?&]$/, '');
+  return next !== url ? next : null;
+}
+
+function buildTaggedImageCandidate(
+  serverUrl: string,
+  targetId: string | undefined,
+  type: 'Primary' | 'Backdrop' | 'Thumb',
+  tag: string | undefined,
+  options: { maxWidth?: number; quality?: number }
+): string {
+  if (!targetId || !tag) return '';
+  return buildItemImageUrl(serverUrl, targetId, tag, {
+    type,
+    maxWidth: options.maxWidth,
+    quality: options.quality,
+  });
+}
+
+/**
+ * 分集横版剧照/缩略图寻址（严格要求存在对应图片 tag 才发请求，避免无图分集触发 Emby 500 NullReferenceException）
+ */
+export function resolveEpisodeThumbnailUrl(
+  serverUrl: string,
+  episode: EmbyItem,
+  options: {
+    maxWidth?: number;
+    quality?: number;
+    seriesItem?: EmbyItem | null;
+  } = {}
+): string {
+  if (!serverUrl || !episode?.Id) return '';
+  const { seriesItem } = options;
+  const imgOpts = { maxWidth: options.maxWidth, quality: options.quality };
+
+  return (
+    buildTaggedImageCandidate(serverUrl, episode.Id, 'Primary', episode.ImageTags?.Primary, imgOpts) ||
+    buildTaggedImageCandidate(serverUrl, episode.Id, 'Thumb', episode.ImageTags?.Thumb, imgOpts) ||
+    buildTaggedImageCandidate(
+      serverUrl,
+      episode.Id,
+      'Backdrop',
+      episode.BackdropImageTags?.[0] || episode.ImageTags?.Backdrop,
+      imgOpts
+    ) ||
+    buildTaggedImageCandidate(
+      serverUrl,
+      episode.ParentBackdropItemId || seriesItem?.Id || episode.SeriesId,
+      'Backdrop',
+      episode.ParentBackdropImageTags?.[0] ||
+        seriesItem?.BackdropImageTags?.[0] ||
+        seriesItem?.ImageTags?.Backdrop,
+      imgOpts
+    ) ||
+    buildTaggedImageCandidate(
+      serverUrl,
+      episode.ParentThumbItemId || episode.SeriesId || seriesItem?.Id,
+      'Thumb',
+      episode.ParentThumbImageTag || episode.SeriesThumbImageTag || seriesItem?.ImageTags?.Thumb,
+      imgOpts
+    ) ||
+    buildTaggedImageCandidate(
+      serverUrl,
+      episode.SeriesId || seriesItem?.Id,
+      'Primary',
+      episode.SeriesPrimaryImageTag || seriesItem?.ImageTags?.Primary,
+      imgOpts
+    ) ||
+    ''
+  );
+}
+
+/**
+ * 竖版海报寻址（严格校验 tag 存在性；Episode 优先映射所属剧集 Primary）
+ */
+export function resolveItemPosterUrl(
+  serverUrl: string,
+  item: EmbyItem,
+  options: {
+    maxWidth?: number;
+    quality?: number;
+    seriesItem?: EmbyItem | null;
+  } = {}
+): string {
+  if (!serverUrl || !item?.Id) return '';
+  const { seriesItem } = options;
+  const imgOpts = { maxWidth: options.maxWidth, quality: options.quality };
+
+  if (item.Type === 'Episode' && item.SeriesId) {
+    return (
+      buildTaggedImageCandidate(
+        serverUrl,
+        seriesItem?.Id || item.SeriesId,
+        'Primary',
+        seriesItem?.ImageTags?.Primary || item.SeriesPrimaryImageTag,
+        imgOpts
+      ) ||
+      buildTaggedImageCandidate(serverUrl, item.Id, 'Primary', item.ImageTags?.Primary, imgOpts) ||
+      buildTaggedImageCandidate(
+        serverUrl,
+        seriesItem?.Id || item.ParentThumbItemId || item.SeriesId,
+        'Thumb',
+        seriesItem?.ImageTags?.Thumb || item.SeriesThumbImageTag || item.ParentThumbImageTag,
+        imgOpts
+      ) ||
+      ''
+    );
+  }
+
+  return (
+    buildTaggedImageCandidate(serverUrl, item.Id, 'Primary', item.ImageTags?.Primary, imgOpts) ||
+    buildTaggedImageCandidate(serverUrl, item.Id, 'Thumb', item.ImageTags?.Thumb, imgOpts) ||
+    buildTaggedImageCandidate(
+      serverUrl,
+      item.Id,
+      'Backdrop',
+      item.BackdropImageTags?.[0] || item.ImageTags?.Backdrop,
+      imgOpts
+    ) ||
+    ''
+  );
+}
+
+/**
+ * 横版背景/剧照寻址（严格校验 tag 存在性，区分详情/Hero 的剧集主体优先模式与卡片的单集画面优先模式）
+ */
+export function resolveItemBackdropUrl(
+  serverUrl: string,
+  item: EmbyItem,
+  options: {
+    maxWidth?: number;
+    quality?: number;
+    seriesItem?: EmbyItem | null;
+    mode?: 'hero' | 'card';
+    allowPrimaryFallback?: boolean;
+  } = {}
+): string {
+  if (!serverUrl || !item?.Id) return '';
+  const { seriesItem, mode = 'hero', allowPrimaryFallback = false } = options;
+  const imgOpts = { maxWidth: options.maxWidth, quality: options.quality };
+
+  if (mode === 'card') {
+    const isEpisode = item.Type === 'Episode';
+    return (
+      buildTaggedImageCandidate(
+        serverUrl,
+        item.Id,
+        'Backdrop',
+        item.BackdropImageTags?.[0] || item.ImageTags?.Backdrop,
+        imgOpts
+      ) ||
+      buildTaggedImageCandidate(serverUrl, item.Id, 'Thumb', item.ImageTags?.Thumb, imgOpts) ||
+      (isEpisode
+        ? buildTaggedImageCandidate(serverUrl, item.Id, 'Primary', item.ImageTags?.Primary, imgOpts)
+        : '') ||
+      (isEpisode
+        ? buildTaggedImageCandidate(
+            serverUrl,
+            item.ParentBackdropItemId || seriesItem?.Id || item.SeriesId,
+            'Backdrop',
+            item.ParentBackdropImageTags?.[0] ||
+              seriesItem?.BackdropImageTags?.[0] ||
+              seriesItem?.ImageTags?.Backdrop,
+            imgOpts
+          )
+        : '') ||
+      (isEpisode
+        ? buildTaggedImageCandidate(
+            serverUrl,
+            item.ParentThumbItemId || item.SeriesId || seriesItem?.Id,
+            'Thumb',
+            item.ParentThumbImageTag || item.SeriesThumbImageTag || seriesItem?.ImageTags?.Thumb,
+            imgOpts
+          )
+        : '') ||
+      (!isEpisode
+        ? buildTaggedImageCandidate(serverUrl, item.Id, 'Primary', item.ImageTags?.Primary, imgOpts)
+        : '') ||
+      (isEpisode
+        ? buildTaggedImageCandidate(
+            serverUrl,
+            item.SeriesId || seriesItem?.Id,
+            'Primary',
+            item.SeriesPrimaryImageTag || seriesItem?.ImageTags?.Primary,
+            imgOpts
+          )
+        : '') ||
+      ''
+    );
+  }
+
+  if (item.Type === 'Episode' && item.SeriesId) {
+    return (
+      buildTaggedImageCandidate(
+        serverUrl,
+        seriesItem?.Id || item.ParentBackdropItemId || item.SeriesId,
+        'Backdrop',
+        seriesItem?.BackdropImageTags?.[0] ||
+          seriesItem?.ImageTags?.Backdrop ||
+          item.ParentBackdropImageTags?.[0],
+        imgOpts
+      ) ||
+      buildTaggedImageCandidate(
+        serverUrl,
+        item.Id,
+        'Backdrop',
+        item.BackdropImageTags?.[0] || item.ImageTags?.Backdrop,
+        imgOpts
+      ) ||
+      buildTaggedImageCandidate(
+        serverUrl,
+        seriesItem?.Id || item.ParentThumbItemId || item.SeriesId,
+        'Thumb',
+        seriesItem?.ImageTags?.Thumb || item.SeriesThumbImageTag || item.ParentThumbImageTag,
+        imgOpts
+      ) ||
+      buildTaggedImageCandidate(serverUrl, item.Id, 'Thumb', item.ImageTags?.Thumb, imgOpts) ||
+      (allowPrimaryFallback
+        ? buildTaggedImageCandidate(
+            serverUrl,
+            seriesItem?.Id || item.SeriesId,
+            'Primary',
+            seriesItem?.ImageTags?.Primary || item.SeriesPrimaryImageTag,
+            imgOpts
+          ) ||
+          buildTaggedImageCandidate(serverUrl, item.Id, 'Primary', item.ImageTags?.Primary, imgOpts)
+        : '') ||
+      ''
+    );
+  }
+
+  return (
+    buildTaggedImageCandidate(
+      serverUrl,
+      item.Id,
+      'Backdrop',
+      item.BackdropImageTags?.[0] || item.ImageTags?.Backdrop,
+      imgOpts
+    ) ||
+    buildTaggedImageCandidate(serverUrl, item.Id, 'Thumb', item.ImageTags?.Thumb, imgOpts) ||
+    (allowPrimaryFallback
+      ? buildTaggedImageCandidate(serverUrl, item.Id, 'Primary', item.ImageTags?.Primary, imgOpts)
+      : '') ||
+    ''
+  );
 }
 
 /**
@@ -853,7 +1313,7 @@ export async function reportPlaybackStart(
   const base = normalizeServerUrl(serverUrl);
   return httpClient(`${base}/emby/Sessions/Playing`, {
     method: 'POST',
-    headers: buildEmbyHeaders(undefined, accessToken),
+    headers: buildEmbyHeaders(undefined, accessToken, { serverUrl: base }),
     body: JSON.stringify({
       ItemId: params.itemId,
       MediaSourceId: params.mediaSourceId,
@@ -882,7 +1342,7 @@ export async function reportPlaybackProgress(
   const base = normalizeServerUrl(serverUrl);
   return httpClient(`${base}/emby/Sessions/Playing/Progress`, {
     method: 'POST',
-    headers: buildEmbyHeaders(undefined, accessToken),
+    headers: buildEmbyHeaders(undefined, accessToken, { serverUrl: base }),
     body: JSON.stringify({
       ItemId: params.itemId,
       MediaSourceId: params.mediaSourceId,
@@ -911,7 +1371,7 @@ export async function reportPlaybackStopped(
   const base = normalizeServerUrl(serverUrl);
   return httpClient(`${base}/emby/Sessions/Playing/Stopped`, {
     method: 'POST',
-    headers: buildEmbyHeaders(undefined, accessToken),
+    headers: buildEmbyHeaders(undefined, accessToken, { serverUrl: base }),
     body: JSON.stringify({
       ItemId: params.itemId,
       MediaSourceId: params.mediaSourceId,
@@ -945,7 +1405,7 @@ export async function getViewItemCounts(
       const url = `${base}/emby/Users/${userId}/Items?ParentId=${parentId}&Recursive=true&IncludeItemTypes=${type}&Limit=0`;
       const res = await httpClient(url, {
         method: 'GET',
-        headers: buildEmbyHeaders(userId, accessToken),
+        headers: buildEmbyHeaders(userId, accessToken, { serverUrl: base }),
       });
       if (res.ok) {
         const data = await res.json();
@@ -1019,7 +1479,7 @@ export async function searchMediaItems(
 
   const limit = params.limit || 100;
   const encodedTerm = encodeURIComponent(cleanTerm);
-  const headers = buildEmbyHeaders(userId, accessToken);
+  const headers = buildEmbyHeaders(userId, accessToken, { serverUrl: base });
 
   // 1. 如果显式指定了某一个具体的媒体库 (parentId)，直接精准深度查询该库
   if (params.parentId && params.parentId !== 'All') {
@@ -1084,20 +1544,31 @@ export async function searchMediaItems(
         if (!res.ok) return [];
         const data = await res.json();
         const hints = data.SearchHints || [];
-        return hints.map((h: any) => ({
-          item: {
-            Id: h.Id || h.ItemId,
-            Name: h.Name,
-            Type: h.Type,
-            MediaType: h.MediaType,
-            ProductionYear: h.ProductionYear,
-            RunTimeTicks: h.RunTimeTicks,
-            PrimaryImageAspectRatio:
-              h.PrimaryImageAspectRatio || (h.Type === 'Episode' ? 1.77 : 0.67),
-            ImageTags: h.PrimaryImageTag ? { Primary: h.PrimaryImageTag } : undefined,
-            SeriesName: h.Series,
-          } as EmbyItem,
-        }));
+        return hints.map((h: any) => {
+          const hintImageTags: EmbyItem['ImageTags'] | undefined =
+            h.PrimaryImageTag || h.ThumbImageTag
+              ? {
+                  ...(h.PrimaryImageTag ? { Primary: h.PrimaryImageTag } : {}),
+                  ...(h.ThumbImageTag ? { Thumb: h.ThumbImageTag } : {}),
+                }
+              : undefined;
+          return {
+            item: {
+              Id: h.Id || h.ItemId,
+              Name: h.Name,
+              Type: h.Type,
+              MediaType: h.MediaType,
+              ProductionYear: h.ProductionYear,
+              RunTimeTicks: h.RunTimeTicks,
+              PrimaryImageAspectRatio:
+                h.PrimaryImageAspectRatio || (h.Type === 'Episode' ? 1.77 : 0.67),
+              ImageTags: hintImageTags,
+              BackdropImageTags: h.BackdropImageTag ? [h.BackdropImageTag] : undefined,
+              SeriesId: h.SeriesId,
+              SeriesName: h.Series,
+            } as EmbyItem,
+          };
+        });
       })
       .catch(() => [])
   );
@@ -1129,7 +1600,15 @@ export async function searchMediaItems(
           }
           // 如果已有记录是简短的 SearchHint，用完整的 Items 属性补充
           if (!existing.Overview && it.Overview) existing.Overview = it.Overview;
-          if (!existing.ImageTags && it.ImageTags) existing.ImageTags = it.ImageTags;
+          if ((!existing.ImageTags || Object.keys(existing.ImageTags).length === 0) && it.ImageTags) {
+            existing.ImageTags = it.ImageTags;
+          }
+          if (
+            (!existing.BackdropImageTags || existing.BackdropImageTags.length === 0) &&
+            it.BackdropImageTags?.length
+          ) {
+            existing.BackdropImageTags = it.BackdropImageTags;
+          }
           if (!existing.UserData && it.UserData) existing.UserData = it.UserData;
           if (!existing.PrimaryImageAspectRatio && it.PrimaryImageAspectRatio) {
             existing.PrimaryImageAspectRatio = it.PrimaryImageAspectRatio;

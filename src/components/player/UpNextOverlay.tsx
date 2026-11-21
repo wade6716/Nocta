@@ -1,6 +1,10 @@
 import React from 'react';
 import { FastForward, Play, X, SkipForward } from 'lucide-react';
-import { EmbyItem, buildItemImageUrl } from '../../api/embyClient';
+import {
+  EmbyItem,
+  resolveEpisodeThumbnailUrl,
+  stripImageFormatWebp,
+} from '../../api/embyClient';
 
 interface UpNextOverlayProps {
   showSkipIntro: boolean;
@@ -23,12 +27,10 @@ export const UpNextOverlay: React.FC<UpNextOverlayProps> = ({
 }) => {
   const thumbUrl =
     nextEpisode && serverUrl
-      ? buildItemImageUrl(
-          serverUrl,
-          nextEpisode.Id,
-          nextEpisode.ImageTags?.Primary || nextEpisode.ParentThumbImageTag,
-          { type: 'Primary', maxWidth: 320, quality: 80 }
-        )
+      ? resolveEpisodeThumbnailUrl(serverUrl, nextEpisode, {
+          maxWidth: 320,
+          quality: 80,
+        })
       : '';
 
   return (
@@ -60,9 +62,26 @@ export const UpNextOverlay: React.FC<UpNextOverlayProps> = ({
               <div className="w-24 aspect-video rounded-xl overflow-hidden bg-white/5 shrink-0 relative border border-white/10">
                 {thumbUrl ? (
                   <img
+                    key={thumbUrl}
                     src={thumbUrl}
                     alt={nextEpisode.Name}
                     className="w-full h-full object-cover"
+                    onError={(e) => {
+                      const target = e.currentTarget;
+                      const step = target.dataset.fallbackStep;
+                      if (step === 'done') return;
+                      if (!step) {
+                        const noWebp = stripImageFormatWebp(target.src);
+                        if (noWebp) {
+                          target.dataset.fallbackStep = '1';
+                          target.src = noWebp;
+                          return;
+                        }
+                      }
+                      target.dataset.fallbackStep = 'done';
+                      target.src =
+                        'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180" viewBox="0 0 320 180"><rect width="100%" height="100%" fill="%23131826"/><text x="50%" y="50%" fill="%2364748B" font-family="sans-serif" font-size="13" text-anchor="middle" dominant-baseline="middle">暂无剧照</text></svg>';
+                    }}
                   />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center text-slate-500">

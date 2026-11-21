@@ -1,6 +1,13 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Play, Check, Server, Tv } from 'lucide-react';
-import { EmbyItem, buildItemImageUrl, formatSeriesEpisodeBadge } from '../../api/embyClient';
+import {
+  EmbyItem,
+  buildItemImageUrl,
+  formatSeriesEpisodeBadge,
+  resolveItemBackdropUrl,
+  resolveItemPosterUrl,
+  stripImageFormatWebp,
+} from '../../api/embyClient';
 
 interface MediaCardProps {
   item: EmbyItem;
@@ -29,44 +36,20 @@ export const MediaCard: React.FC<MediaCardProps> = ({
   const effectiveEpisodeBadge =
     episodeBadge !== undefined ? episodeBadge : formatSeriesEpisodeBadge(item);
 
-  // 智能图片寻址：
-  // 1. 如果是剧集分集（Episode）在竖版海报（poster）模式下，使用父级剧集的 SeriesPrimaryImageTag
-  // 2. 如果是横版海报（backdrop），优先使用分集的 Backdrop/Thumb/Primary，若没有则回退至剧集背景
-  let imageItemId = item.Id;
-  let imageType: 'Primary' | 'Backdrop' | 'Thumb' = isBackdrop ? 'Backdrop' : 'Primary';
-  let imageTag: string | undefined = undefined;
+  const imageUrl = isBackdrop
+    ? resolveItemBackdropUrl(effectiveServerUrl, item, {
+        maxWidth: 600,
+        quality: 85,
+        mode: 'card',
+      })
+    : resolveItemPosterUrl(effectiveServerUrl, item, {
+        maxWidth: 400,
+        quality: 85,
+      });
 
-  if (isBackdrop) {
-    if (item.ImageTags?.Backdrop || item.BackdropImageTags?.[0]) {
-      imageType = 'Backdrop';
-      imageTag = item.ImageTags?.Backdrop || item.BackdropImageTags?.[0];
-    } else if (item.ImageTags?.Thumb || item.ParentThumbImageTag || item.SeriesThumbImageTag) {
-      imageType = 'Thumb';
-      imageTag = item.ImageTags?.Thumb || item.ParentThumbImageTag || item.SeriesThumbImageTag;
-    } else if (item.ImageTags?.Primary) {
-      imageType = 'Primary';
-      imageTag = item.ImageTags?.Primary;
-    } else if (item.SeriesId) {
-      imageItemId = item.SeriesId;
-      imageType = 'Backdrop';
-    }
-  } else {
-    // 竖版海报 (2:3)
-    if (item.Type === 'Episode' && item.SeriesId) {
-      imageItemId = item.SeriesId;
-      imageType = 'Primary';
-      imageTag = item.SeriesPrimaryImageTag || item.ImageTags?.Primary;
-    } else {
-      imageType = 'Primary';
-      imageTag = item.ImageTags?.Primary;
-    }
-  }
-
-  const imageUrl = buildItemImageUrl(effectiveServerUrl, imageItemId, imageTag, {
-    type: imageType,
-    maxWidth: isBackdrop ? 600 : 400,
-    quality: 85,
-  });
+  useEffect(() => {
+    setIsImageLoaded(false);
+  }, [imageUrl]);
 
   // Calculate resume percentage
   const positionTicks = item.UserData?.PlaybackPositionTicks || 0;
@@ -88,35 +71,62 @@ export const MediaCard: React.FC<MediaCardProps> = ({
         }`}
       >
         {/* Loading skeleton */}
-        {!isImageLoaded && (
+        {imageUrl && !isImageLoaded && (
           <div className="absolute inset-0 bg-[#131826] animate-pulse" />
         )}
 
-        <img
-          src={imageUrl}
-          alt={item.Name}
-          loading="lazy"
-          onLoad={() => setIsImageLoaded(true)}
-          className={`w-full h-full object-cover transition-all duration-300 group-hover:scale-105 ${
-            isImageLoaded ? 'opacity-100' : 'opacity-0'
-          }`}
-          onError={(e) => {
-            setIsImageLoaded(true);
-            const target = e.target as HTMLImageElement;
-            // 针对分集海报未命中时的两级平滑降级：尝试取剧集封面
-            if (item.SeriesId && imageItemId !== item.SeriesId) {
-              target.src = buildItemImageUrl(effectiveServerUrl, item.SeriesId, item.SeriesPrimaryImageTag, {
-                type: 'Primary',
-                maxWidth: 400,
-                quality: 85,
-              });
-              return;
-            }
-            // 最终兜底图
-            target.src =
-              'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="300" height="450" viewBox="0 0 300 450"><rect width="100%" height="100%" fill="%23131826"/><text x="50%" y="50%" fill="%2364748B" font-family="sans-serif" font-size="16" text-anchor="middle" dominant-baseline="middle">暂无海报</text></svg>';
-          }}
-        />
+        {imageUrl ? (
+          <img
+            key={imageUrl}
+            src={imageUrl}
+            alt={item.Name}
+            loading="lazy"
+            onLoad={() => setIsImageLoaded(true)}
+            className={`w-full h-full object-cover transition-all duration-300 group-hover:scale-105 ${
+              isImageLoaded ? 'opacity-100' : 'opacity-0'
+            }`}
+            onError={(e) => {
+              const target = e.currentTarget;
+              const step = target.dataset.fallbackStep;
+              if (step === 'done') {
+                setIsImageLoaded(true);
+                return;
+              }
+
+              if (!step) {
+                const noWebp = stripImageFormatWebp(target.src);
+                if (noWebp) {
+                  target.dataset.fallbackStep = '1';
+                  target.src = noWebp;
+                  return;
+                }
+              }
+
+              if (step !== '2' && item.SeriesId && item.SeriesPrimaryImageTag) {
+                const seriesPrimaryUrl = buildItemImageUrl(
+                  effectiveServerUrl,
+                  item.SeriesId,
+                  item.SeriesPrimaryImageTag,
+                  { type: 'Primary', maxWidth: 400, quality: 85 }
+                );
+                if (seriesPrimaryUrl !== imageUrl && target.src !== seriesPrimaryUrl) {
+                  target.dataset.fallbackStep = '2';
+                  target.src = seriesPrimaryUrl;
+                  return;
+                }
+              }
+
+              setIsImageLoaded(true);
+              target.dataset.fallbackStep = 'done';
+              target.src =
+                'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="300" height="450" viewBox="0 0 300 450"><rect width="100%" height="100%" fill="%23131826"/><text x="50%" y="50%" fill="%2364748B" font-family="sans-serif" font-size="16" text-anchor="middle" dominant-baseline="middle">暂无海报</text></svg>';
+            }}
+          />
+        ) : (
+          <div className="w-full h-full bg-[#131826] flex items-center justify-center text-sm text-slate-500">
+            暂无海报
+          </div>
+        )}
 
         {/* Hover play icon overlay */}
         <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">

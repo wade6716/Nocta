@@ -23,11 +23,12 @@ import {
   EmbyItem,
   FederatedHistoryServerStat,
   FederatedServerTarget,
-  buildItemImageUrl,
   formatFileSize,
   formatSeriesEpisodeBadge,
   getFederatedPlaybackHistory,
   getItemFileSize,
+  resolveItemBackdropUrl,
+  stripImageFormatWebp,
   ticksToSeconds,
 } from '../api/embyClient';
 import { fetchAndPreparePlaybackSession } from '../player/playbackSessionService';
@@ -78,49 +79,10 @@ function formatFullDateTime(dateStr?: string): string {
 }
 
 function buildContinueThumbnailUrl(item: EmbyItem, serverUrl: string): string {
-  const backdropTag = item.ImageTags?.Backdrop || item.BackdropImageTags?.[0];
-  if (backdropTag) {
-    return buildItemImageUrl(serverUrl, item.Id, backdropTag, {
-      type: 'Backdrop',
-      maxWidth: 640,
-      quality: 85,
-    });
-  }
-  if (item.ImageTags?.Thumb) {
-    return buildItemImageUrl(serverUrl, item.Id, item.ImageTags.Thumb, {
-      type: 'Thumb',
-      maxWidth: 640,
-      quality: 85,
-    });
-  }
-  if (item.ImageTags?.Primary) {
-    return buildItemImageUrl(serverUrl, item.Id, item.ImageTags.Primary, {
-      type: 'Primary',
-      maxWidth: 640,
-      quality: 85,
-    });
-  }
-  if (item.Type === 'Episode' && item.SeriesId) {
-    const parentThumb = item.SeriesThumbImageTag || item.ParentThumbImageTag;
-    if (parentThumb) {
-      return buildItemImageUrl(serverUrl, item.SeriesId, parentThumb, {
-        type: 'Thumb',
-        maxWidth: 640,
-        quality: 85,
-      });
-    }
-    if (item.SeriesPrimaryImageTag) {
-      return buildItemImageUrl(serverUrl, item.SeriesId, item.SeriesPrimaryImageTag, {
-        type: 'Primary',
-        maxWidth: 640,
-        quality: 85,
-      });
-    }
-  }
-  return buildItemImageUrl(serverUrl, item.SeriesId || item.Id, undefined, {
-    type: 'Primary',
+  return resolveItemBackdropUrl(serverUrl, item, {
     maxWidth: 640,
     quality: 85,
+    mode: 'card',
   });
 }
 
@@ -481,16 +443,35 @@ export const ContinueWatchingPage: React.FC = () => {
                   className="relative w-full md:w-52 lg:w-56 aspect-video rounded-xl overflow-hidden bg-black/60 shrink-0 border border-white/10 cursor-pointer group/thumb text-left disabled:cursor-wait"
                   title={`点击立即播放「${mainTitle}」`}
                 >
-                  <img
-                    src={thumbUrl}
-                    alt={mainTitle}
-                    loading="lazy"
-                    className="w-full h-full object-cover transition-transform duration-300 group-hover/thumb:scale-105"
-                    onError={(e) => {
-                      (e.target as HTMLImageElement).src =
-                        'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180" viewBox="0 0 320 180"><rect width="100%" height="100%" fill="%23131826"/><text x="50%" y="50%" fill="%2364748B" font-family="sans-serif" font-size="13" text-anchor="middle" dominant-baseline="middle">暂无封面</text></svg>';
-                    }}
-                  />
+                  {thumbUrl ? (
+                    <img
+                      key={thumbUrl}
+                      src={thumbUrl}
+                      alt={mainTitle}
+                      loading="lazy"
+                      className="w-full h-full object-cover transition-transform duration-300 group-hover/thumb:scale-105"
+                      onError={(e) => {
+                        const target = e.currentTarget;
+                        const step = target.dataset.fallbackStep;
+                        if (step === 'done') return;
+                        if (!step) {
+                          const noWebp = stripImageFormatWebp(target.src);
+                          if (noWebp) {
+                            target.dataset.fallbackStep = '1';
+                            target.src = noWebp;
+                            return;
+                          }
+                        }
+                        target.dataset.fallbackStep = 'done';
+                        target.src =
+                          'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180" viewBox="0 0 320 180"><rect width="100%" height="100%" fill="%23131826"/><text x="50%" y="50%" fill="%2364748B" font-family="sans-serif" font-size="13" text-anchor="middle" dominant-baseline="middle">暂无封面</text></svg>';
+                      }}
+                    />
+                  ) : (
+                    <div className="w-full h-full bg-[#131826] flex items-center justify-center text-xs text-slate-500">
+                      暂无封面
+                    </div>
+                  )}
 
                   <div className="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-black/80 to-transparent pointer-events-none" />
 

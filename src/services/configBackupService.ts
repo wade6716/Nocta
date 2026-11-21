@@ -214,6 +214,7 @@ export function mergeConfigData(local: NoctaConfigData, remote: NoctaConfigData)
         ...r,
         password: r.password || existing.password,
         accessToken: r.accessToken || existing.accessToken,
+        userAgent: r.userAgent !== undefined ? r.userAgent : existing.userAgent,
         lastActive: Math.max(existing.lastActive || 0, r.lastActive || 0),
       });
     } else {

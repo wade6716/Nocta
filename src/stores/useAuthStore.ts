@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { DanmuConfig } from '../api/danmuClient';
+import { normalizeServerUrl, registerEmbyUserAgentGetter } from '../api/embyClient';
 import { ProxyConfig, httpClient, registerProxyGetter } from '../api/http';
 
 export interface SavedServer {
@@ -11,6 +12,8 @@ export interface SavedServer {
   accessToken: string;
   /** 明文记住的登录密码（仅保存在本机 localStorage，用于查看与自动重新登录） */
   password?: string;
+  /** 自定义 User-Agent（可选，留空使用默认浏览器 UA） */
+  userAgent?: string;
   /** 服务器代理配置（若未设置则跟随全局代理） */
   proxyConfig?: ProxyConfig;
   /** 最近一次连接测试是否通过；undefined 表示尚未验证过 */
@@ -297,6 +300,7 @@ export const useAuthStore = create<AuthState>((set, get) => {
                 // 保留已有密码与令牌（若导入的数据处于脱敏状态）
                 password: imp.password || existing.password,
                 accessToken: imp.accessToken || existing.accessToken,
+                userAgent: imp.userAgent !== undefined ? imp.userAgent : existing.userAgent,
                 lastActive: Math.max(existing.lastActive || 0, imp.lastActive || 0),
               });
             } else {
@@ -337,4 +341,19 @@ registerProxyGetter(() => {
   const state = useAuthStore.getState();
   const current = state.getCurrentServer();
   return current?.proxyConfig || state.globalProxyConfig;
+});
+
+// 全局注册自定义 User-Agent 解析器，按服务器 URL 精确匹配对应配置
+registerEmbyUserAgentGetter((serverUrl?: string) => {
+  const state = useAuthStore.getState();
+  if (serverUrl) {
+    const targetUrl = normalizeServerUrl(serverUrl).toLowerCase();
+    const matched = state.servers.find(
+      (s) => normalizeServerUrl(s.url).toLowerCase() === targetUrl
+    );
+    if (matched) {
+      return matched.userAgent?.trim() || undefined;
+    }
+  }
+  return state.getCurrentServer()?.userAgent?.trim() || undefined;
 });

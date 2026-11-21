@@ -851,6 +851,7 @@ export const OsdOverlayPage: React.FC = () => {
           networkSpeed={sync.networkSpeed}
           telemetry={sync.telemetry}
           proxyInfo={sync.proxyInfo}
+          userAgent={sync.userAgent}
           nextPreloadStatus={sync.nextPreloadStatus ?? null}
         />
       )}

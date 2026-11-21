@@ -73,6 +73,8 @@ import {
   testServerConnection,
   authenticateByName,
   normalizeServerUrl,
+  DEFAULT_EMBY_USER_AGENT,
+  EMBY_USER_AGENT_PRESETS,
 } from '../api/embyClient';
 import { ProxyConfig, ProxyType, fetchSystemProxy } from '../api/http';
 
@@ -138,6 +140,7 @@ export const SettingsPage: React.FC = () => {
   const [embyFormUrl, setEmbyFormUrl] = useState('');
   const [embyFormUser, setEmbyFormUser] = useState('');
   const [embyFormPass, setEmbyFormPass] = useState('');
+  const [embyFormUserAgent, setEmbyFormUserAgent] = useState('');
   const [embyFormError, setEmbyFormError] = useState<string | null>(null);
   const [embyTesting, setEmbyTesting] = useState(false);
   const [embyTestMsg, setEmbyTestMsg] = useState<string | null>(null);
@@ -182,10 +185,37 @@ export const SettingsPage: React.FC = () => {
 
     const cleanUrl = normalizeServerUrl(embyFormUrl);
     const cleanUser = embyFormUser.trim();
+    const cleanUa = embyFormUserAgent.trim() || undefined;
+
+    if (editingEmbyServer) {
+      const urlChanged = normalizeServerUrl(editingEmbyServer.url) !== cleanUrl;
+      const userChanged = editingEmbyServer.username.trim() !== cleanUser;
+      const passwordChanged =
+        editingEmbyServer.password === undefined
+          ? embyFormPass.length > 0
+          : embyFormPass !== editingEmbyServer.password;
+      const needReauth =
+        !editingEmbyServer.accessToken || urlChanged || userChanged || passwordChanged;
+
+      // 仅修改显示名称或 User-Agent 时直接就地更新，不强制重新登录
+      if (!needReauth) {
+        updateEmbyServer(editingEmbyServer.id, {
+          name: embyFormName.trim() || editingEmbyServer.name || 'Emby Server',
+          userAgent: cleanUa,
+        });
+        setEmbyTesting(false);
+        setIsAddingEmby(false);
+        setEditingEmbyServer(null);
+        return;
+      }
+    }
+
     let authRes;
 
     try {
-      authRes = await authenticateByName(cleanUrl, cleanUser, embyFormPass);
+      authRes = await authenticateByName(cleanUrl, cleanUser, embyFormPass, {
+        userAgent: cleanUa,
+      });
     } catch (err: any) {
       console.warn('保存服务器时连通验证失败，但仍然记录', err);
     }
@@ -196,6 +226,7 @@ export const SettingsPage: React.FC = () => {
         url: cleanUrl,
         username: cleanUser,
         password: embyFormPass || editingEmbyServer.password,
+        userAgent: cleanUa,
         userId: authRes?.User?.Id || editingEmbyServer.userId,
         accessToken: authRes?.AccessToken || editingEmbyServer.accessToken,
         lastTestOk: !!authRes,
@@ -214,6 +245,7 @@ export const SettingsPage: React.FC = () => {
         username: cleanUser,
         accessToken: authRes?.AccessToken || '',
         password: embyFormPass,
+        userAgent: cleanUa,
         lastTestOk: !!authRes,
         lastTestError: authRes ? undefined : '连接或登录校验未通过',
         lastTestAt: Date.now(),
@@ -555,6 +587,7 @@ export const SettingsPage: React.FC = () => {
                       setEmbyFormUrl('');
                       setEmbyFormUser('');
                       setEmbyFormPass('');
+                      setEmbyFormUserAgent('');
                       setEmbyFormError(null);
                       setIsAddingEmby(true);
                     }}
@@ -622,6 +655,39 @@ export const SettingsPage: React.FC = () => {
                         placeholder="密码（保存在本地方便免密重连）"
                         className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-xl text-xs text-white placeholder-gray-500 focus:outline-none focus:border-primary"
                       />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[11px] text-gray-400 block">
+                      自定义 User-Agent（可选，解决公益服 / Cloudflare / 302 直链拦截）
+                    </label>
+                    <input
+                      type="text"
+                      value={embyFormUserAgent}
+                      onChange={(e) => setEmbyFormUserAgent(e.target.value)}
+                      placeholder={`留空默认: ${DEFAULT_EMBY_USER_AGENT}`}
+                      className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-xl text-xs text-white font-mono placeholder-gray-500 focus:outline-none focus:border-primary"
+                    />
+                    <div className="flex flex-wrap gap-1.5">
+                      {EMBY_USER_AGENT_PRESETS.map((preset) => {
+                        const isSelected = embyFormUserAgent.trim() === preset.value;
+                        return (
+                          <button
+                            key={preset.id}
+                            type="button"
+                            onClick={() => setEmbyFormUserAgent(preset.value)}
+                            className={`px-2 py-1 rounded-lg text-[11px] border transition cursor-pointer ${
+                              isSelected
+                                ? 'bg-primary/20 border-primary/50 text-primary font-medium'
+                                : 'bg-white/5 border-white/10 text-gray-400 hover:text-white hover:bg-white/10'
+                            }`}
+                            title={preset.value || DEFAULT_EMBY_USER_AGENT}
+                          >
+                            {preset.label}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
 
@@ -705,6 +771,17 @@ export const SettingsPage: React.FC = () => {
                                   </button>
                                 </>
                               )}
+                              {server.userAgent && (
+                                <>
+                                  <span className="text-gray-500">·</span>
+                                  <span
+                                    className="px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-300 border border-sky-500/25 text-[10px] font-sans"
+                                    title={server.userAgent}
+                                  >
+                                    自定义 UA
+                                  </span>
+                                </>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -725,6 +802,7 @@ export const SettingsPage: React.FC = () => {
                               setEmbyFormUrl(server.url);
                               setEmbyFormUser(server.username);
                               setEmbyFormPass(server.password || '');
+                              setEmbyFormUserAgent(server.userAgent || '');
                               setEmbyFormError(null);
                               setIsAddingEmby(false);
                             }}

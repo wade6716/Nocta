@@ -2,7 +2,9 @@ import React from 'react';
 import { Check, Play } from 'lucide-react';
 import {
   EmbyItem,
-  buildItemImageUrl,
+  resolveEpisodeThumbnailUrl,
+  resolveItemBackdropUrl,
+  stripImageFormatWebp,
   ticksToSeconds,
   formatFileSize,
   getItemFileSize,
@@ -12,6 +14,7 @@ interface EpisodeGridProps {
   episodes: EmbyItem[];
   serverUrl: string;
   currentEpisodeId?: string;
+  seriesItem?: EmbyItem | null;
   onSelectEpisode: (episode: EmbyItem) => void;
 }
 
@@ -25,18 +28,26 @@ export const EpisodeGrid: React.FC<EpisodeGridProps> = ({
   episodes,
   serverUrl,
   currentEpisodeId,
+  seriesItem,
   onSelectEpisode,
 }) => {
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5 select-none">
       {episodes.map((ep) => {
         const isCurrent = ep.Id === currentEpisodeId;
-        const imageUrl = buildItemImageUrl(
-          serverUrl,
-          ep.Id,
-          ep.ImageTags?.Primary || ep.BackdropImageTags?.[0],
-          { type: 'Primary', maxWidth: 640, quality: 85 }
-        );
+        const imageUrl = resolveEpisodeThumbnailUrl(serverUrl, ep, {
+          maxWidth: 640,
+          quality: 85,
+          seriesItem,
+        });
+        const seriesFallbackUrl = seriesItem
+          ? resolveItemBackdropUrl(serverUrl, seriesItem, {
+              maxWidth: 640,
+              quality: 85,
+              mode: 'hero',
+              allowPrimaryFallback: true,
+            })
+          : '';
 
         const positionTicks = ep.UserData?.PlaybackPositionTicks || 0;
         const totalTicks = ep.RunTimeTicks || 0;
@@ -78,16 +89,48 @@ export const EpisodeGrid: React.FC<EpisodeGridProps> = ({
           >
             {/* Top 16:9 Wide Thumbnail */}
             <div className="relative w-full aspect-video bg-black/60 overflow-hidden shrink-0">
-              <img
-                src={imageUrl}
-                alt={ep.Name}
-                loading="lazy"
-                className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
-                onError={(e) => {
-                  (e.target as HTMLImageElement).src =
-                    'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180" viewBox="0 0 320 180"><rect width="100%" height="100%" fill="%23131826"/><text x="50%" y="50%" fill="%2364748B" font-family="sans-serif" font-size="13" text-anchor="middle" dominant-baseline="middle">暂无剧照</text></svg>';
-                }}
-              />
+              {imageUrl ? (
+                <img
+                  key={imageUrl}
+                  src={imageUrl}
+                  alt={ep.Name}
+                  loading="lazy"
+                  className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+                  onError={(e) => {
+                    const target = e.currentTarget;
+                    const step = target.dataset.fallbackStep;
+                    if (step === 'done') return;
+
+                    if (!step) {
+                      const noWebp = stripImageFormatWebp(target.src);
+                      if (noWebp) {
+                        target.dataset.fallbackStep = '1';
+                        target.src = noWebp;
+                        return;
+                      }
+                    }
+
+                    if (
+                      step !== '2' &&
+                      seriesFallbackUrl &&
+                      seriesFallbackUrl !== imageUrl &&
+                      target.src !== seriesFallbackUrl
+                    ) {
+                      target.dataset.fallbackStep = '2';
+                      target.src = seriesFallbackUrl;
+                      return;
+                    }
+
+                    target.dataset.fallbackStep = 'done';
+                    target.src =
+                      'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180" viewBox="0 0 320 180"><rect width="100%" height="100%" fill="%23131826"/><text x="50%" y="50%" fill="%2364748B" font-family="sans-serif" font-size="13" text-anchor="middle" dominant-baseline="middle">暂无剧照</text></svg>';
+                  }}
+                />
+              ) : (
+                <div className="w-full h-full bg-gradient-to-br from-[#131826] via-[#172033] to-[#0f1422] flex items-center justify-center text-xs text-slate-500">
+                  暂无剧照
+                </div>
+              )}
 
               {/* Subtle bottom vignette for badge legibility */}
               <div className="absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-black/75 via-black/25 to-transparent pointer-events-none" />

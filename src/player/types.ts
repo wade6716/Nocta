@@ -54,6 +54,7 @@ export interface PlayerLoadOptions {
   upstreamUrl?: string; // 当 url 为本机预加载代理地址时，保留真实 Emby 上游地址用于代理路由展示
   initialTime?: number;
   title?: string;
+  userAgent?: string;
   headers?: Record<string, string>;
   isLive?: boolean;
   proxyOverride?: StreamProxyOverride;

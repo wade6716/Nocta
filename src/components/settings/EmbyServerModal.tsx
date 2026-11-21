@@ -25,6 +25,8 @@ import {
   authenticateByName,
   normalizeServerUrl,
   EmbyAuthResponse,
+  DEFAULT_EMBY_USER_AGENT,
+  EMBY_USER_AGENT_PRESETS,
 } from '../../api/embyClient';
 
 interface EmbyServerModalProps {
@@ -32,6 +34,7 @@ interface EmbyServerModalProps {
   onClose: () => void;
   /** 打开弹窗时直接进入编辑态的服务器 ID（例如从登录页点击某台服务器的编辑按钮） */
   initialEditId?: string | null;
+  onSaved?: () => void;
 }
 
 type Tone = 'ok' | 'warn' | 'error' | 'idle';
@@ -64,6 +67,7 @@ async function probeServer(params: {
   password: string;
   attemptAuth: boolean;
   proxy?: ProxyConfig;
+  userAgent?: string;
 }): Promise<ConnectionTestResult> {
   const cleanUrl = normalizeServerUrl(params.url);
   const user = params.username.trim();
@@ -71,7 +75,10 @@ async function probeServer(params: {
 
   let info;
   try {
-    info = await testServerConnection(cleanUrl, { proxy: params.proxy });
+    info = await testServerConnection(cleanUrl, {
+      proxy: params.proxy,
+      userAgent: params.userAgent,
+    });
   } catch (err: any) {
     return {
       reachable: false,
@@ -87,7 +94,10 @@ async function probeServer(params: {
   }
 
   try {
-    const auth = await authenticateByName(cleanUrl, user, params.password, { proxy: params.proxy });
+    const auth = await authenticateByName(cleanUrl, user, params.password, {
+      proxy: params.proxy,
+      userAgent: params.userAgent,
+    });
     return {
       reachable: true,
       latency,
@@ -132,6 +142,7 @@ export const EmbyServerModal: React.FC<EmbyServerModalProps> = ({
   isOpen,
   onClose,
   initialEditId,
+  onSaved,
 }) => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -148,6 +159,7 @@ export const EmbyServerModal: React.FC<EmbyServerModalProps> = ({
   const [url, setUrl] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [userAgent, setUserAgent] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -171,6 +183,7 @@ export const EmbyServerModal: React.FC<EmbyServerModalProps> = ({
     setUrl('');
     setUsername('');
     setPassword('');
+    setUserAgent('');
     setShowPassword(false);
     resetFormFeedback();
     setEditingId(null);
@@ -182,6 +195,7 @@ export const EmbyServerModal: React.FC<EmbyServerModalProps> = ({
     setUrl(server.url);
     setUsername(server.username);
     setPassword(server.password ?? '');
+    setUserAgent(server.userAgent ?? '');
     setShowPassword(false);
     resetFormFeedback();
     setEditingId(server.id);
@@ -228,6 +242,7 @@ export const EmbyServerModal: React.FC<EmbyServerModalProps> = ({
         username,
         password,
         attemptAuth: !!username.trim(),
+        userAgent: userAgent.trim() || undefined,
       });
       setTestResult(describeResult(result));
     } finally {
@@ -264,15 +279,22 @@ export const EmbyServerModal: React.FC<EmbyServerModalProps> = ({
 
     const needReauth = !original || passwordChanged || cleanUser !== original.username || urlChanged;
 
+    const cleanUserAgent = userAgent.trim() || undefined;
+
     try {
       setSaving(true);
       setNotice(null);
 
-      // 仅修改显示名称：无需任何网络请求，直接落库
+      // 仅修改显示名称或自定义 UA：无需重新登录，直接原地落库
       if (original && !needReauth) {
-        updateServer(original.id, { name: cleanName || original.name });
+        updateServer(original.id, {
+          name: cleanName || original.name,
+          userAgent: cleanUserAgent,
+        });
         setIsEditing(false);
         setEditingId(null);
+        setNotice({ tone: 'ok', text: `已保存「${cleanName || original.name}」配置。` });
+        onSaved?.();
         return;
       }
 
@@ -281,6 +303,7 @@ export const EmbyServerModal: React.FC<EmbyServerModalProps> = ({
         username: cleanUser,
         password,
         attemptAuth: true,
+        userAgent: cleanUserAgent,
       });
       const ok = isResultOk(result);
       const testMeta = {
@@ -300,6 +323,7 @@ export const EmbyServerModal: React.FC<EmbyServerModalProps> = ({
             name: displayName,
             url: cleanUrl,
             password,
+            userAgent: cleanUserAgent,
             userId: auth.User.Id,
             username: auth.User.Name,
             accessToken: auth.AccessToken,
@@ -316,6 +340,7 @@ export const EmbyServerModal: React.FC<EmbyServerModalProps> = ({
             name: displayName,
             url: cleanUrl,
             password,
+            userAgent: cleanUserAgent,
             userId: auth.User.Id,
             username: auth.User.Name,
             accessToken: auth.AccessToken,
@@ -326,6 +351,7 @@ export const EmbyServerModal: React.FC<EmbyServerModalProps> = ({
         setIsEditing(false);
         setEditingId(null);
         setNotice({ tone: 'ok', text: `已保存「${displayName}」并验证连接成功。` });
+        onSaved?.();
         return;
       }
 
@@ -337,6 +363,7 @@ export const EmbyServerModal: React.FC<EmbyServerModalProps> = ({
           url: cleanUrl,
           username: cleanUser,
           password,
+          userAgent: cleanUserAgent,
           ...testMeta,
           // 地址变更后旧令牌已不可信，清空以便重新登录
           ...(urlChanged ? { userId: '', accessToken: '' } : {}),
@@ -353,6 +380,7 @@ export const EmbyServerModal: React.FC<EmbyServerModalProps> = ({
             url: cleanUrl,
             username: cleanUser,
             password,
+            userAgent: cleanUserAgent,
             userId: '',
             accessToken: '',
             ...testMeta,
@@ -367,6 +395,7 @@ export const EmbyServerModal: React.FC<EmbyServerModalProps> = ({
         tone: 'warn',
         text: `已保存「${displayName}」，但当前未能连接：${reason}。配置已记录，服务器恢复后可在列表中点击测试按钮重试。`,
       });
+      onSaved?.();
     } catch (err: any) {
       setFormError(err?.message || '保存失败，请重试');
     } finally {
@@ -384,6 +413,7 @@ export const EmbyServerModal: React.FC<EmbyServerModalProps> = ({
         password: server.password ?? '',
         // 未记住密码时只做连通性探测，避免用空密码误判为登录失败
         attemptAuth: server.password !== undefined,
+        userAgent: server.userAgent,
       });
       const ok = isResultOk(result);
       updateServer(server.id, {
@@ -685,6 +715,42 @@ export const EmbyServerModal: React.FC<EmbyServerModalProps> = ({
                     该服务器保存于早期版本，未记住密码。重新输入并保存一次后即可随时查看。
                   </p>
                 )}
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs text-gray-300 font-medium">
+                  自定义 User-Agent
+                  <span className="ml-1.5 text-[11px] text-gray-500 font-normal">
+                    （可选，解决公益服 / Cloudflare / 302 直链拦截）
+                  </span>
+                </label>
+                <input
+                  type="text"
+                  value={userAgent}
+                  onChange={(e) => setUserAgent(e.target.value)}
+                  placeholder={`留空默认: ${DEFAULT_EMBY_USER_AGENT}`}
+                  className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-xs text-white font-mono placeholder-gray-600 focus:outline-none focus:border-primary"
+                />
+                <div className="flex flex-wrap gap-1.5 pt-0.5">
+                  {EMBY_USER_AGENT_PRESETS.map((preset) => {
+                    const isSelected = userAgent.trim() === preset.value;
+                    return (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        onClick={() => setUserAgent(preset.value)}
+                        className={`px-2 py-1 rounded-md text-[11px] border transition cursor-pointer ${
+                          isSelected
+                            ? 'bg-primary/20 border-primary/50 text-primary font-medium'
+                            : 'bg-white/5 border-white/10 text-gray-400 hover:text-white hover:bg-white/10'
+                        }`}
+                        title={preset.value || DEFAULT_EMBY_USER_AGENT}
+                      >
+                        {preset.label}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
 
               {testResult && (

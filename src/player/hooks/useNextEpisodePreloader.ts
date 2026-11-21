@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { EmbyItem, extractIntroRange, ticksToSeconds } from '../../api/embyClient';
+import {
+  buildEmbyStreamHeaders,
+  EmbyItem,
+  extractIntroRange,
+  resolveEmbyUserAgent,
+  ticksToSeconds,
+} from '../../api/embyClient';
 import { isTauriEnvironment } from '../../api/http';
 import { SavedServer } from '../../stores/useAuthStore';
 import {
@@ -162,6 +168,7 @@ export function useNextEpisodePreloader({
     }
     return [
       currentServer.id,
+      currentServer.userAgent || '',
       currentItem?.Id || '',
       nextEpisode.Id,
       engineType,
@@ -173,6 +180,7 @@ export function useNextEpisodePreloader({
     ].join('|');
   }, [
     currentServer?.id,
+    currentServer?.userAgent,
     currentItem?.Id,
     nextEpisode?.Id,
     engineType,
@@ -354,7 +362,11 @@ export function useNextEpisodePreloader({
             bitrateBps: session.mediaSource.Bitrate ?? null,
             proxyUrl: proxyInfo.effectiveProxy || null,
             headers: {
-              'X-Emby-Token': currentServer.accessToken,
+              'User-Agent': resolveEmbyUserAgent(currentServer.userAgent, currentServer.url),
+              ...buildEmbyStreamHeaders(currentServer.userId, currentServer.accessToken, {
+                userAgent: currentServer.userAgent,
+                serverUrl: currentServer.url,
+              }),
             },
           },
         });

@@ -11,7 +11,8 @@ import {
 import {
   EmbyItem,
   EmbyMediaSource,
-  buildItemImageUrl,
+  resolveEpisodeThumbnailUrl,
+  stripImageFormatWebp,
   ticksToSeconds,
   formatFileSize,
   getItemFileSize,
@@ -193,8 +194,7 @@ export const EpisodeDrawer: React.FC<EpisodeDrawerProps> = ({
                   {episodes.map((ep) => {
                     const isCurrent = ep.Id === currentItemId;
                     const thumb = serverUrl
-                      ? buildItemImageUrl(serverUrl, ep.Id, ep.ImageTags?.Primary, {
-                          type: 'Primary',
+                      ? resolveEpisodeThumbnailUrl(serverUrl, ep, {
                           maxWidth: 320,
                           quality: 80,
                         })
@@ -224,10 +224,27 @@ export const EpisodeDrawer: React.FC<EpisodeDrawerProps> = ({
                         <div className="w-24 aspect-video rounded-lg overflow-hidden bg-white/5 shrink-0 relative border border-white/10">
                           {thumb ? (
                             <img
+                              key={thumb}
                               src={thumb}
                               alt={ep.Name}
                               className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                               loading="lazy"
+                              onError={(e) => {
+                                const target = e.currentTarget;
+                                const step = target.dataset.fallbackStep;
+                                if (step === 'done') return;
+                                if (!step) {
+                                  const noWebp = stripImageFormatWebp(target.src);
+                                  if (noWebp) {
+                                    target.dataset.fallbackStep = '1';
+                                    target.src = noWebp;
+                                    return;
+                                  }
+                                }
+                                target.dataset.fallbackStep = 'done';
+                                target.src =
+                                  'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180" viewBox="0 0 320 180"><rect width="100%" height="100%" fill="%23131826"/><text x="50%" y="50%" fill="%2364748B" font-family="sans-serif" font-size="13" text-anchor="middle" dominant-baseline="middle">暂无剧照</text></svg>';
+                              }}
                             />
                           ) : (
                             <div className="w-full h-full flex items-center justify-center text-slate-600">

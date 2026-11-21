@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Play, HardDrive } from 'lucide-react';
 import { useAuthStore } from '../stores/useAuthStore';
@@ -8,7 +8,9 @@ import {
   getItemDetail,
   getSeriesSeasons,
   getSeriesEpisodes,
-  buildItemImageUrl,
+  resolveItemBackdropUrl,
+  resolveItemPosterUrl,
+  stripImageFormatWebp,
   ticksToSeconds,
   formatFileSize,
   getItemFileSize,
@@ -26,6 +28,8 @@ export const DetailPage: React.FC = () => {
   const cachedPlayerItem = usePlayerStore((s) => s.item);
   const isCachedItem = cachedPlayerItem?.Id === itemId;
   const [item, setItem] = useState<EmbyItem | null>(() => (isCachedItem ? cachedPlayerItem : null));
+  const [seriesItem, setSeriesItem] = useState<EmbyItem | null>(null);
+  const [backdropStage, setBackdropStage] = useState(0);
   const [loading, setLoading] = useState(!isCachedItem);
   const [seasons, setSeasons] = useState<EmbyItem[]>([]);
   const [selectedSeasonId, setSelectedSeasonId] = useState<string | null>(null);
@@ -33,18 +37,27 @@ export const DetailPage: React.FC = () => {
   const [episodesLoading, setEpisodesLoading] = useState(false);
   const [startingPlay, setStartingPlay] = useState(false);
   const [overviewExpanded, setOverviewExpanded] = useState(false);
+  const loadReqIdRef = useRef(0);
 
   useEffect(() => {
     setOverviewExpanded(false);
+    setSeriesItem(null);
+    setBackdropStage(0);
     if (!currentServer || !itemId) {
       navigate('/');
       return;
     }
     loadItemDetail();
+    return () => {
+      loadReqIdRef.current += 1;
+    };
   }, [itemId, currentServer?.id]);
 
   const loadItemDetail = async () => {
     if (!currentServer || !itemId) return;
+    const reqId = ++loadReqIdRef.current;
+    const isStale = () => reqId !== loadReqIdRef.current;
+
     try {
       if (!item || item.Id !== itemId) {
         setLoading(true);
@@ -55,41 +68,61 @@ export const DetailPage: React.FC = () => {
         itemId,
         currentServer.accessToken
       );
+      if (isStale()) return;
       setItem(detail);
+      setBackdropStage(0);
 
-      // If it's a TV Series or Episode, fetch seasons and episode list
+      // If it's a TV Series or Episode, fetch seasons, episode list & parent series detail
       const targetSeriesId = detail.Type === 'Series' ? detail.Id : detail.SeriesId;
       if (targetSeriesId) {
-        const seasonsRes = await getSeriesSeasons(
-          currentServer.url,
-          currentServer.userId,
-          targetSeriesId,
-          currentServer.accessToken
-        );
+        const [seasonsRes, parentSeries] = await Promise.all([
+          getSeriesSeasons(
+            currentServer.url,
+            currentServer.userId,
+            targetSeriesId,
+            currentServer.accessToken
+          ),
+          detail.Type === 'Episode' && detail.SeriesId
+            ? getItemDetail(
+                currentServer.url,
+                currentServer.userId,
+                detail.SeriesId,
+                currentServer.accessToken
+              ).catch(() => null)
+            : Promise.resolve(null),
+        ]);
+        if (isStale()) return;
+        setSeriesItem(parentSeries);
+
         const seasonList = seasonsRes.Items || [];
         setSeasons(seasonList);
         if (seasonList.length > 0) {
           const matchSeason =
             seasonList.find((s) => s.Id === detail.SeasonId) || seasonList[0];
           setSelectedSeasonId(matchSeason.Id);
-          loadEpisodes(targetSeriesId, matchSeason.Id);
+          loadEpisodes(targetSeriesId, matchSeason.Id, reqId);
         } else {
           setSelectedSeasonId(null);
           setEpisodes([]);
         }
       } else {
+        setSeriesItem(null);
         setSeasons([]);
         setSelectedSeasonId(null);
         setEpisodes([]);
       }
     } catch (err: any) {
-      console.error('获取条目详情失败', err);
+      if (!isStale()) {
+        console.error('获取条目详情失败', err);
+      }
     } finally {
-      setLoading(false);
+      if (!isStale()) {
+        setLoading(false);
+      }
     }
   };
 
-  const loadEpisodes = async (seriesId: string, seasonId: string) => {
+  const loadEpisodes = async (seriesId: string, seasonId: string, reqId?: number) => {
     if (!currentServer) return;
     try {
       setEpisodesLoading(true);
@@ -100,11 +133,16 @@ export const DetailPage: React.FC = () => {
         seasonId,
         currentServer.accessToken
       );
+      if (reqId !== undefined && reqId !== loadReqIdRef.current) return;
       setEpisodes(res.Items || []);
     } catch (err: any) {
-      console.error('获取分集失败', err);
+      if (reqId === undefined || reqId === loadReqIdRef.current) {
+        console.error('获取分集失败', err);
+      }
     } finally {
-      setEpisodesLoading(false);
+      if (reqId === undefined || reqId === loadReqIdRef.current) {
+        setEpisodesLoading(false);
+      }
     }
   };
 
@@ -149,6 +187,24 @@ export const DetailPage: React.FC = () => {
   }
 
   const isSeries = item.Type === 'Series';
+  const isEpisodeWithSeries = item.Type === 'Episode' && !!item.SeriesId;
+  const displayTitle = isEpisodeWithSeries
+    ? seriesItem?.Name || item.SeriesName || item.Name
+    : item.Name;
+  const displayYear =
+    seriesItem?.ProductionYear ||
+    seriesItem?.PremiereDate?.slice(0, 4) ||
+    item.ProductionYear ||
+    item.PremiereDate?.slice(0, 4);
+  const displayOverview = isEpisodeWithSeries
+    ? seriesItem?.Overview || item.Overview
+    : item.Overview;
+  const hasResumeTicks = (item.UserData?.PlaybackPositionTicks || 0) > 0;
+  const playButtonLabel = startingPlay
+    ? '正在获取直连流...'
+    : isEpisodeWithSeries
+    ? `${hasResumeTicks ? '继续播放' : '立即播放'} 第 ${item.IndexNumber || 1} 集`
+    : '立即播放';
 
   const fileSizeSummary: { label: string; tooltip: string } | null = (() => {
     if (!isSeries) {
@@ -195,27 +251,40 @@ export const DetailPage: React.FC = () => {
     };
   })();
 
-  const backdropUrl = buildItemImageUrl(
-    currentServer!.url,
-    item.Id,
-    item.BackdropImageTags?.[0] || item.ImageTags?.Backdrop,
-    { type: 'Backdrop', maxWidth: 1920, quality: 90 }
-  );
-  const posterUrl = buildItemImageUrl(currentServer!.url, item.Id, item.ImageTags?.Primary, {
-    type: 'Primary',
+  const posterUrl = resolveItemPosterUrl(currentServer!.url, item, {
     maxWidth: 500,
     quality: 90,
+    seriesItem,
   });
+
+  const rawBackdropUrl = resolveItemBackdropUrl(currentServer!.url, item, {
+    maxWidth: 1920,
+    quality: 90,
+    seriesItem,
+    mode: 'hero',
+    allowPrimaryFallback: false,
+  });
+  const backdropCandidates = [
+    rawBackdropUrl,
+    stripImageFormatWebp(rawBackdropUrl),
+    posterUrl,
+    stripImageFormatWebp(posterUrl),
+  ].filter((url, idx, arr): url is string => !!url && arr.indexOf(url) === idx);
+  const effectiveBackdropUrl = backdropCandidates[backdropStage] || '';
 
   return (
     <div className="w-full text-slate-100 select-none pb-24 relative min-h-full">
       {/* 1. 全屏氛围背景 (Ambient Backdrop - 3xl blur, scale-110, pointer-events-none) */}
-      <img
-        src={backdropUrl}
-        alt=""
-        aria-hidden="true"
-        className="fixed inset-0 -z-10 w-full h-full object-cover opacity-20 blur-3xl scale-110 pointer-events-none"
-      />
+      {effectiveBackdropUrl && (
+        <img
+          key={effectiveBackdropUrl}
+          src={effectiveBackdropUrl}
+          alt=""
+          aria-hidden="true"
+          onError={() => setBackdropStage((prev) => prev + 1)}
+          className="fixed inset-0 -z-10 w-full h-full object-cover opacity-20 blur-3xl scale-110 pointer-events-none"
+        />
+      )}
 
       {/* 2. 上半部信息头 (Header Split with Ambient Backing) */}
       <div className="relative w-full pt-8 px-8 max-w-7xl mx-auto">
@@ -232,20 +301,63 @@ export const DetailPage: React.FC = () => {
         <div className="flex flex-col md:flex-row items-start gap-8">
           {/* 左侧：高清竖版海报 (w-52 aspect-[2/3] rounded-2xl) */}
           <div className="w-48 sm:w-56 aspect-[2/3] rounded-2xl overflow-hidden shadow-2xl shadow-black/60 border border-white/[0.12] shrink-0 bg-[#131826]">
-            <img src={posterUrl} alt={item.Name} className="w-full h-full object-cover" />
+            {posterUrl ? (
+              <img
+                key={posterUrl}
+                src={posterUrl}
+                alt={displayTitle}
+                onError={(e) => {
+                  const target = e.currentTarget;
+                  const step = target.dataset.fallbackStep;
+                  if (step === 'done') return;
+
+                  if (!step) {
+                    const noWebp = stripImageFormatWebp(target.src);
+                    if (noWebp) {
+                      target.dataset.fallbackStep = '1';
+                      target.src = noWebp;
+                      return;
+                    }
+                  }
+
+                  target.dataset.fallbackStep = 'done';
+                  target.src =
+                    'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="400" height="600" viewBox="0 0 400 600"><rect width="100%" height="100%" fill="%23131826"/><text x="50%" y="50%" fill="%2364748B" font-family="sans-serif" font-size="18" text-anchor="middle" dominant-baseline="middle">暂无海报</text></svg>';
+                }}
+                className="w-full h-full object-cover"
+              />
+            ) : (
+              <div className="w-full h-full bg-[#131826] flex items-center justify-center text-sm text-slate-500">
+                暂无海报
+              </div>
+            )}
           </div>
 
           {/* 右侧：标题、规格标签组与行动栏 */}
           <div className="flex-1 space-y-4">
             <h1 className="text-3xl sm:text-4xl font-extrabold text-slate-50 tracking-tight drop-shadow-md">
-              {item.Name}
+              {displayTitle}
             </h1>
+
+            {isEpisodeWithSeries && (
+              <p className="text-sm text-[#38BDF8] font-medium -mt-2">
+                {[
+                  item.ParentIndexNumber !== undefined
+                    ? `第 ${item.ParentIndexNumber} 季`
+                    : item.SeasonName || null,
+                  item.IndexNumber !== undefined ? `第 ${item.IndexNumber} 集` : null,
+                  item.Name,
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </p>
+            )}
 
             {/* 流媒体规格标签组 */}
             <div className="flex flex-wrap items-center gap-2 text-xs font-mono font-medium">
-              {(item.ProductionYear || item.PremiereDate) && (
+              {displayYear && (
                 <span className="px-2.5 py-1 rounded-md bg-white/[0.06] border border-white/[0.08] text-slate-300">
-                  {item.ProductionYear || item.PremiereDate?.slice(0, 4)}
+                  {displayYear}
                 </span>
               )}
               {item.RunTimeTicks && (
@@ -282,16 +394,16 @@ export const DetailPage: React.FC = () => {
             </div>
 
             {/* 剧情简介 */}
-            {item.Overview && (
+            {displayOverview && (
               <div className="max-w-3xl">
                 <p
                   className={`text-sm text-slate-200/95 leading-7 whitespace-pre-line ${
                     overviewExpanded ? '' : 'line-clamp-4'
                   }`}
                 >
-                  {item.Overview}
+                  {displayOverview}
                 </p>
-                {item.Overview.length > 120 && (
+                {displayOverview.length > 120 && (
                   <button
                     onClick={() => setOverviewExpanded((v) => !v)}
                     className="mt-1.5 text-xs font-medium text-[#38BDF8] hover:text-sky-300 transition cursor-pointer"
@@ -302,7 +414,7 @@ export const DetailPage: React.FC = () => {
               </div>
             )}
 
-            {/* 电影直接起播按钮 */}
+            {/* 电影或指定单集直接起播按钮 */}
             {!isSeries && (
               <div className="pt-2">
                 <button
@@ -311,7 +423,7 @@ export const DetailPage: React.FC = () => {
                   className="px-8 py-3 rounded-full bg-[#38BDF8] hover:bg-[#0ea5e9] text-slate-950 font-bold text-sm shadow-xl shadow-sky-500/25 transition cursor-pointer flex items-center space-x-2 disabled:opacity-50"
                 >
                   <Play className="w-4 h-4 fill-current" />
-                  <span>{startingPlay ? '正在获取直连流...' : '立即播放'}</span>
+                  <span>{playButtonLabel}</span>
                 </button>
               </div>
             )}
@@ -352,6 +464,7 @@ export const DetailPage: React.FC = () => {
               episodes={episodes}
               serverUrl={currentServer!.url}
               currentEpisodeId={item.Type === 'Episode' ? item.Id : undefined}
+              seriesItem={isSeries ? item : seriesItem}
               onSelectEpisode={(ep) => startPlayback(ep)}
             />
           )}

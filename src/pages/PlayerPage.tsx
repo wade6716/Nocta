@@ -11,6 +11,8 @@ import {
   Zap,
   Globe,
   Wifi,
+  Copy,
+  Check,
 } from 'lucide-react';
 import { useAuthStore } from '../stores/useAuthStore';
 import { usePlayerStore } from '../stores/usePlayerStore';
@@ -24,8 +26,15 @@ import {
   getSeriesSeasons,
   getSeriesEpisodes,
   mapStreamTracks,
-  buildItemImageUrl,
+  resolveItemBackdropUrl,
+  stripImageFormatWebp,
+  buildEmbyStreamHeaders,
+  resolveEmbyUserAgent,
+  resolveEmbyDirectStreamCandidate,
+  EMBY_USER_AGENT_PRESETS,
+  DEFAULT_EMBY_USER_AGENT,
 } from '../api/embyClient';
+import { resolveMpvProxyDetailed } from '../player/MpvPlayerEngine';
 import {
   IPlayerEngine,
   PlayerTelemetry,
@@ -48,6 +57,7 @@ import { VideoProPanel } from '../components/player/VideoProPanel';
 import { NetworkProxyPopover } from '../components/player/NetworkProxyPopover';
 import { UpNextOverlay } from '../components/player/UpNextOverlay';
 import { NetworkProxyModal } from '../components/settings/NetworkProxyModal';
+import { EmbyServerModal } from '../components/settings/EmbyServerModal';
 import { OutroSkipToast } from '../components/player/OutroSkipToast';
 import { SkipNoticeToast } from '../components/player/SkipNoticeToast';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -75,6 +85,55 @@ type ActivePanelType =
   | 'network'
   | 'info'
   | 'shortcuts';
+
+interface DiagnosticHop {
+  hop: number;
+  url: string;
+  status?: number | null;
+  statusText?: string | null;
+  location?: string | null;
+  server?: string | null;
+  contentType?: string | null;
+  contentRange?: string | null;
+  acceptRanges?: string | null;
+  cfRay?: string | null;
+  cfMitigated?: string | null;
+  bodySnippet?: string | null;
+  error?: string | null;
+}
+
+interface StreamDiagnosticReport {
+  reachable: boolean;
+  finalStatus?: number | null;
+  userAgent: string;
+  summary: string;
+  hops: DiagnosticHop[];
+}
+
+function redactUrlForReport(raw?: string | null): string {
+  if (!raw) return '-';
+  try {
+    const u = new URL(raw);
+    const secretKeys = new Set([
+      'api_key',
+      'x-emby-token',
+      'token',
+      'auth',
+      'signature',
+      'sig',
+      'sign',
+      'x-amz-signature',
+    ]);
+    u.searchParams.forEach((_, k) => {
+      if (secretKeys.has(k.toLowerCase())) {
+        u.searchParams.set(k, '***');
+      }
+    });
+    return u.toString();
+  } catch {
+    return raw;
+  }
+}
 
 const IS_MACOS = /Macintosh|Mac OS X/i.test(navigator.userAgent);
 const RATE_STEPS = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0];
@@ -133,6 +192,10 @@ export const PlayerPage: React.FC = () => {
   const [reloadToken, setReloadToken] = useState(0);
   const [isLoadingVideo, setIsLoadingVideo] = useState(true);
   const [videoError, setVideoError] = useState<string | null>(null);
+  const [diagnosticReport, setDiagnosticReport] = useState<StreamDiagnosticReport | null>(null);
+  const [diagnosingStream, setDiagnosingStream] = useState(false);
+  const [diagnosticCopied, setDiagnosticCopied] = useState(false);
+  const [usingRelayStream, setUsingRelayStream] = useState(false);
   const [videoDimensions, setVideoDimensions] = useState<{ width: number; height: number } | null>(null);
   const [networkSpeed, setNetworkSpeed] = useState<number>(0);
   const [speedHistory, setSpeedHistory] = useState<number[]>([]);
@@ -167,9 +230,13 @@ export const PlayerPage: React.FC = () => {
   const applyingOverlayPatchRef = useRef(false);
   const networkSpeedRef = useRef(0);
   const handleVideoErrorRef = useRef<(errMsg?: string) => void>(() => {});
+  const runStreamDiagnosticRef = useRef<(autoRelay: boolean) => void>(() => {});
+  const relayFallbackAttemptedRef = useRef(false);
+  const diagReqIdRef = useRef(0);
+  const activeRelayTokenRef = useRef<string | null>(null);
   const proxyOverrideRef = useRef<StreamProxyOverride>('follow');
   const upstreamStreamUrlRef = useRef<string | null>(
-    streamUrl && !/^https?:\/\/127\.0\.0\.1:\d+\/stream\//.test(streamUrl) ? streamUrl : null
+    streamUrl && !/^https?:\/\/127\.0\.0\.1:\d+\/(stream|relay)\//.test(streamUrl) ? streamUrl : null
   );
   const seekRef = useRef<(targetSeconds: number) => void>(() => {});
   const seekDeltaRef = useRef<(delta: number) => void>(() => {});
@@ -218,6 +285,7 @@ export const PlayerPage: React.FC = () => {
   // 互斥面板 & 弹窗状态
   const [activePanel, setActivePanel] = useState<ActivePanelType>('none');
   const [isProxyModalOpen, setIsProxyModalOpen] = useState(false);
+  const [isServerUaModalOpen, setIsServerUaModalOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ visible: boolean; x: number; y: number }>({
     visible: false,
     x: 0,
@@ -246,7 +314,7 @@ export const PlayerPage: React.FC = () => {
   const hideTimerRef = useRef<number | null>(null);
 
   const isAnyPanelOpen =
-    activePanel !== 'none' || isProxyModalOpen || contextMenu.visible;
+    activePanel !== 'none' || isProxyModalOpen || isServerUaModalOpen || contextMenu.visible;
 
   const showMiniHud = useCallback(
     (payload: Omit<MiniHudState, 'id'>, durationMs = 1500) => {
@@ -265,8 +333,12 @@ export const PlayerPage: React.FC = () => {
   useEffect(() => {
     return () => {
       episodeSwitchReqIdRef.current += 1;
+      diagReqIdRef.current += 1;
       if (miniHudTimerRef.current) {
         window.clearTimeout(miniHudTimerRef.current);
+      }
+      if (isTauriEnvironment()) {
+        invoke('stop_stream_relay', { token: null }).catch(() => {});
       }
     };
   }, []);
@@ -360,8 +432,18 @@ export const PlayerPage: React.FC = () => {
   // Sync streamUrl when store changes
   useEffect(() => {
     if (streamUrl) {
-      if (!/^https?:\/\/127\.0\.0\.1:\d+\/stream\//.test(streamUrl)) {
+      if (!/^https?:\/\/127\.0\.0\.1:\d+\/(stream|relay)\//.test(streamUrl)) {
         upstreamStreamUrlRef.current = streamUrl;
+      }
+      if (!/\/relay\//.test(streamUrl)) {
+        relayFallbackAttemptedRef.current = false;
+        setUsingRelayStream(false);
+        setDiagnosticReport(null);
+        setDiagnosticCopied(false);
+        if (isTauriEnvironment() && activeRelayTokenRef.current) {
+          invoke('stop_stream_relay', { token: activeRelayTokenRef.current }).catch(() => {});
+          activeRelayTokenRef.current = null;
+        }
       }
       setCurrentStreamUrl(streamUrl);
       setIsLoadingVideo(true);
@@ -583,12 +665,22 @@ export const PlayerPage: React.FC = () => {
       const resolved = resolveInitialPlaybackTime(initialTimeRef.current);
       initialTimeRef.current = resolved.seconds;
       const prefs = usePlayerStore.getState().playerPreferences;
+      const liveServer = useAuthStore.getState().getCurrentServer();
+      const effectiveUserAgent = resolveEmbyUserAgent(liveServer?.userAgent, liveServer?.url);
+      const streamHeaders = liveServer
+        ? buildEmbyStreamHeaders(liveServer.userId, liveServer.accessToken, {
+            userAgent: liveServer.userAgent,
+            serverUrl: liveServer.url,
+          })
+        : undefined;
       engineRef.current
         .load({
           url: currentStreamUrl,
           upstreamUrl: upstreamStreamUrlRef.current ?? undefined,
           initialTime: resolved.seconds,
           title: item?.Name,
+          userAgent: effectiveUserAgent,
+          headers: streamHeaders,
           proxyOverride: proxyOverrideRef.current,
           bufferConfig: {
             bufferDurationSeconds: prefs.bufferDurationSeconds,
@@ -1415,6 +1507,16 @@ export const PlayerPage: React.FC = () => {
       proxyOverrideRef.current = nextOverride;
       if (!currentStreamUrl || !engineRef.current) return;
 
+      diagReqIdRef.current += 1;
+      relayFallbackAttemptedRef.current = false;
+      setUsingRelayStream(false);
+      setDiagnosticReport(null);
+      setDiagnosticCopied(false);
+      if (isTauriEnvironment() && activeRelayTokenRef.current) {
+        invoke('stop_stream_relay', { token: activeRelayTokenRef.current }).catch(() => {});
+        activeRelayTokenRef.current = null;
+      }
+
       const liveSec = lastValidTimeRef.current || engineRef.current.currentTime || currentTime;
       initialTimeRef.current = liveSec;
       hasInitialSeekedRef.current = liveSec <= 0;
@@ -1696,6 +1798,8 @@ export const PlayerPage: React.FC = () => {
         case 'Escape':
           if (contextMenu.visible) {
             setContextMenu((prev) => ({ ...prev, visible: false }));
+          } else if (isServerUaModalOpen) {
+            setIsServerUaModalOpen(false);
           } else if (isProxyModalOpen) {
             setIsProxyModalOpen(false);
           } else if (activePanel !== 'none') {
@@ -1753,6 +1857,7 @@ export const PlayerPage: React.FC = () => {
     isFullscreen,
     activePanel,
     isProxyModalOpen,
+    isServerUaModalOpen,
     contextMenu.visible,
     isLoadingVideo,
     videoError,
@@ -1806,6 +1911,10 @@ export const PlayerPage: React.FC = () => {
           ? `直连媒体流播放中断 (${errMsg})。请检查网络连接或代理配置。`
           : '无法打开该媒体直连流，请检查网络连接、代理路由或重试。'
       );
+
+      if (isTauriEnvironment()) {
+        runStreamDiagnosticRef.current(true);
+      }
     },
     [currentServer, item, mediaSource, playSessionId, engineType, setPaused]
   );
@@ -1829,12 +1938,141 @@ export const PlayerPage: React.FC = () => {
       ? 'LAN 直通'
       : '直连';
 
+  const currentUserAgent = resolveEmbyUserAgent(currentServer?.userAgent, currentServer?.url);
+
+  const directStreamCandidate =
+    currentServer && mediaSource
+      ? resolveEmbyDirectStreamCandidate(
+          currentServer.url,
+          mediaSource,
+          currentServer.accessToken
+        )
+      : null;
+  const canRetryDirectStreamCandidate = Boolean(
+    directStreamCandidate && directStreamCandidate !== upstreamStreamUrlRef.current
+  );
+
+  const stopActiveRelay = useCallback(() => {
+    if (isTauriEnvironment() && activeRelayTokenRef.current) {
+      invoke('stop_stream_relay', { token: activeRelayTokenRef.current }).catch(() => {});
+      activeRelayTokenRef.current = null;
+    }
+    setUsingRelayStream(false);
+  }, []);
+
+  const startRelayPlayback = useCallback(
+    async (targetUrl?: string) => {
+      const liveServer = useAuthStore.getState().getCurrentServer();
+      const target =
+        targetUrl ||
+        upstreamStreamUrlRef.current ||
+        (currentStreamUrl && !/\/relay\//.test(currentStreamUrl) ? currentStreamUrl : null);
+      if (!liveServer || !target || !isTauriEnvironment()) return;
+
+      const ua = resolveEmbyUserAgent(liveServer.userAgent, liveServer.url);
+      const streamHeaders = buildEmbyStreamHeaders(liveServer.userId, liveServer.accessToken, {
+        userAgent: liveServer.userAgent,
+        serverUrl: liveServer.url,
+      });
+      const resolvedProxy = await resolveMpvProxyDetailed(target, proxyOverrideRef.current);
+      const started = await invoke<{ token: string; localUrl: string }>('start_stream_relay', {
+        request: {
+          url: target,
+          proxyUrl: resolvedProxy.effectiveProxy || null,
+          headers: {
+            'User-Agent': ua,
+            ...streamHeaders,
+          },
+        },
+      });
+
+      activeRelayTokenRef.current = started.token;
+      setUsingRelayStream(true);
+      setVideoError(null);
+      setDiagnosticReport(null);
+      setDiagnosticCopied(false);
+      setIsLoadingVideo(true);
+      hasInitialSeekedRef.current = false;
+      resetOutroForNewStream();
+      const resolvedInit = resolveInitialPlaybackTime(initialTimeRef.current);
+      initialTimeRef.current = resolvedInit.seconds;
+      setCurrentStreamUrl(started.localUrl);
+      setReloadToken((t) => t + 1);
+    },
+    [currentStreamUrl, resetOutroForNewStream, resolveInitialPlaybackTime]
+  );
+
+  const runStreamDiagnostic = useCallback(
+    async (autoRelayIfReachable: boolean) => {
+      const liveServer = useAuthStore.getState().getCurrentServer();
+      const target =
+        upstreamStreamUrlRef.current ||
+        (currentStreamUrl && !/\/relay\//.test(currentStreamUrl) ? currentStreamUrl : null);
+      if (!liveServer || !target || !isTauriEnvironment()) return;
+
+      const reqId = ++diagReqIdRef.current;
+      setDiagnosingStream(true);
+      try {
+        const ua = resolveEmbyUserAgent(liveServer.userAgent, liveServer.url);
+        const streamHeaders = buildEmbyStreamHeaders(liveServer.userId, liveServer.accessToken, {
+          userAgent: liveServer.userAgent,
+          serverUrl: liveServer.url,
+        });
+        const resolvedProxy = await resolveMpvProxyDetailed(target, proxyOverrideRef.current);
+        const report = await invoke<StreamDiagnosticReport>('diagnose_stream_url', {
+          request: {
+            url: target,
+            proxyUrl: resolvedProxy.effectiveProxy || null,
+            headers: {
+              'User-Agent': ua,
+              ...streamHeaders,
+            },
+          },
+        });
+        if (reqId !== diagReqIdRef.current) return;
+
+        if (autoRelayIfReachable && report.reachable && !relayFallbackAttemptedRef.current) {
+          relayFallbackAttemptedRef.current = true;
+          try {
+            await startRelayPlayback(target);
+            showMiniHud({
+              icon: 'info',
+              label: '直连受限，已自动切换内置中转通道播放',
+              subLabel: '如仍失败请查看网络代理设置',
+            });
+            return;
+          } catch (relayErr) {
+            console.warn('[Auto Relay Fallback Failed]', relayErr);
+          }
+        }
+
+        setDiagnosticReport(report);
+      } catch (diagErr) {
+        console.warn('[Stream Diagnostic Error]', diagErr);
+      } finally {
+        if (reqId === diagReqIdRef.current) {
+          setDiagnosingStream(false);
+        }
+      }
+    },
+    [currentStreamUrl, startRelayPlayback, showMiniHud]
+  );
+
+  useEffect(() => {
+    runStreamDiagnosticRef.current = runStreamDiagnostic;
+  }, [runStreamDiagnostic]);
+
   const handleRetryDirect = (overrideMode?: StreamProxyOverride) => {
     if (!currentServer || !item || !mediaSource || !playSessionId) return;
     if (overrideMode) {
       setProxyOverride(overrideMode);
       proxyOverrideRef.current = overrideMode;
     }
+    diagReqIdRef.current += 1;
+    relayFallbackAttemptedRef.current = false;
+    stopActiveRelay();
+    setDiagnosticReport(null);
+    setDiagnosticCopied(false);
     setIsLoadingVideo(true);
     setVideoError(null);
     hasInitialSeekedRef.current = false;
@@ -1849,8 +2087,114 @@ export const PlayerPage: React.FC = () => {
       currentServer.accessToken,
       engineType
     );
+    upstreamStreamUrlRef.current = directUrl;
     setCurrentStreamUrl(directUrl);
     setReloadToken((t) => t + 1);
+  };
+
+  const handleRetryWithUrl = (targetUrl: string) => {
+    diagReqIdRef.current += 1;
+    relayFallbackAttemptedRef.current = false;
+    stopActiveRelay();
+    setDiagnosticReport(null);
+    setDiagnosticCopied(false);
+    setIsLoadingVideo(true);
+    setVideoError(null);
+    hasInitialSeekedRef.current = false;
+    resetOutroForNewStream();
+    upstreamStreamUrlRef.current = targetUrl;
+    setCurrentStreamUrl(targetUrl);
+    setReloadToken((t) => t + 1);
+  };
+
+  const renegotiateAndRetryPlayback = async () => {
+    const liveServer = useAuthStore.getState().getCurrentServer();
+    if (!liveServer || !item) {
+      handleRetryDirect();
+      return;
+    }
+    diagReqIdRef.current += 1;
+    relayFallbackAttemptedRef.current = false;
+    stopActiveRelay();
+    setDiagnosticReport(null);
+    setDiagnosticCopied(false);
+    setVideoError(null);
+    setIsLoadingVideo(true);
+    hasInitialSeekedRef.current = false;
+    resetOutroForNewStream();
+
+    try {
+      const session = await fetchAndPreparePlaybackSession(
+        liveServer,
+        item.Id,
+        engineType,
+        item
+      );
+      const preserveSec = Math.max(
+        0,
+        lastValidTimeRef.current || initialTimeRef.current || session.initialTime || 0
+      );
+      upstreamStreamUrlRef.current = session.streamUrl;
+      initialTimeRef.current = preserveSec;
+      hasInitialSeekedRef.current = preserveSec <= 0;
+      setChapters(session.item.Chapters || []);
+      setPlaybackContext({
+        ...session,
+        initialTime: preserveSec,
+      });
+      setCurrentStreamUrl(session.streamUrl);
+      setReloadToken((t) => t + 1);
+    } catch (err) {
+      console.warn('[Renegotiate PlaybackInfo Failed, falling back to retry]', err);
+      handleRetryDirect();
+    }
+  };
+
+  const handleQuickSwitchUa = async (nextUa: string) => {
+    if (!currentServer) return;
+    const normalized = nextUa.trim() || undefined;
+    useAuthStore.getState().updateServer(currentServer.id, { userAgent: normalized });
+    await renegotiateAndRetryPlayback();
+  };
+
+  const handleCopyDiagnostic = async () => {
+    const lines = [
+      `【Nocta 媒体流错误诊断】`,
+      `错误描述: ${videoError || '-'}`,
+      `播放内核: ${engineType} (${usingRelayStream ? '内置透明中转' : '直连'})`,
+      `服务器: ${currentServer?.name || '-'} (${currentServer?.url || '-'})`,
+      `代理路线: ${proxyInfo?.effectiveProxy || proxySummaryLabel}`,
+      `User-Agent: ${diagnosticReport?.userAgent || currentUserAgent}`,
+      `媒体源 Container: ${mediaSource?.Container || '-'} · IsRemote: ${String(Boolean(mediaSource?.IsRemote))}`,
+      `DirectStreamUrl: ${redactUrlForReport(mediaSource?.DirectStreamUrl)}`,
+      `探测结论: ${diagnosticReport?.summary || (diagnosingStream ? '探测中' : '未探测')}`,
+      ...(diagnosticReport?.hops || []).map((hop) =>
+        [
+          `[Hop ${hop.hop}] status=${hop.status ?? 'ERR'} ${hop.statusText || ''}`.trim(),
+          `  url=${hop.url}`,
+          hop.location ? `  location=${hop.location}` : null,
+          hop.server ? `  server=${hop.server}` : null,
+          hop.cfRay || hop.cfMitigated
+            ? `  cf-ray=${hop.cfRay || '-'} cf-mitigated=${hop.cfMitigated || '-'}`
+            : null,
+          hop.contentType ? `  content-type=${hop.contentType}` : null,
+          hop.contentRange ? `  content-range=${hop.contentRange}` : null,
+          hop.acceptRanges ? `  accept-ranges=${hop.acceptRanges}` : null,
+          hop.error ? `  error=${hop.error}` : null,
+          hop.bodySnippet ? `  body=${hop.bodySnippet}` : null,
+        ]
+          .filter(Boolean)
+          .join('\n')
+      ),
+    ];
+
+    try {
+      await navigator.clipboard.writeText(lines.join('\n'));
+      setDiagnosticCopied(true);
+      window.setTimeout(() => setDiagnosticCopied(false), 2000);
+    } catch (e) {
+      console.warn('复制诊断日志失败', e);
+    }
   };
 
   const handleSwitchToMpv = () => {
@@ -1931,6 +2275,7 @@ export const PlayerPage: React.FC = () => {
         streamUrl: upstreamStreamUrlRef.current || currentStreamUrl || streamUrl,
         currentServerName: currentServer?.name,
         currentServerUrl: currentServer?.url,
+        userAgent: currentUserAgent,
         seasons,
         selectedSeasonId,
         episodes,
@@ -1989,6 +2334,7 @@ export const PlayerPage: React.FC = () => {
     abLoopA ?? '',
     abLoopB ?? '',
     proxyOverride,
+    currentUserAgent,
     selectedSeasonId ?? '',
     episodes.length,
     mediaSource?.Id ?? '',
@@ -2203,12 +2549,12 @@ export const PlayerPage: React.FC = () => {
   }
 
   const backdropUrl = currentServer
-    ? buildItemImageUrl(
-        currentServer.url,
-        item.Id,
-        item.BackdropImageTags?.[0] || item.ImageTags?.Backdrop || item.ImageTags?.Primary,
-        { type: 'Backdrop', maxWidth: 1920, quality: 75 }
-      )
+    ? resolveItemBackdropUrl(currentServer.url, item, {
+        maxWidth: 1920,
+        quality: 75,
+        mode: 'hero',
+        allowPrimaryFallback: true,
+      })
     : '';
 
   return (
@@ -2248,8 +2594,22 @@ export const PlayerPage: React.FC = () => {
         <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-[#0f1115]/90 backdrop-blur-sm pointer-events-auto">
           {backdropUrl && (
             <img
+              key={backdropUrl}
               src={backdropUrl}
-              alt={item.Name}
+              alt={item.SeriesName || item.Name}
+              onError={(e) => {
+                const target = e.currentTarget;
+                if (!target.dataset.fallbackStep) {
+                  const noWebp = stripImageFormatWebp(target.src);
+                  if (noWebp) {
+                    target.dataset.fallbackStep = '1';
+                    target.src = noWebp;
+                    return;
+                  }
+                }
+                target.dataset.fallbackStep = 'done';
+                target.style.display = 'none';
+              }}
               className="absolute inset-0 w-full h-full object-cover filter blur-2xl opacity-25"
             />
           )}
@@ -2279,24 +2639,185 @@ export const PlayerPage: React.FC = () => {
         </div>
       )}
 
-      {/* Error Overlay (增强：显示当前代理路线 + 强制直连重试 + 代理配置入口) */}
+      {/* Error Overlay (增强：显示当前代理路线 + 自动逐跳诊断 + 内置中转救援 + 切换 UA) */}
       {videoError && (
-        <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-[#0f1115]/95 p-6 pointer-events-auto">
-          <div className="max-w-md w-full bg-[#161922] border border-red-500/30 rounded-2xl p-6 shadow-2xl space-y-4 text-center">
-            <div className="w-12 h-12 mx-auto rounded-full bg-red-500/20 text-red-400 flex items-center justify-center">
-              <AlertTriangle className="w-6 h-6" />
+        <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-[#0f1115]/95 p-4 sm:p-6 pointer-events-auto">
+          <div className="max-w-lg w-full max-h-[88vh] overflow-y-auto custom-scrollbar bg-[#161922] border border-red-500/30 rounded-2xl p-5 sm:p-6 shadow-2xl space-y-3.5 text-center">
+            <div className="w-11 h-11 mx-auto rounded-full bg-red-500/20 text-red-400 flex items-center justify-center">
+              <AlertTriangle className="w-5 h-5" />
             </div>
             <div>
               <h3 className="text-base font-bold text-white">视频无法播放</h3>
-              <p className="text-xs text-gray-400 mt-2 leading-relaxed">{videoError}</p>
+              <p className="text-xs text-gray-400 mt-1.5 leading-relaxed">{videoError}</p>
             </div>
 
-            {proxyInfo && (
-              <div className="p-2.5 rounded-xl bg-black/30 border border-white/10 text-[11px] text-slate-300 font-mono flex items-center justify-center space-x-2">
-                <Wifi className="w-3.5 h-3.5 text-sky-400 shrink-0" />
-                <span className="truncate">
-                  当前路线: {proxyInfo.effectiveProxy || proxySummaryLabel}
-                </span>
+            {(proxyInfo || engineType === 'mpv') && (
+              <div className="p-2.5 rounded-xl bg-black/30 border border-white/10 text-[11px] text-slate-300 font-mono space-y-1 text-left">
+                {proxyInfo && (
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center space-x-2 min-w-0">
+                      <Wifi className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                      <span className="truncate">
+                        当前路线: {proxyInfo.effectiveProxy || proxySummaryLabel}
+                      </span>
+                    </div>
+                    {usingRelayStream && (
+                      <span className="px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-300 border border-sky-500/30 text-[10px] shrink-0 font-sans">
+                        内置中转
+                      </span>
+                    )}
+                  </div>
+                )}
+                {engineType === 'mpv' && (
+                  <div className="truncate text-slate-400" title={currentUserAgent}>
+                    User-Agent: <span className="text-slate-200">{currentUserAgent}</span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {engineType === 'mpv' && isTauriEnvironment() && (diagnosingStream || diagnosticReport) && (
+              <div className="p-2.5 rounded-xl bg-black/35 border border-white/10 space-y-2 text-left text-[11px]">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-semibold text-slate-200">
+                    {diagnosingStream ? '正在自动逐跳诊断媒体流链路...' : '链路逐跳诊断结果'}
+                  </span>
+                  <div className="flex items-center space-x-2 shrink-0">
+                    {!diagnosingStream && (
+                      <button
+                        type="button"
+                        onClick={() => runStreamDiagnostic(false)}
+                        className="text-sky-400 hover:text-sky-300 transition cursor-pointer"
+                      >
+                        重新诊断
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={handleCopyDiagnostic}
+                      className="flex items-center space-x-1 text-slate-300 hover:text-white transition cursor-pointer"
+                    >
+                      {diagnosticCopied ? (
+                        <>
+                          <Check className="w-3 h-3 text-emerald-400" />
+                          <span className="text-emerald-400">已复制</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3 h-3" />
+                          <span>复制日志</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                {diagnosingStream && !diagnosticReport && (
+                  <div className="flex items-center space-x-2 text-slate-400">
+                    <div className="w-3.5 h-3.5 border-2 border-sky-400 border-t-transparent rounded-full animate-spin shrink-0" />
+                    <span>正在探测 HTTP 状态码与 302 重定向目标...</span>
+                  </div>
+                )}
+
+                {diagnosticReport && (
+                  <>
+                    <p
+                      className={`leading-relaxed ${
+                        diagnosticReport.reachable ? 'text-emerald-300' : 'text-amber-300'
+                      }`}
+                    >
+                      {diagnosticReport.summary}
+                    </p>
+                    <div className="space-y-1.5 max-h-36 overflow-y-auto custom-scrollbar font-mono text-[10px]">
+                      {diagnosticReport.hops.map((hop) => (
+                        <div
+                          key={hop.hop}
+                          className="p-1.5 rounded-lg bg-white/[0.03] border border-white/[0.06] space-y-0.5"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span
+                              className={`font-semibold ${
+                                hop.status && hop.status >= 200 && hop.status < 300
+                                  ? 'text-emerald-400'
+                                  : hop.status && hop.status >= 300 && hop.status < 400
+                                  ? 'text-sky-400'
+                                  : 'text-red-400'
+                              }`}
+                            >
+                              Hop {hop.hop}: {hop.status ? `HTTP ${hop.status} ${hop.statusText || ''}` : '请求失败'}
+                            </span>
+                            {(hop.cfMitigated || hop.cfRay || hop.server) && (
+                              <span className="text-slate-500 truncate">
+                                {[
+                                  hop.server,
+                                  hop.cfMitigated ? `cf-mitigated=${hop.cfMitigated}` : null,
+                                  hop.cfRay ? `ray=${hop.cfRay}` : null,
+                                ]
+                                  .filter(Boolean)
+                                  .join(' · ')}
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-slate-400 truncate" title={hop.url}>
+                            {hop.url}
+                          </div>
+                          {hop.location && (
+                            <div className="text-sky-300/90 truncate" title={hop.location}>
+                              → {hop.location}
+                            </div>
+                          )}
+                          {hop.contentType && (
+                            <div className="text-slate-400 truncate">
+                              Content-Type: {hop.contentType}
+                              {hop.contentRange ? ` · ${hop.contentRange}` : ''}
+                            </div>
+                          )}
+                          {hop.error && <div className="text-red-300 break-all">{hop.error}</div>}
+                          {hop.bodySnippet && (
+                            <div className="text-amber-200/80 break-all line-clamp-2">
+                              {hop.bodySnippet}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            {engineType === 'mpv' && currentServer && (
+              <div className="p-2.5 rounded-xl bg-white/[0.03] border border-white/10 space-y-2 text-left">
+                <div className="flex items-center justify-between text-[11px] text-gray-400">
+                  <span>切换客户端 / User-Agent 重试</span>
+                  <button
+                    type="button"
+                    onClick={() => setIsServerUaModalOpen(true)}
+                    className="text-sky-400 hover:text-sky-300 transition cursor-pointer"
+                  >
+                    自定义
+                  </button>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {EMBY_USER_AGENT_PRESETS.map((preset) => {
+                    const isSelected = (currentServer.userAgent || '').trim() === preset.value;
+                    return (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        onClick={() => handleQuickSwitchUa(preset.value)}
+                        title={preset.value || DEFAULT_EMBY_USER_AGENT}
+                        className={`px-2 py-1 rounded-lg text-[11px] border transition cursor-pointer ${
+                          isSelected
+                            ? 'bg-primary/20 border-primary/50 text-primary font-medium'
+                            : 'bg-white/5 border-white/10 text-gray-300 hover:text-white hover:bg-white/10'
+                        }`}
+                      >
+                        {preset.label}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             )}
 
@@ -2319,22 +2840,49 @@ export const PlayerPage: React.FC = () => {
                   </button>
                 </div>
               ) : (
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    onClick={() => handleRetryDirect()}
-                    className="py-2.5 bg-primary hover:bg-primary-hover text-white rounded-xl text-xs font-semibold flex items-center justify-center space-x-1.5 transition cursor-pointer"
-                  >
-                    <RefreshCw className="w-3.5 h-3.5" />
-                    <span>重试原画直连</span>
-                  </button>
-                  <button
-                    onClick={() => handleRetryDirect('direct')}
-                    className="py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-semibold flex items-center justify-center space-x-1.5 transition cursor-pointer"
-                  >
-                    <Wifi className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>强制直连重试</span>
-                  </button>
-                </div>
+                <>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      onClick={() => handleRetryDirect()}
+                      className="py-2.5 bg-primary hover:bg-primary-hover text-white rounded-xl text-xs font-semibold flex items-center justify-center space-x-1.5 transition cursor-pointer"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      <span>重试原画直连</span>
+                    </button>
+                    <button
+                      onClick={() => handleRetryDirect('direct')}
+                      className="py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-semibold flex items-center justify-center space-x-1.5 transition cursor-pointer"
+                    >
+                      <Wifi className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>强制直连重试</span>
+                    </button>
+                  </div>
+
+                  {((diagnosticReport?.reachable && !usingRelayStream) || canRetryDirectStreamCandidate) && (
+                    <div className="flex flex-wrap gap-2">
+                      {diagnosticReport?.reachable && !usingRelayStream && (
+                        <button
+                          type="button"
+                          onClick={() => startRelayPlayback()}
+                          className="flex-1 py-2 px-3 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 rounded-xl text-xs font-semibold flex items-center justify-center space-x-1.5 transition cursor-pointer"
+                        >
+                          <Zap className="w-3.5 h-3.5" />
+                          <span>使用内置中转播放</span>
+                        </button>
+                      )}
+                      {canRetryDirectStreamCandidate && directStreamCandidate && (
+                        <button
+                          type="button"
+                          onClick={() => handleRetryWithUrl(directStreamCandidate)}
+                          className="flex-1 py-2 px-3 bg-sky-500/15 hover:bg-sky-500/25 text-sky-300 border border-sky-500/30 rounded-xl text-xs font-semibold flex items-center justify-center space-x-1.5 transition cursor-pointer"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          <span>改用服务端 DirectStreamUrl 重试</span>
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </>
               )}
 
               <div className="grid grid-cols-2 gap-2">
@@ -2655,6 +3203,7 @@ export const PlayerPage: React.FC = () => {
           networkSpeed={networkSpeed}
           telemetry={telemetry}
           proxyInfo={proxyInfo}
+          userAgent={currentUserAgent}
           nextPreloadStatus={nextPreloadStatus}
         />
       )}
@@ -2673,6 +3222,19 @@ export const PlayerPage: React.FC = () => {
           isOpen
           onClose={() => setIsProxyModalOpen(false)}
           onSaved={() => handleHotReloadStreamWithProxy(proxyOverride)}
+        />
+      )}
+
+      {/* 当前服务器 User-Agent 与连接配置弹窗（保存后立即重试播放） */}
+      {isServerUaModalOpen && currentServer && (
+        <EmbyServerModal
+          isOpen
+          onClose={() => setIsServerUaModalOpen(false)}
+          initialEditId={currentServer.id}
+          onSaved={() => {
+            setIsServerUaModalOpen(false);
+            void renegotiateAndRetryPlayback();
+          }}
         />
       )}
     </div>

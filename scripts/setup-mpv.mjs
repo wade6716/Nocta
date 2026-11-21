@@ -2,8 +2,8 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { execFileSync } from 'child_process';
 import { pipeline } from 'stream/promises';
-import SevenZip from '7z-wasm';
 
 const TARGET_DIR = path.join(process.cwd(), 'src-tauri', 'lib');
 const TEMP_DIR = path.join(TARGET_DIR, 'temp');
@@ -32,12 +32,15 @@ function parseArgs() {
   const args = process.argv.slice(2);
   let targetPlatform = null;
   let targetArch = null;
+  let wrapperOnly = false;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--platform' && i + 1 < args.length) {
       targetPlatform = args[++i].toLowerCase();
     } else if (args[i] === '--arch' && i + 1 < args.length) {
       targetArch = args[++i].toLowerCase();
+    } else if (args[i] === '--wrapper-only') {
+      wrapperOnly = true;
     }
   }
 
@@ -71,7 +74,7 @@ function parseArgs() {
     errorExit(`Unsupported architecture: ${currentArch}`);
   }
 
-  return { osName, archName, wrapperLibName };
+  return { osName, archName, wrapperLibName, wrapperOnly };
 }
 
 async function downloadFile(url, destPath) {
@@ -82,17 +85,66 @@ async function downloadFile(url, destPath) {
   await pipeline(res.body, fileStream);
 }
 
-async function extractArchive(archivePath, extractDir) {
-  if (fs.existsSync(extractDir)) {
-    fs.rmSync(extractDir, { recursive: true, force: true });
+function runCmd(cmd, args) {
+  try {
+    execFileSync(cmd, args, { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
   }
-  fs.mkdirSync(extractDir, { recursive: true });
+}
+
+function resetDir(dir) {
+  if (fs.existsSync(dir)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  fs.mkdirSync(dir, { recursive: true });
+}
+
+function tryNativeExtract(archivePath, extractDir) {
+  const ext = path.extname(archivePath).toLowerCase();
+  const sevenZipBins =
+    process.platform === 'win32'
+      ? ['7z', 'C:\\Program Files\\7-Zip\\7z.exe', 'C:\\Program Files (x86)\\7-Zip\\7z.exe']
+      : ['7z'];
+
+  for (const bin of sevenZipBins) {
+    if (runCmd(bin, ['x', archivePath, `-o${extractDir}`, '-y'])) {
+      return bin;
+    }
+    resetDir(extractDir);
+  }
+
+  if (ext === '.zip') {
+    if (process.platform !== 'win32' && runCmd('unzip', ['-oq', archivePath, '-d', extractDir])) {
+      return 'unzip';
+    }
+    resetDir(extractDir);
+
+    if (runCmd('tar', ['-xf', archivePath, '-C', extractDir])) {
+      return 'tar';
+    }
+    resetDir(extractDir);
+  }
+
+  return null;
+}
+
+async function extractArchive(archivePath, extractDir) {
+  resetDir(extractDir);
 
   const archiveName = path.basename(archivePath);
   const archiveDir = path.dirname(archivePath);
 
   log(`  Extracting ${archiveName}...`, COLORS.Cyan);
 
+  const nativeTool = tryNativeExtract(archivePath, extractDir);
+  if (nativeTool) {
+    log(`  -> Extracted with native ${nativeTool}`, COLORS.Gray);
+    return;
+  }
+
+  const { default: SevenZip } = await import('7z-wasm');
   const sevenZip = await SevenZip({
     print: () => {},
     printErr: () => {},
@@ -160,7 +212,7 @@ function findAndMove(searchDir, fileName, destDir) {
 }
 
 async function run() {
-  const { osName, archName, wrapperLibName } = parseArgs();
+  const { osName, archName, wrapperLibName, wrapperOnly } = parseArgs();
   log(`\n=== Setup libmpv dependencies ===`, COLORS.Yellow);
   log(`Target: ${osName} (${archName})`, COLORS.Yellow);
 
@@ -192,7 +244,9 @@ async function run() {
   }
 
   // 2. Download and extract libmpv on Windows
-  if (osName === 'windows') {
+  if (wrapperOnly) {
+    log('\n[2/2] Skipping core libmpv setup (--wrapper-only)', COLORS.Gray);
+  } else if (osName === 'windows') {
     log("\n[2/2] Processing libmpv core for Windows...", COLORS.Cyan);
     try {
       const shaUrl = `${MPV_BASE_URL}/sha256.txt`;

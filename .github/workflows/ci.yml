@@ -43,17 +43,12 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Install Linux Dependencies (Ubuntu)
+      - name: Install Linux Dependencies (Ubuntu, Cached)
         if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            libmpv-dev \
-            patchelf \
-            xdg-utils
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libmpv-dev patchelf xdg-utils
+          version: ubuntu22-tauri2-v1
 
       - name: Setup Rust Stable
         uses: dtolnay/rust-toolchain@stable
@@ -62,6 +57,8 @@ jobs:
         uses: swatinem/rust-cache@v2
         with:
           workspaces: './src-tauri -> target'
+          shared-key: "ci-check-${{ matrix.platform }}-v1"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Cargo Check
         run: cargo check --manifest-path src-tauri/Cargo.toml

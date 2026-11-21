@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: '发布版本号 (如 v0.1.0 或 v0.1.0-alpha.1)'
+        description: '发布版本号（留空则自动读取 package.json 版本生成 v<version>）'
         required: false
         type: string
-        default: 'v0.1.0'
+        default: ''
       release_draft:
         description: '发布为草稿 (Draft Release)'
         required: false
@@ -24,49 +24,125 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # 阶段 1：在最廉价高效的 Linux Runner 上单次编译前端并解析发版元数据
+  build-frontend:
+    name: Build Frontend & Metadata
+    runs-on: ubuntu-latest
+    outputs:
+      tag_name: ${{ steps.meta.outputs.tag_name }}
+      release_name: ${{ steps.meta.outputs.release_name }}
+      is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
+      release_draft: ${{ steps.meta.outputs.release_draft }}
+      tauri_cli_version: ${{ steps.meta.outputs.tauri_cli_version }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Resolve Release Metadata
+        id: meta
+        shell: bash
+        env:
+          INPUT_TAG_NAME: ${{ inputs.tag_name }}
+          INPUT_PRERELEASE: ${{ inputs.prerelease }}
+          INPUT_RELEASE_DRAFT: ${{ inputs.release_draft }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            const refType = process.env.REF_TYPE || "";
+            const refName = process.env.REF_NAME || "";
+            const inputTag = (process.env.INPUT_TAG_NAME || "").trim();
+            const tagName = refType === "tag" ? refName : (inputTag || ("v" + pkg.version));
+            const releaseName = "Nocta · 夜幕 " + tagName;
+            const isPrerelease = (process.env.INPUT_PRERELEASE === "true" || /(alpha|beta|rc)/i.test(tagName)) ? "true" : "false";
+            const releaseDraft = process.env.INPUT_RELEASE_DRAFT === "true" ? "true" : "false";
+            const rawCli = (pkg.devDependencies && pkg.devDependencies["@tauri-apps/cli"]) || "2.12.2";
+            const tauriCliVersion = rawCli.replace(/^[^\d]*/, "");
+            const lines = [
+              `tag_name=${tagName}`,
+              `release_name=${releaseName}`,
+              `is_prerelease=${isPrerelease}`,
+              `release_draft=${releaseDraft}`,
+              `tauri_cli_version=${tauriCliVersion}`,
+            ];
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, lines.join("\n") + "\n");
+            console.log(lines.join("\n"));
+          '
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+
+      - name: Install Frontend Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Frontend
+        run: pnpm build
+
+      - name: Upload Prebuilt Frontend Dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: dist/
+          retention-days: 1
+          if-no-files-found: error
+
+  # 阶段 2：4 端并发复编译（直接复用前端 dist/、预编译 cargo-tauri、多层缓存 Rust 与 libmpv）
   release-tauri:
     name: Build (${{ matrix.name_suffix }})
+    needs: build-frontend
     permissions:
       contents: write
     strategy:
       fail-fast: false
       matrix:
         include:
-          # 1. Windows x64 (仅构建 NSIS .exe 安装包，去除 WiX MSI 重复压缩)
+          # 1. Windows x64 (NSIS + zlib 压缩，跳过重复前端编译与 MSI)
           - platform: windows-latest
-            args: '--bundles nsis'
+            args: '--bundles nsis --config src-tauri/tauri.ci.conf.json'
             rust_targets: ''
             name_suffix: 'Windows x64'
             asset_name_pattern: '[name]_[version]_windows_[arch][setup][ext]'
             mpv_platform: 'windows'
             mpv_arch: 'x86_64'
+            cli_asset: 'cargo-tauri-x86_64-pc-windows-msvc.zip'
 
           # 2. macOS Apple Silicon (M1/M2/M3/M4 系列芯片)
           - platform: macos-15
-            args: '--target aarch64-apple-darwin --bundles dmg'
+            args: '--target aarch64-apple-darwin --bundles dmg --config src-tauri/tauri.ci.conf.json'
             rust_targets: 'aarch64-apple-darwin'
             name_suffix: 'macOS Apple Silicon'
             asset_name_pattern: '[name]_[version]_macos_aarch64[ext]'
             mpv_platform: 'macos'
             mpv_arch: 'aarch64'
+            cli_asset: 'cargo-tauri-aarch64-apple-darwin.zip'
 
           # 3. macOS Intel (x86_64 系列芯片，使用原生 Intel Runner 确保 Homebrew dylib 架构一致)
           - platform: macos-15-intel
-            args: '--target x86_64-apple-darwin --bundles dmg'
+            args: '--target x86_64-apple-darwin --bundles dmg --config src-tauri/tauri.ci.conf.json'
             rust_targets: 'x86_64-apple-darwin'
             name_suffix: 'macOS Intel'
             asset_name_pattern: '[name]_[version]_macos_x64[ext]'
             mpv_platform: 'macos'
             mpv_arch: 'x86_64'
+            cli_asset: 'cargo-tauri-x86_64-apple-darwin.zip'
 
           # 4. Linux x64 (仅构建 .deb 安装包，去除 AppImage 重度压缩)
           - platform: ubuntu-22.04
-            args: '--bundles deb'
+            args: '--bundles deb --config src-tauri/tauri.ci.conf.json'
             rust_targets: ''
             name_suffix: 'Linux x64'
             asset_name_pattern: '[name]_[version]_linux_[arch][ext]'
             mpv_platform: 'linux'
             mpv_arch: 'x86_64'
+            cli_asset: 'cargo-tauri-x86_64-unknown-linux-gnu.tgz'
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -80,49 +156,159 @@ jobs:
           Add-MpPreference -ExclusionPath "${{ github.workspace }}" -ErrorAction SilentlyContinue
           Add-MpPreference -ExclusionProcess "cargo.exe", "rustc.exe", "link.exe" -ErrorAction SilentlyContinue
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Download Prebuilt Frontend Dist
+        uses: actions/download-artifact@v4
         with:
-          node-version: 22
-          cache: 'pnpm'
+          name: frontend-dist
+          path: dist/
 
       - name: Setup Rust Stable
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.rust_targets }}
 
-      - name: Install Linux Dependencies (Ubuntu)
+      - name: Install Linux Dependencies (Ubuntu, Cached)
         if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            libmpv-dev \
-            patchelf \
-            xdg-utils
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libmpv-dev patchelf xdg-utils
+          version: ubuntu22-tauri2-v1
 
-      - name: Install macOS Dependencies
-        if: startsWith(matrix.platform, 'macos')
-        run: brew install mpv molten-vk dylibbundler
+      - name: Restore Prebuilt Tauri CLI Cache
+        id: tauri-cli-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cargo/bin/cargo-tauri*
+          key: tauri-cli-${{ needs.build-frontend.outputs.tauri_cli_version }}-${{ matrix.mpv_platform }}-${{ matrix.mpv_arch }}
+
+      - name: Install Prebuilt cargo-tauri CLI
+        if: steps.tauri-cli-cache.outputs.cache-hit != 'true'
+        shell: bash
+        env:
+          CLI_VER: ${{ needs.build-frontend.outputs.tauri_cli_version }}
+          CLI_ASSET: ${{ matrix.cli_asset }}
+        run: |
+          set -euo pipefail
+          if command -v cygpath >/dev/null 2>&1; then
+            CARGO_BIN_DIR="$(cygpath -u "${CARGO_HOME:-$HOME/.cargo}")/bin"
+          else
+            CARGO_BIN_DIR="${CARGO_HOME:-$HOME/.cargo}/bin"
+          fi
+          mkdir -p "$CARGO_BIN_DIR"
+
+          TMP_DIR="$(mktemp -d)"
+          ARCHIVE_PATH="$TMP_DIR/$CLI_ASSET"
+          EXTRACT_DIR="$TMP_DIR/extract"
+          mkdir -p "$EXTRACT_DIR"
+
+          URL="https://github.com/tauri-apps/tauri/releases/download/tauri-cli-v${CLI_VER}/${CLI_ASSET}"
+          echo "Downloading $URL"
+          curl -fsSL --retry 3 --retry-delay 2 "$URL" -o "$ARCHIVE_PATH"
+
+          if [[ "$CLI_ASSET" == *.tgz || "$CLI_ASSET" == *.tar.gz ]]; then
+            tar -xzf "$ARCHIVE_PATH" -C "$EXTRACT_DIR"
+          elif command -v unzip >/dev/null 2>&1; then
+            unzip -oq "$ARCHIVE_PATH" -d "$EXTRACT_DIR"
+          elif command -v 7z >/dev/null 2>&1; then
+            7z x "$ARCHIVE_PATH" -o"$EXTRACT_DIR" -y >/dev/null
+          else
+            tar -xf "$ARCHIVE_PATH" -C "$EXTRACT_DIR"
+          fi
+
+          CLI_BIN="$(find "$EXTRACT_DIR" -type f \( -name 'cargo-tauri' -o -name 'cargo-tauri.exe' \) | head -n 1)"
+          if [ -z "$CLI_BIN" ]; then
+            echo "Failed to locate cargo-tauri binary in $CLI_ASSET"
+            exit 1
+          fi
+
+          cp -f "$CLI_BIN" "$CARGO_BIN_DIR/"
+          chmod +x "$CARGO_BIN_DIR/$(basename "$CLI_BIN")" 2>/dev/null || true
+          rm -rf "$TMP_DIR"
+          cargo tauri --version
+
+      - name: Save Prebuilt Tauri CLI Cache
+        if: github.ref == 'refs/heads/main' && steps.tauri-cli-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cargo/bin/cargo-tauri*
+          key: tauri-cli-${{ needs.build-frontend.outputs.tauri_cli_version }}-${{ matrix.mpv_platform }}-${{ matrix.mpv_arch }}
+
+      - name: Verify cargo-tauri CLI
+        if: steps.tauri-cli-cache.outputs.cache-hit == 'true'
+        shell: bash
+        run: |
+          if command -v cygpath >/dev/null 2>&1; then
+            CARGO_BIN_DIR="$(cygpath -u "${CARGO_HOME:-$HOME/.cargo}")/bin"
+          else
+            CARGO_BIN_DIR="${CARGO_HOME:-$HOME/.cargo}/bin"
+          fi
+          chmod +x "$CARGO_BIN_DIR/cargo-tauri" 2>/dev/null || true
+          cargo tauri --version
 
       - name: Rust Cache
         uses: swatinem/rust-cache@v2
         with:
           workspaces: './src-tauri -> target'
+          shared-key: "release-${{ matrix.mpv_platform }}-${{ matrix.mpv_arch }}-v1"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Install Frontend Dependencies
-        run: pnpm install --frozen-lockfile
+      - name: Restore Self-Contained libmpv Bundle Cache
+        id: mpv-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: src-tauri/lib
+          key: mpv-bundle-v1-${{ matrix.mpv_platform }}-${{ matrix.mpv_arch }}-${{ hashFiles('scripts/setup-mpv.mjs') }}
+
+      - name: Verify Cached libmpv Libraries
+        id: verify-mpv
+        shell: bash
+        env:
+          MPV_PLATFORM: ${{ matrix.mpv_platform }}
+        run: |
+          ready=false
+          case "$MPV_PLATFORM" in
+            windows)
+              if [ -s "src-tauri/lib/libmpv-wrapper.dll" ] && [ -s "src-tauri/lib/libmpv-2.dll" ]; then
+                ready=true
+              fi
+              ;;
+            macos)
+              if [ -s "src-tauri/lib/libmpv-wrapper.dylib" ] && \
+                 [ -s "src-tauri/lib/libmpv.dylib" ] && \
+                 [ -s "src-tauri/lib/libmpv.2.dylib" ] && \
+                 [ -s "src-tauri/lib/libMoltenVK.dylib" ] && \
+                 [ -s "src-tauri/lib/MoltenVK_icd.json" ]; then
+                ready=true
+              fi
+              ;;
+            linux)
+              if [ -s "src-tauri/lib/libmpv-wrapper.so" ]; then
+                ready=true
+              fi
+              ;;
+          esac
+          echo "ready=$ready" >> "$GITHUB_OUTPUT"
+          if [ "$ready" = "true" ]; then
+            echo "Restored cached libmpv bundle for $MPV_PLATFORM:"
+            ls -lh src-tauri/lib/
+          else
+            echo "libmpv cache miss or incomplete for $MPV_PLATFORM, will fetch fresh libraries."
+          fi
+
+      - name: Install macOS Dependencies
+        if: startsWith(matrix.platform, 'macos') && steps.verify-mpv.outputs.ready != 'true'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
+          HOMEBREW_NO_ENV_HINTS: '1'
+        run: brew install mpv molten-vk dylibbundler
 
       - name: Setup libmpv and Wrapper Libraries
-        run: node scripts/setup-mpv.mjs --platform ${{ matrix.mpv_platform }} --arch ${{ matrix.mpv_arch }}
+        if: steps.verify-mpv.outputs.ready != 'true'
+        run: node scripts/setup-mpv.mjs --platform ${{ matrix.mpv_platform }} --arch ${{ matrix.mpv_arch }}${{ matrix.mpv_platform == 'macos' && ' --wrapper-only' || '' }}
 
       - name: Bundle Self-Contained libmpv & MoltenVK for macOS
-        if: startsWith(matrix.platform, 'macos')
+        if: startsWith(matrix.platform, 'macos') && steps.verify-mpv.outputs.ready != 'true'
         run: |
           BREW_PREFIX=$(brew --prefix)
           MPV_LIB="$BREW_PREFIX/opt/mpv/lib/libmpv.2.dylib"
@@ -167,31 +353,37 @@ jobs:
           EOF
           fi
 
-          # 为所有打包的 dylib 重新赋予写权限与 Ad-hoc 签名，防止 Apple Silicon dyld 因 install_name_tool 修改而拒绝加载
+          # 为所有打包的 dylib 并行赋予写权限与 Ad-hoc 签名，防止 Apple Silicon dyld 因 install_name_tool 修改而拒绝加载
           chmod -R u+w src-tauri/lib/
-          for f in src-tauri/lib/*.dylib; do
-            chmod 755 "$f"
-            codesign --force --sign - "$f"
-          done
+          find src-tauri/lib -maxdepth 1 -name '*.dylib' -exec chmod 755 {} +
+          find src-tauri/lib -maxdepth 1 -name '*.dylib' -print0 | xargs -0 -P "$(sysctl -n hw.ncpu)" -I {} codesign --force --sign - "{}"
           ls -lh src-tauri/lib/
+
+      - name: Save Self-Contained libmpv Bundle Cache
+        if: github.ref == 'refs/heads/main' && steps.verify-mpv.outputs.ready != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: src-tauri/lib
+          key: mpv-bundle-v1-${{ matrix.mpv_platform }}-${{ matrix.mpv_arch }}-${{ hashFiles('scripts/setup-mpv.mjs') }}
 
       - name: Build and Release via Tauri Action
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: "${{ github.ref_type == 'tag' && github.ref_name || inputs.tag_name || github.ref_name }}"
-          releaseName: "Nocta · 夜幕 ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag_name || github.ref_name }}"
+          tauriScript: 'cargo tauri'
+          tagName: ${{ needs.build-frontend.outputs.tag_name }}
+          releaseName: ${{ needs.build-frontend.outputs.release_name }}
           generateReleaseNotes: true
-          assetNamePattern: "${{ matrix.asset_name_pattern }}"
-          releaseDraft: "${{ inputs.release_draft || false }}"
-          prerelease: "${{ inputs.prerelease || contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}"
+          assetNamePattern: ${{ matrix.asset_name_pattern }}
+          releaseDraft: ${{ needs.build-frontend.outputs.release_draft }}
+          prerelease: ${{ needs.build-frontend.outputs.is_prerelease }}
           args: ${{ matrix.args }}
 
-  # 无论 Release 是否已提前创建，构建完成后由该 Job 统一强制更新 Release 正文与清理旧名称产物
+  # 阶段 3：无论 Release 是否已提前创建，构建完成后由该 Job 统一强制更新 Release 正文与清理旧名称产物
   finalize-release:
     name: Finalize Release Notes & Cleanup
-    needs: release-tauri
+    needs: [build-frontend, release-tauri]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -204,7 +396,7 @@ jobs:
       - name: Sync Release Notes & Cleanup Legacy Assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG_NAME: "${{ github.ref_type == 'tag' && github.ref_name || inputs.tag_name || github.ref_name }}"
+          TAG_NAME: ${{ needs.build-frontend.outputs.tag_name }}
         run: |
           # 1. 基于仓库模板生成正文头部与平台指引
           cp .github/release-template.md release_notes.md

@@ -182,13 +182,16 @@ pnpm tauri build
   - `rust-check`：在 Ubuntu 与 Windows 矩阵运行 `cargo check`，确保 Rust 后端语法与依赖无冲突。
 
 ### 7.2 自动编译发版流水线 (`.github/workflows/release.yml`)
-- **触发条件**：
-  - **标签触发**：推送 `v*` 格式版本标签（例如 `git tag v0.1.0 && git push origin v0.1.0`）；
-  - **手动触发**：GitHub Actions 界面手动 `workflow_dispatch`，可选择草稿（Draft）或预发版（Pre-release）。
+- **触发条件与缓存作用域策略**：
+  - **推荐手动触发（`workflow_dispatch` on `main`）**：在 Actions 界面运行 `Release`，`tag_name` 留空即可自动读取 `package.json` 版本生成 `v<version>` 并自动识别预发版，且工作流直接在 `refs/heads/main` 上下文中读写全套共享缓存，避免 GitHub Actions Tag 缓存隔离导致冷编译；
+  - **标签触发（`push: tags: ['v*']`）**：保留兼容，Tag 触发时只读继承 `main` 上已构建的共享缓存，不向孤立 Tag 回写缓存。
+- **三阶段流水线与多层缓存体系**：
+  - `build-frontend`（`ubuntu-latest`）：解析版本元数据与 `@tauri-apps/cli` 版本，单次执行 `pnpm install && pnpm build` 并上传 `frontend-dist` Artifact；
+  - `release-tauri`（4 端并发矩阵）：免装 Node/pnpm，直接下载 `dist/` 并使用 [`src-tauri/tauri.ci.conf.json`](file:///d:/wade/code/emby-tauri-player/src-tauri/tauri.ci.conf.json)（`beforeBuildCommand: ""`）+ 官方预编译 `cargo-tauri`（`tauriScript: 'cargo tauri'`）构建；同时配置平台架构隔离的 `swatinem/rust-cache@v2`、`src-tauri/lib/` 整包缓存（`mpv-bundle-v1`）、Linux APT 包缓存（`awalsh128/cache-apt-pkgs-action`）、`setup-mpv.mjs` 原生 `7z`/`unzip` 解压与 macOS 并行 `codesign`。
 - **多平台多架构编译矩阵与产物命名**：
-  - **Windows x64** (`windows-latest`)：输出带平台标识的 `Nocta_*_windows_x64-setup.exe` (NSIS 一键安装包，已移除 WiX MSI 冗余打包并排除 Defender 扫描)；
-  - **macOS Apple Silicon** (`macos-latest`, `--target aarch64-apple-darwin`)：输出原生适配 M 系列芯片的 `Nocta_*_macos_aarch64.dmg`；
-  - **macOS Intel** (`macos-latest`, `--target x86_64-apple-darwin`)：输出适配 Intel 处理器的 `Nocta_*_macos_x64.dmg`；
+  - **Windows x64** (`windows-latest`)：输出带平台标识的 `Nocta_*_windows_x64-setup.exe` (NSIS 一键安装包，启用 `zlib` 压缩加速打包，已移除 WiX MSI 冗余打包并排除 Defender 扫描)；
+  - **macOS Apple Silicon** (`macos-15`, `--target aarch64-apple-darwin`)：输出原生适配 M 系列芯片的 `Nocta_*_macos_aarch64.dmg`；
+  - **macOS Intel** (`macos-15-intel`, `--target x86_64-apple-darwin`)：输出适配 Intel 处理器的 `Nocta_*_macos_x64.dmg`；
   - **Linux x64** (`ubuntu-22.04`)：输出 `Nocta_*_linux_*.deb`（已精简移除 AppImage，彻底消除 mksquashfs 重度压缩开销）。
 - **发布产物与自动更新日志机制**：
   - 矩阵编译完成后，通过专属 `finalize-release` 任务调用 GitHub API 强制刷新已有 Release 的正文与更新日志（使用 `.github/release-template.md` 模板与 `.github/release.yml` 规则分类），彻底解决重新发版时 GitHub 不刷新旧 Release Body 的问题；
@@ -594,6 +597,13 @@ pnpm tauri build
 - **Rust HTTP 插件特性启用（[`src-tauri/Cargo.toml`](file:///d:/wade/code/emby-tauri-player/src-tauri/Cargo.toml)）**：开启 `dangerous-settings` 与 `unsafe-headers`。
 - **HTTP 客户端自签名 TLS 与代理旁路回退（[`http.ts`](file:///d:/wade/code/emby-tauri-player/src/api/http.ts)）**：统一注入 `danger: { acceptInvalidCerts: true, acceptInvalidHostnames: true }`；显式 `direct` 模式及代理异常兜底时使用 `noProxy: '*'` 彻底绕过代理与系统代理。
 - **WebDAV 协议自动升级与自动建目录（[`webdav.ts`](file:///d:/wade/code/emby-tauri-player/src/api/sync/webdav.ts)、[`useSyncStore.ts`](file:///d:/wade/code/emby-tauri-player/src/stores/useSyncStore.ts)）**：在 Tauri 环境置空 `Origin: ''` 剥离 `tauri://localhost`；`http://` 遇到 `400` / 协议层错误自动升级为 `https://` 重试并通过 `onUrlUpgraded` 回写表单配置；`PUT` 遇 `404`/`409` 自动发送 `MKCOL` 创建父级目录并重试；同步提取服务端响应正文片段以提供明确错误诊断。
+
+## 30. GitHub Actions 多端发版构建多层缓存与耗时优化 (2026-11-21)
+
+- **解决 Tag 作用域 0% 缓存命中瓶颈**：改造 [`.github/workflows/release.yml`](file:///d:/wade/code/emby-tauri-player/.github/workflows/release.yml) 为三阶段流水线（`build-frontend` → `release-tauri` → `finalize-release`），`workflow_dispatch` 留空 `tag_name` 时自动读取 `package.json` 版本在 `main` 上下文生成 Tag 与 Release 并读写全套缓存；兼容 `push: tags` 时只读继承 `main` 缓存（`save-if: github.ref == 'refs/heads/main'`）。
+- **前端单次编译与预编译 CLI**：新增 [`src-tauri/tauri.ci.conf.json`](file:///d:/wade/code/emby-tauri-player/src-tauri/tauri.ci.conf.json)（`beforeBuildCommand: ""`），由 `build-frontend` 在 `ubuntu-latest` 单次产出 `dist/`，4 端矩阵下载复用并拉取缓存官方预编译 `cargo-tauri`（`tauriScript: 'cargo tauri'`），省去 4 端 Node/pnpm 安装与重复编译。
+- **整包缓存 `src-tauri/lib/` 与冷构建加速**：4 端缓存完成 `dylibbundler` + `codesign` 后的 `src-tauri/lib/`（`mpv-bundle-v1`），macOS 命中后跳过 Homebrew 与重签名；[`scripts/setup-mpv.mjs`](file:///d:/wade/code/emby-tauri-player/scripts/setup-mpv.mjs) 优先调用原生 `7z`/`unzip`/`tar` 解压（动态回退 `7z-wasm`）并支持 `--wrapper-only`；Ubuntu 在 `release.yml` 与 [`.github/workflows/ci.yml`](file:///d:/wade/code/emby-tauri-player/.github/workflows/ci.yml) 共用 `awalsh128/cache-apt-pkgs-action` 缓存系统包。
+- **打包压缩与 Cargo 精简**：[`src-tauri/tauri.conf.json`](file:///d:/wade/code/emby-tauri-player/src-tauri/tauri.conf.json) 为 Windows NSIS 启用 `compression: "zlib"` 替代单线程 `lzma` 压缩 101MB `libmpv-2.dll`；[`src-tauri/Cargo.toml`](file:///d:/wade/code/emby-tauri-player/src-tauri/Cargo.toml) 精简为 `crate-type = ["rlib"]` 移除桌面端无用的 `staticlib`/`cdylib` 链接开销。
 
 ## 31. 内存时长缓冲与下一集纯内存智能预加载（跳过片头、可调触发与自动释内存）(2026-11-21)
 

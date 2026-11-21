@@ -120,17 +120,20 @@
 ### 8. 版本发布与 GitHub Actions 自动化打包规范 (Release & Packaging Pipeline)
 - **版本号格式规范与 Windows MSI 避坑**：
   - Windows MSI (WiX) 安装包生成器要求版本格式必须为纯数字（`major.minor.patch`，如 `0.1.0`），如果 `src-tauri/tauri.conf.json` 中配置了非数字后缀（如 `0.1.0-alpha.2`），打包时会直接报错中断。
-  - 因此，Pre-release 版本（Alpha / Beta / RC）必须将 tag 命名为 `v0.1.0-alpha.2`，由 GitHub Actions 中的 `contains(github.ref_name, 'alpha')` 自动识别为预发布状态，`tauri.conf.json` 保持为标准数字 SemVer（`0.1.0`）；
-- **发布流程自动化触发**：
-  1. 更新 `package.json` 及关于页面显示的客户端版本号；
-  2. 运行 `pnpm build` 与 `cargo check` 确保零错误；
-  3. 提交版本变更并打带注释的标签：`git tag -a v0.1.0-alpha.2 -m "Release v0.1.0-alpha.2: ..."`；
-  4. 推送主分支与标签：`git push origin main && git push origin v0.1.0-alpha.2`；
-  5. GitHub Actions 自动矩阵构建 Windows x64 (NSIS)、macOS Apple Silicon (aarch64)、macOS Intel (x86_64)、Linux x64 (deb) 全平台安装包并上传至 GitHub Releases。
-- **打包目标精简与多平台构建性能优化规范**：
-  - Windows 仅构建 NSIS (`.exe`) 一键安装包，彻底移除 WiX MSI 生成，避免对 100MB `libmpv` 进行二次高强度重复压缩（节省 4~5 分钟）；同时在 Windows 构建前置将工程目录与 `cargo.exe`/`rustc.exe`/`link.exe` 加入 Windows Defender 排除项，消除磁盘实时查杀锁盘延迟；
-  - Linux 仅保留 `.deb` 安装包，彻底移除 AppImage 打包，消除 `mksquashfs` 的重度 CPU 压缩开销（节省约 3 分钟）；依赖安装启用 `--no-install-recommends` 减少非必要包下载；
-  - macOS 维持单一 `.dmg` 极速打包。
+  - 因此，Pre-release 版本（Alpha / Beta / RC）必须将版本标记在 `package.json`（如 `0.1.0-alpha.10`）与 Git tag `v0.1.0-alpha.10`，由 CI 自动识别 `(alpha|beta|rc)` 为预发布状态，`tauri.conf.json` 保持为标准数字 SemVer（`0.1.0`）；
+- **GitHub Actions Tag 缓存隔离避坑与推荐发版流程**：
+  - **缓存作用域原理**：GitHub Actions 原生缓存严格按 `github.ref` 隔离——新推 Tag（`refs/tags/v0.1.0-alpha.11`）无法读取旧 Tag（`alpha.10`）的缓存，只能回退读取默认分支 `refs/heads/main`。若只在推 Tag 时构建 Release，`main` 作用域长期没有 Release 缓存，会导致 4 端每次 100% 冷编译。
+  - **推荐日常发版方式（`workflow_dispatch` on `main`）**：
+    1. 更新 `package.json`（及界面显示版本号）并运行 `pnpm build`、`cargo check`；
+    2. 提交并推送到 `main` 分支；
+    3. 在 GitHub Actions 页面执行 **Release → Run workflow**（保持默认分支 `main`，`tag_name` 留空即可自动读取 `package.json` 生成 `v<version>`，并由 `tauri-action` 自动创建 Tag 与 Release）。该方式直接读写 `main` 共享缓存池，实现全链路热缓存命中。
+  - **兼容传统 Tag 触发**：仍保留 `on.push.tags: ['v*']`；推 Tag 构建时只读继承 `main` 上已有缓存，并通过 `save-if: ${{ github.ref == 'refs/heads/main' }}` 与条件 `actions/cache/save` 避免向孤立 Tag 作用域上传不会再被读取的死缓存。
+- **三阶段流水线与多层缓存加速架构**：
+  1. **单次前端编译与元数据解析（`build-frontend`）**：仅在 `ubuntu-latest` 执行一次 `pnpm install --frozen-lockfile && pnpm build` 并上传 `dist/` Artifact，同时解析 `tag_name` 与 `@tauri-apps/cli` 版本；4 端编译矩阵直接下载 `dist/`，搭配 [`src-tauri/tauri.ci.conf.json`](file:///d:/wade/code/emby-tauri-player/src-tauri/tauri.ci.conf.json)（`beforeBuildCommand: ""`）及官方预编译 `cargo-tauri` 二进制（`tauriScript: 'cargo tauri'`），彻底免除 4 端重复安装 Node/pnpm 与重复编译前端。
+  2. **Rust 缓存精细隔离（`swatinem/rust-cache@v2`）**：Release 按 `shared-key: "release-<mpv_platform>-<mpv_arch>-v1"`（`workspaces: './src-tauri -> target'`）独立隔离 `macos-15`（ARM64）与 `macos-15-intel`（x86_64）；`ci.yml` 使用 `ci-check-<platform>-v1` 防止 debug 与 release 缓存互相驱逐。
+  3. **`src-tauri/lib/` 整包缓存与强制刷新**：通过 `mpv-bundle-v1-<mpv_platform>-<mpv_arch>-<hash(setup-mpv.mjs)>` 缓存完整动态库产物。macOS 命中后直接跳过 `brew install mpv molten-vk dylibbundler`、`setup-mpv.mjs`、`dylibbundler` 与 `codesign`；**需要主动拉取新版 `libmpv` 或 `libmpv-wrapper` 时，将 `release.yml` 中的 `mpv-bundle-v1` 递增为 `v2` 即可强制冷刷新**。
+  4. **冷构建加速与解压零依赖**：[`scripts/setup-mpv.mjs`](file:///d:/wade/code/emby-tauri-player/scripts/setup-mpv.mjs) 优先调用系统原生 `7z` / `unzip` / `tar` 解压，仅在缺失原生工具时动态加载 `7z-wasm`，并支持 `--wrapper-only` 供 macOS CI 跳过重复拷贝；macOS `brew install` 设置 `HOMEBREW_NO_AUTO_UPDATE=1`、`HOMEBREW_NO_INSTALL_CLEANUP=1` 并对 `.dylib` 使用多核并行 `codesign`。
+  5. **Linux APT 缓存与桌面端打包精简**：Ubuntu 22.04 接入 `awalsh128/cache-apt-pkgs-action@v1`（`ubuntu22-tauri2-v1`）跨 `ci.yml` 与 `release.yml` 共享系统包缓存；Windows 仅保留 NSIS 并设置 `bundle.windows.nsis.compression: "zlib"` 替代单线程 `lzma` 压缩 101MB `libmpv-2.dll`；Linux 仅保留 `.deb`；[`src-tauri/Cargo.toml`](file:///d:/wade/code/emby-tauri-player/src-tauri/Cargo.toml) 保持桌面端 `crate-type = ["rlib"]`，消除 `staticlib`/`cdylib` 冗余链接。
 - **CI 流水线按需手动触发规范**：
   - `.github/workflows/ci.yml` 仅保留 `workflow_dispatch` 手动触发，已关闭 `push` 与 `pull_request` 自动触发，避免日常提交频繁占用 GitHub Actions 运行配额及产生等待延迟；需要云端多平台全量校验时可在 Actions 页面手动触发。
 

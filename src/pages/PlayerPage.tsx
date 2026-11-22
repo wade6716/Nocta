@@ -30,7 +30,7 @@ import {
   stripImageFormatWebp,
   buildEmbyStreamHeaders,
   resolveEmbyUserAgent,
-  resolveEmbyDirectStreamCandidate,
+  resolveEmbyFallbackStreamCandidates,
   EMBY_USER_AGENT_PRESETS,
   DEFAULT_EMBY_USER_AGENT,
 } from '../api/embyClient';
@@ -232,6 +232,7 @@ export const PlayerPage: React.FC = () => {
   const handleVideoErrorRef = useRef<(errMsg?: string) => void>(() => {});
   const runStreamDiagnosticRef = useRef<(autoRelay: boolean) => void>(() => {});
   const relayFallbackAttemptedRef = useRef(false);
+  const altCandidateFallbackAttemptedRef = useRef(false);
   const diagReqIdRef = useRef(0);
   const activeRelayTokenRef = useRef<string | null>(null);
   const proxyOverrideRef = useRef<StreamProxyOverride>('follow');
@@ -437,6 +438,7 @@ export const PlayerPage: React.FC = () => {
       }
       if (!/\/relay\//.test(streamUrl)) {
         relayFallbackAttemptedRef.current = false;
+        altCandidateFallbackAttemptedRef.current = false;
         setUsingRelayStream(false);
         setDiagnosticReport(null);
         setDiagnosticCopied(false);
@@ -1509,6 +1511,7 @@ export const PlayerPage: React.FC = () => {
 
       diagReqIdRef.current += 1;
       relayFallbackAttemptedRef.current = false;
+      altCandidateFallbackAttemptedRef.current = false;
       setUsingRelayStream(false);
       setDiagnosticReport(null);
       setDiagnosticCopied(false);
@@ -1940,17 +1943,19 @@ export const PlayerPage: React.FC = () => {
 
   const currentUserAgent = resolveEmbyUserAgent(currentServer?.userAgent, currentServer?.url);
 
-  const directStreamCandidate =
-    currentServer && mediaSource
-      ? resolveEmbyDirectStreamCandidate(
+  const fallbackStreamCandidates =
+    currentServer && item && mediaSource && playSessionId
+      ? resolveEmbyFallbackStreamCandidates(
           currentServer.url,
+          item.Id,
           mediaSource,
-          currentServer.accessToken
+          playSessionId,
+          currentServer.accessToken,
+          upstreamStreamUrlRef.current || currentStreamUrl
         )
-      : null;
-  const canRetryDirectStreamCandidate = Boolean(
-    directStreamCandidate && directStreamCandidate !== upstreamStreamUrlRef.current
-  );
+      : [];
+  const directStreamCandidate = fallbackStreamCandidates[0] || null;
+  const canRetryDirectStreamCandidate = Boolean(directStreamCandidate);
 
   const stopActiveRelay = useCallback(() => {
     if (isTauriEnvironment() && activeRelayTokenRef.current) {
@@ -2046,6 +2051,63 @@ export const PlayerPage: React.FC = () => {
           }
         }
 
+        if (
+          !report.reachable &&
+          autoRelayIfReachable &&
+          !altCandidateFallbackAttemptedRef.current &&
+          item &&
+          mediaSource &&
+          playSessionId
+        ) {
+          const candidates = resolveEmbyFallbackStreamCandidates(
+            liveServer.url,
+            item.Id,
+            mediaSource,
+            playSessionId,
+            liveServer.accessToken,
+            target
+          ).slice(0, 2);
+
+          for (const candidateUrl of candidates) {
+            const candidateProxy = await resolveMpvProxyDetailed(
+              candidateUrl,
+              proxyOverrideRef.current
+            );
+            const altReport = await invoke<StreamDiagnosticReport>('diagnose_stream_url', {
+              request: {
+                url: candidateUrl,
+                proxyUrl: candidateProxy.effectiveProxy || null,
+                headers: {
+                  'User-Agent': ua,
+                  ...streamHeaders,
+                },
+              },
+            });
+            if (reqId !== diagReqIdRef.current) return;
+
+            if (altReport.reachable) {
+              altCandidateFallbackAttemptedRef.current = true;
+              relayFallbackAttemptedRef.current = false;
+              stopActiveRelay();
+              setDiagnosticReport(null);
+              setDiagnosticCopied(false);
+              setVideoError(null);
+              setIsLoadingVideo(true);
+              hasInitialSeekedRef.current = false;
+              resetOutroForNewStream();
+              upstreamStreamUrlRef.current = candidateUrl;
+              setCurrentStreamUrl(candidateUrl);
+              setReloadToken((t) => t + 1);
+              showMiniHud({
+                icon: 'info',
+                label: '原直连地址异常，已自动切换备用直连链路',
+                subLabel: '已通过服务端重新解析有效直连节点',
+              });
+              return;
+            }
+          }
+        }
+
         setDiagnosticReport(report);
       } catch (diagErr) {
         console.warn('[Stream Diagnostic Error]', diagErr);
@@ -2055,7 +2117,16 @@ export const PlayerPage: React.FC = () => {
         }
       }
     },
-    [currentStreamUrl, startRelayPlayback, showMiniHud]
+    [
+      currentStreamUrl,
+      item,
+      mediaSource,
+      playSessionId,
+      resetOutroForNewStream,
+      startRelayPlayback,
+      stopActiveRelay,
+      showMiniHud,
+    ]
   );
 
   useEffect(() => {
@@ -2070,6 +2141,7 @@ export const PlayerPage: React.FC = () => {
     }
     diagReqIdRef.current += 1;
     relayFallbackAttemptedRef.current = false;
+    altCandidateFallbackAttemptedRef.current = false;
     stopActiveRelay();
     setDiagnosticReport(null);
     setDiagnosticCopied(false);
@@ -2095,6 +2167,7 @@ export const PlayerPage: React.FC = () => {
   const handleRetryWithUrl = (targetUrl: string) => {
     diagReqIdRef.current += 1;
     relayFallbackAttemptedRef.current = false;
+    altCandidateFallbackAttemptedRef.current = false;
     stopActiveRelay();
     setDiagnosticReport(null);
     setDiagnosticCopied(false);
@@ -2115,6 +2188,7 @@ export const PlayerPage: React.FC = () => {
     }
     diagReqIdRef.current += 1;
     relayFallbackAttemptedRef.current = false;
+    altCandidateFallbackAttemptedRef.current = false;
     stopActiveRelay();
     setDiagnosticReport(null);
     setDiagnosticCopied(false);
@@ -2877,7 +2951,7 @@ export const PlayerPage: React.FC = () => {
                           className="flex-1 py-2 px-3 bg-sky-500/15 hover:bg-sky-500/25 text-sky-300 border border-sky-500/30 rounded-xl text-xs font-semibold flex items-center justify-center space-x-1.5 transition cursor-pointer"
                         >
                           <RefreshCw className="w-3.5 h-3.5" />
-                          <span>改用服务端 DirectStreamUrl 重试</span>
+                          <span>改用备用直连链路重试</span>
                         </button>
                       )}
                     </div>

@@ -818,8 +818,28 @@ function isLoopbackOrPrivateHost(rawUrl: string): boolean {
 }
 
 /**
+ * 构造标准 Emby 原画直出接口地址 (/emby/Videos/{itemId}/stream.{ext}?static=true)
+ */
+export function buildStandardEmbyStaticStreamUrl(
+  serverUrl: string,
+  itemId: string,
+  mediaSource: EmbyMediaSource,
+  playSessionId: string,
+  accessToken: string
+): string {
+  const base = normalizeServerUrl(serverUrl);
+  const rawContainer = (mediaSource.Container || 'mkv').toLowerCase().split(',')[0].trim();
+  const normalizedContainer = rawContainer === 'matroska' ? 'mkv' : rawContainer || 'mkv';
+  return `${base}/emby/Videos/${encodeURIComponent(itemId)}/stream.${normalizedContainer}?static=true&MediaSourceId=${encodeURIComponent(mediaSource.Id)}&PlaySessionId=${encodeURIComponent(playSessionId)}&api_key=${encodeURIComponent(accessToken)}&X-Emby-Token=${encodeURIComponent(accessToken)}`;
+}
+
+/**
  * 生成原生硬解播放器 (libmpv) 直连流地址
  * 100% 原始容器直出 (static=true)，无任何服务端重封装与音频转码，保留 DTS/TrueHD/Atmos 多声道与全画质
+ *
+ * 注意：对于 `.strm` (`IsRemote: true`) 媒体，服务端入库记录的 `mediaSource.Path` 往往包含过期签名或已下线的网盘穿透节点；
+ * 必须优先使用服务端返回的 `DirectStreamUrl`（含相对路径 `/videos/...`）或标准 `/emby/Videos/{id}/stream` 接口，
+ * 以便经过 Emby 服务端 302/307 中间件动态重写并重签最新直链。
  */
 export function buildNativeDirectStreamUrl(
   serverUrl: string,
@@ -828,22 +848,21 @@ export function buildNativeDirectStreamUrl(
   playSessionId: string,
   accessToken: string
 ): string {
-  const base = normalizeServerUrl(serverUrl);
-  if (mediaSource.DirectStreamUrl && /^https?:\/\//i.test(mediaSource.DirectStreamUrl)) {
-    return mediaSource.DirectStreamUrl;
+  const directCandidate = resolveEmbyDirectStreamCandidate(serverUrl, mediaSource, accessToken);
+  if (directCandidate) {
+    return directCandidate;
   }
-  if (mediaSource.IsRemote && mediaSource.Path && /^https?:\/\//i.test(mediaSource.Path)) {
-    if (!isLoopbackOrPrivateHost(mediaSource.Path) || isLoopbackOrPrivateHost(base)) {
-      return mediaSource.Path;
-    }
-  }
-  const rawContainer = (mediaSource.Container || 'mkv').toLowerCase().split(',')[0].trim();
-  const normalizedContainer = rawContainer === 'matroska' ? 'mkv' : rawContainer || 'mkv';
-  return `${base}/emby/Videos/${encodeURIComponent(itemId)}/stream.${normalizedContainer}?static=true&MediaSourceId=${encodeURIComponent(mediaSource.Id)}&PlaySessionId=${encodeURIComponent(playSessionId)}&api_key=${encodeURIComponent(accessToken)}&X-Emby-Token=${encodeURIComponent(accessToken)}`;
+  return buildStandardEmbyStaticStreamUrl(
+    serverUrl,
+    itemId,
+    mediaSource,
+    playSessionId,
+    accessToken
+  );
 }
 
 /**
- * 解析服务端 PlaybackInfo 返回的 DirectStreamUrl 作为备选无转码直链地址
+ * 解析服务端 PlaybackInfo 返回的 DirectStreamUrl 作为无转码直连地址
  * 严格排除含 VideoCodec/AudioCodec/TranscodingProtocol 的转码流，防止触发服务端转码
  */
 export function resolveEmbyDirectStreamCandidate(
@@ -858,25 +877,63 @@ export function resolveEmbyDirectStreamCandidate(
     return null;
   }
 
+  let joined: string;
   if (/^https?:\/\//i.test(raw)) {
-    return raw;
-  }
-
-  if (!raw.startsWith('/')) {
+    joined = raw;
+  } else if (raw.startsWith('/')) {
+    const base = normalizeServerUrl(serverUrl);
+    joined =
+      base.toLowerCase().endsWith('/emby') && raw.toLowerCase().startsWith('/emby/')
+        ? `${base}${raw.slice(5)}`
+        : `${base}${raw}`;
+  } else {
     return null;
   }
 
-  const base = normalizeServerUrl(serverUrl);
-  let joined =
-    base.toLowerCase().endsWith('/emby') && raw.toLowerCase().startsWith('/emby/')
-      ? `${base}${raw.slice(5)}`
-      : `${base}${raw}`;
+  if (!/[?&]static=/i.test(joined)) {
+    joined += `${joined.includes('?') ? '&' : '?'}static=true`;
+  }
 
   if (accessToken && !/[?&](api_key|X-Emby-Token)=/i.test(joined)) {
     joined += `${joined.includes('?') ? '&' : '?'}api_key=${encodeURIComponent(accessToken)}`;
   }
 
   return joined;
+}
+
+/**
+ * 按优先级生成不触发转码的备选直连候选列表（已去重并排除当前失败地址）
+ */
+export function resolveEmbyFallbackStreamCandidates(
+  serverUrl: string,
+  itemId: string,
+  mediaSource: EmbyMediaSource,
+  playSessionId: string,
+  accessToken: string,
+  currentUrl?: string | null
+): string[] {
+  const base = normalizeServerUrl(serverUrl);
+  const rawCandidates: Array<string | null | undefined> = [
+    resolveEmbyDirectStreamCandidate(serverUrl, mediaSource, accessToken),
+    buildStandardEmbyStaticStreamUrl(serverUrl, itemId, mediaSource, playSessionId, accessToken),
+  ];
+
+  if (mediaSource.IsRemote && mediaSource.Path && /^https?:\/\//i.test(mediaSource.Path)) {
+    if (!isLoopbackOrPrivateHost(mediaSource.Path) || isLoopbackOrPrivateHost(base)) {
+      rawCandidates.push(mediaSource.Path.trim());
+    }
+  }
+
+  const seen = new Set<string>();
+  const currentTrimmed = currentUrl?.trim();
+  const result: string[] = [];
+  for (const candidate of rawCandidates) {
+    const trimmed = candidate?.trim();
+    if (!trimmed || trimmed === currentTrimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    result.push(trimmed);
+  }
+  return result;
 }
 
 /**

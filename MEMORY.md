@@ -618,5 +618,13 @@ pnpm tauri build
 - **UI 设置页与播放器监控联调**：
   - 新增共用工具 [`preloadUtils.ts`](file:///d:/wade/code/emby-tauri-player/src/player/preloadUtils.ts)，完善 [`SettingsPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/SettingsPage.tsx) 缓冲/预加载/256M~2G安全上限与触发时机设置卡、[`VideoProPanel.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/VideoProPanel.tsx) 快捷开关与实时预加载进度条、[`PlaybackInfoModal.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/PlaybackInfoModal.tsx) 前向缓冲目标与下一集预载状态展示及剪贴板导出。
 
+## 32. 修复 `.strm` (`IsRemote`) 陈旧直链绕过 Emby 302/307 节点重写导致的 HTTP 530 / CF 1033 播放中断 (2026-11-22)
+
+- **根因**：对于 `.strm` (`IsRemote: true`) 条目，`PlaybackInfo` 返回的 `mediaSource.Path` 是入库时静态记录的 URL（如已下线 Cloudflare Tunnel 节点 `node.example.com` 返回 `HTTP 530 / error code: 1033`），而相对路径 `DirectStreamUrl`（`/videos/{id}/stream?...`）及标准 `/emby/Videos/{id}/stream.{ext}?static=true` 会经过 Emby 服务端 307 中间件动态重写至最新健康节点并重签。旧实现未拼接 `/` 开头的相对 `DirectStreamUrl`，且将 `mediaSource.Path` 置于标准流之前，导致直接访问已失效节点。
+- **修复**：
+  - [`embyClient.ts`](file:///d:/wade/code/emby-tauri-player/src/api/embyClient.ts)：抽离 `buildStandardEmbyStaticStreamUrl`，升级 `resolveEmbyDirectStreamCandidate` 完整兼容 `/` 开头相对路径并自动补齐 `static=true` 与 `api_key`；改造 `buildNativeDirectStreamUrl` 严格优先返回 `DirectStreamUrl` 其次标准 `/emby/Videos/{id}/stream`，不再绕过服务端直连 `.strm` 原始 `Path`；新增 `resolveEmbyFallbackStreamCandidates` 按优先级提供无转码备选直连列表。
+  - [`PlayerPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/PlayerPage.tsx)：当 `diagnose_stream_url` 发现主直连不可达时，单次自动探测备用直连链路并无缝切换重播，错误卡片操作按钮支持手动切换备用直连链路。
+  - [`preload.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/preload.rs)：抽离 `summarize_diagnostic_outcome` 并精准识别 Cloudflare `HTTP 530 (error code: 1033)` 与 `521~526` 源站异常提示，补充单元测试覆盖。
+
 
 

@@ -1693,6 +1693,61 @@ async fn read_body_snippet(mut resp: reqwest::Response) -> Option<String> {
     Some(snippet)
 }
 
+fn summarize_diagnostic_outcome(
+    exceeded_redirects: bool,
+    reachable: bool,
+    last: Option<&DiagnosticHopDto>,
+    final_status: Option<u16>,
+    final_is_html: bool,
+) -> String {
+    if exceeded_redirects {
+        return "媒体流重定向次数超过限制，请检查反代或直链配置".to_string();
+    }
+    if reachable {
+        return "Rust 网络栈探测成功（问题可能位于 libmpv 网络/TLS/302 跳转兼容），可使用内置中转通道播放"
+            .to_string();
+    }
+    if let Some(err) = last.and_then(|h| h.error.as_deref()) {
+        return format!("网络或 TLS 连接失败：{err}");
+    }
+
+    let body_lower = last
+        .and_then(|h| h.body_snippet.as_deref())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+
+    let cf_challenge = last
+        .and_then(|h| h.cf_mitigated.as_deref())
+        .map(|v| v.eq_ignore_ascii_case("challenge"))
+        .unwrap_or(false)
+        || body_lower.contains("cf-challenge")
+        || body_lower.contains("just a moment")
+        || body_lower.contains("attention required");
+
+    if cf_challenge {
+        return "命中 Cloudflare 人机/WAF 质询拦截，请切换代理出口或检查服务端规则".to_string();
+    }
+    if final_is_html {
+        return "服务器返回了 HTML 页面而非视频流（可能被防盗链、WAF 或登录页拦截）".to_string();
+    }
+    if final_status == Some(530) || body_lower.contains("error code: 1033") {
+        return "上游存储节点返回 HTTP 530 (Cloudflare error 1033)：直链指向的 Cloudflare Tunnel 穿透节点已离线或迁移（若为 .strm 媒体，需经 Emby 服务端 /videos/{id}/stream 302 动态重写节点）".to_string();
+    }
+
+    match final_status {
+        Some(403) => "服务器返回 HTTP 403 拒绝访问（常见原因：客户端/UA 白名单拦截、Token 失效或 302 网盘风控）".to_string(),
+        Some(401) => "服务器返回 HTTP 401 未授权，请重新登录或检查服务器 Token".to_string(),
+        Some(404) => "服务器返回 HTTP 404 资源不存在，可尝试改用服务端 DirectStreamUrl 重试".to_string(),
+        Some(400) => "服务器返回 HTTP 400 请求参数异常".to_string(),
+        Some(code @ (521..=526)) => {
+            format!("上游源站连接异常 (Cloudflare HTTP {code})：直链源站宕机、超时或 SSL 握手失败")
+        }
+        Some(code) if code >= 500 => format!("上游服务器或直链返回服务端错误 (HTTP {code})"),
+        Some(code) => format!("上游返回非预期 HTTP 状态码 ({code})"),
+        None => "未能建立有效的 HTTP 响应，请检查网络连接或代理设置".to_string(),
+    }
+}
+
 #[tauri::command]
 pub async fn diagnose_stream_url(
     request: DiagnoseStreamRequest,
@@ -1863,44 +1918,13 @@ pub async fn diagnose_stream_url(
         .unwrap_or(false);
     let reachable = matches!(final_status, Some(200 | 206)) && !final_is_html && !exceeded_redirects;
 
-    let summary = if exceeded_redirects {
-        "媒体流重定向次数超过限制，请检查反代或直链配置".to_string()
-    } else if reachable {
-        "Rust 网络栈探测成功（问题可能位于 libmpv 网络/TLS/302 跳转兼容），可使用内置中转通道播放"
-            .to_string()
-    } else if let Some(err) = last.and_then(|h| h.error.as_deref()) {
-        format!("网络或 TLS 连接失败：{err}")
-    } else {
-        let cf_challenge = last
-            .and_then(|h| h.cf_mitigated.as_deref())
-            .map(|v| v.eq_ignore_ascii_case("challenge"))
-            .unwrap_or(false)
-            || last
-                .and_then(|h| h.body_snippet.as_deref())
-                .map(|b| {
-                    let lb = b.to_ascii_lowercase();
-                    lb.contains("cf-challenge")
-                        || lb.contains("just a moment")
-                        || lb.contains("attention required")
-                })
-                .unwrap_or(false);
-
-        if cf_challenge {
-            "命中 Cloudflare 人机/WAF 质询拦截，请切换代理出口或检查服务端规则".to_string()
-        } else if final_is_html {
-            "服务器返回了 HTML 页面而非视频流（可能被防盗链、WAF 或登录页拦截）".to_string()
-        } else {
-            match final_status {
-                Some(403) => "服务器返回 HTTP 403 拒绝访问（常见原因：客户端/UA 白名单拦截、Token 失效或 302 网盘风控）".to_string(),
-                Some(401) => "服务器返回 HTTP 401 未授权，请重新登录或检查服务器 Token".to_string(),
-                Some(404) => "服务器返回 HTTP 404 资源不存在，可尝试改用服务端 DirectStreamUrl 重试".to_string(),
-                Some(400) => "服务器返回 HTTP 400 请求参数异常".to_string(),
-                Some(code) if code >= 500 => format!("上游服务器或直链返回服务端错误 (HTTP {code})"),
-                Some(code) => format!("上游返回非预期 HTTP 状态码 ({code})"),
-                None => "未能建立有效的 HTTP 响应，请检查网络连接或代理设置".to_string(),
-            }
-        }
-    };
+    let summary = summarize_diagnostic_outcome(
+        exceeded_redirects,
+        reachable,
+        last,
+        final_status,
+        final_is_html,
+    );
 
     Ok(StreamDiagnosticReport {
         reachable,
@@ -2136,5 +2160,37 @@ mod tests {
         assert!(same_origin(&a, &b));
         assert!(!same_origin(&a, &c));
         assert!(!same_origin(&a, &d));
+    }
+
+    #[test]
+    fn test_summarize_diagnostic_outcome_cloudflare_530_and_522() {
+        let hop_530 = DiagnosticHopDto {
+            hop: 1,
+            url: "https://node.example.com/d/test.mkv?sign=***".to_string(),
+            status: Some(530),
+            status_text: None,
+            location: None,
+            server: Some("cloudflare".to_string()),
+            content_type: Some("text/plain; charset=UTF-8".to_string()),
+            content_range: None,
+            accept_ranges: None,
+            cf_ray: Some("abc-LHR".to_string()),
+            cf_mitigated: None,
+            body_snippet: Some("error code: 1033".to_string()),
+            error: None,
+        };
+        let summary_530 = summarize_diagnostic_outcome(false, false, Some(&hop_530), Some(530), false);
+        assert!(summary_530.contains("530"));
+        assert!(summary_530.contains("1033"));
+        assert!(summary_530.contains(".strm"));
+
+        let hop_522 = DiagnosticHopDto {
+            status: Some(522),
+            body_snippet: None,
+            ..hop_530
+        };
+        let summary_522 = summarize_diagnostic_outcome(false, false, Some(&hop_522), Some(522), false);
+        assert!(summary_522.contains("522"));
+        assert!(summary_522.contains("Cloudflare"));
     }
 }

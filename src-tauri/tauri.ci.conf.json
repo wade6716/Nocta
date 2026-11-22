@@ -4,6 +4,6 @@
     "beforeBuildCommand": ""
   },
   "bundle": {
-    "createUpdaterArtifacts": true
+    "createUpdaterArtifacts": false
   }
 }

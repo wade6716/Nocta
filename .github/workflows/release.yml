@@ -365,12 +365,36 @@ jobs:
           path: src-tauri/lib
           key: mpv-bundle-v1-${{ matrix.mpv_platform }}-${{ matrix.mpv_arch }}-${{ hashFiles('scripts/setup-mpv.mjs') }}
 
+      - name: Configure Updater Signing
+        shell: bash
+        env:
+          RAW_SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          RAW_SIGNING_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          trimmed_key="$(printf '%s' "${RAW_SIGNING_KEY:-}" | tr -d '\r\n\t ')"
+          if [ -n "$trimmed_key" ]; then
+            echo "TAURI_SIGNING_PRIVATE_KEY is configured; enabling updater artifacts (.sig)."
+            node -e '
+              const fs = require("fs");
+              const p = "src-tauri/tauri.ci.conf.json";
+              const cfg = JSON.parse(fs.readFileSync(p, "utf8"));
+              cfg.bundle = { ...(cfg.bundle || {}), createUpdaterArtifacts: true };
+              fs.writeFileSync(p, JSON.stringify(cfg, null, 2) + "\n");
+            '
+            {
+              echo "TAURI_SIGNING_PRIVATE_KEY<<EOF"
+              printf '%s\n' "${RAW_SIGNING_KEY}"
+              echo "EOF"
+              echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=${RAW_SIGNING_PASSWORD:-}"
+            } >> "$GITHUB_ENV"
+          else
+            echo "::warning::TAURI_SIGNING_PRIVATE_KEY is not set in GitHub Actions Secrets. Building installers without updater .sig artifacts."
+          fi
+
       - name: Build and Release via Tauri Action
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tauriScript: 'cargo tauri'
           tagName: ${{ needs.build-frontend.outputs.tag_name }}

@@ -303,8 +303,8 @@ jobs:
             if ! command -v "$tool" >/dev/null 2>&1; then
               versioned="$(compgen -c | grep -E "^${tool}-[0-9]+$" | sort -V | tail -n 1 || true)"
               if [ -n "$versioned" ]; then
-                echo "Linking $versioned -> /usr/local/bin/$tool"
-                sudo ln -sf "$(command -v "$versioned")" "/usr/local/bin/$tool"
+                echo "Linking $versioned -> /usr/bin/$tool"
+                sudo ln -sf "$(command -v "$versioned")" "/usr/bin/$tool"
               fi
             fi
           done
@@ -313,11 +313,10 @@ jobs:
             echo "XWIN_CACHE_DIR=$HOME/.cache/cargo-xwin"
             echo "RC=llvm-rc"
           } >> "$GITHUB_ENV"
-          command -v cargo-xwin clang-cl lld-link llvm-rc makensis 7z
+          command -v cargo-xwin clang-cl lld-link llvm-rc llvm-lib makensis 7z
           cargo-xwin --version
           clang-cl --version
           lld-link --version
-          llvm-rc --version
           makensis -VERSION
 
       - name: Restore cargo-xwin Windows SDK Cache

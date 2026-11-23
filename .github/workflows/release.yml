@@ -31,8 +31,12 @@ jobs:
   build-frontend:
     name: Build Frontend & Metadata
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
     outputs:
       should_release: ${{ steps.meta.outputs.should_release }}
+      macos_x64_mpv_cached: ${{ steps.meta.outputs.macos_x64_mpv_cached }}
       tag_name: ${{ steps.meta.outputs.tag_name }}
       release_name: ${{ steps.meta.outputs.release_name }}
       is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
@@ -46,6 +50,9 @@ jobs:
         id: meta
         shell: bash
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          MACOS_X64_MPV_KEY: mpv-bundle-v2-macos-x86_64-${{ hashFiles('scripts/setup-mpv.mjs') }}
           INPUT_TAG_NAME: ${{ inputs.tag_name }}
           INPUT_PRERELEASE: ${{ inputs.prerelease }}
           INPUT_RELEASE_DRAFT: ${{ inputs.release_draft }}
@@ -78,6 +85,33 @@ jobs:
               }
             }
 
+            let macosX64MpvCached = "true";
+            if (shouldRelease === "true") {
+              macosX64MpvCached = "false";
+              const repo = process.env.GITHUB_REPOSITORY || "";
+              const cacheKey = process.env.MACOS_X64_MPV_KEY || "";
+              if (repo && cacheKey) {
+                try {
+                  const apiOut = execFileSync(
+                    "gh",
+                    [
+                      "api",
+                      `repos/${repo}/actions/caches?ref=${encodeURIComponent("refs/heads/main")}&key=${encodeURIComponent(cacheKey)}`,
+                    ],
+                    { encoding: "utf8" }
+                  );
+                  const parsed = JSON.parse(apiOut);
+                  const caches = Array.isArray(parsed.actions_caches) ? parsed.actions_caches : [];
+                  if (caches.some((c) => c && c.key === cacheKey)) {
+                    macosX64MpvCached = "true";
+                  }
+                } catch (err) {
+                  console.log(`macOS Intel mpv cache lookup skipped: ${err.message || err}`);
+                }
+              }
+              console.log(`macOS Intel mpv cache (${cacheKey}) on main: ${macosX64MpvCached}`);
+            }
+
             const releaseName = "Nocta · 夜幕 " + tagName;
             const isPrerelease = (process.env.INPUT_PRERELEASE === "true" || /(alpha|beta|rc)/i.test(tagName)) ? "true" : "false";
             const releaseDraft = process.env.INPUT_RELEASE_DRAFT === "true" ? "true" : "false";
@@ -85,6 +119,7 @@ jobs:
             const tauriCliVersion = rawCli.replace(/^[^\d]*/, "");
             const lines = [
               `should_release=${shouldRelease}`,
+              `macos_x64_mpv_cached=${macosX64MpvCached}`,
               `tag_name=${tagName}`,
               `release_name=${releaseName}`,
               `is_prerelease=${isPrerelease}`,
@@ -123,11 +158,100 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+  # 阶段 1.5（仅当 main 上缺少 x86_64 macOS libmpv 缓存时触发）：借 macos-15-intel 预装 Intel brew 生成纯 x86_64 动态库缓存
+  prepare-macos-x64-mpv:
+    name: Prepare macOS Intel libmpv Bundle (Cache Miss Only)
+    needs: build-frontend
+    if: needs.build-frontend.outputs.should_release == 'true' && needs.build-frontend.outputs.macos_x64_mpv_cached != 'true'
+    runs-on: macos-15-intel
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Install Intel macOS libmpv Dependencies
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+          HOMEBREW_NO_INSTALL_CLEANUP: '1'
+          HOMEBREW_NO_ENV_HINTS: '1'
+        run: brew install mpv molten-vk dylibbundler
+
+      - name: Download Intel libmpv-wrapper
+        run: node scripts/setup-mpv.mjs --platform macos --arch x86_64 --wrapper-only
+
+      - name: Bundle Self-Contained x86_64 libmpv & MoltenVK
+        run: |
+          set -euo pipefail
+          BREW_PREFIX="$(brew --prefix)"
+          MPV_LIB="$BREW_PREFIX/opt/mpv/lib/libmpv.2.dylib"
+          if [ ! -f "$MPV_LIB" ]; then
+            MPV_LIB="$BREW_PREFIX/lib/libmpv.dylib"
+          fi
+
+          chmod -R u+w src-tauri/lib/ 2>/dev/null || true
+          rm -f src-tauri/lib/libmpv.dylib src-tauri/lib/libmpv.2.dylib
+          cp -fL "$MPV_LIB" src-tauri/lib/libmpv.dylib
+          chmod 755 src-tauri/lib/libmpv.dylib
+
+          dylibbundler -of -b \
+            -x src-tauri/lib/libmpv.dylib \
+            -d src-tauri/lib/ \
+            -p "@loader_path/"
+
+          rm -f src-tauri/lib/libmpv.2.dylib
+          cp -fL src-tauri/lib/libmpv.dylib src-tauri/lib/libmpv.2.dylib
+          chmod 755 src-tauri/lib/libmpv.2.dylib
+
+          MOLTENVK_LIB="$BREW_PREFIX/opt/molten-vk/lib/libMoltenVK.dylib"
+          if [ ! -f "$MOLTENVK_LIB" ]; then
+            MOLTENVK_LIB="$BREW_PREFIX/lib/libMoltenVK.dylib"
+          fi
+          if [ -f "$MOLTENVK_LIB" ]; then
+            rm -f src-tauri/lib/libMoltenVK.dylib
+            cp -fL "$MOLTENVK_LIB" src-tauri/lib/libMoltenVK.dylib
+            chmod 755 src-tauri/lib/libMoltenVK.dylib
+            cat > src-tauri/lib/MoltenVK_icd.json << 'EOF'
+          {
+            "file_format_version": "1.0.0",
+            "ICD": {
+              "library_path": "./libMoltenVK.dylib",
+              "api_version": "1.2.0"
+            }
+          }
+          EOF
+          fi
+
+          chmod -R u+w src-tauri/lib/
+          find src-tauri/lib -maxdepth 1 -name '*.dylib' -exec chmod 755 {} +
+          find src-tauri/lib -maxdepth 1 -name '*.dylib' -print0 | xargs -0 -P "$(sysctl -n hw.ncpu)" -I {} codesign --force --sign - "{}"
+          for lib in src-tauri/lib/libmpv-wrapper.dylib src-tauri/lib/libmpv.dylib src-tauri/lib/libMoltenVK.dylib; do
+            if ! lipo -archs "$lib" 2>/dev/null | grep -qw "x86_64"; then
+              echo "Architecture check failed for $lib (expected x86_64):"
+              lipo -info "$lib" || true
+              exit 1
+            fi
+          done
+          ls -lh src-tauri/lib/
+
+      - name: Save macOS Intel libmpv Bundle Cache
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: src-tauri/lib
+          key: mpv-bundle-v2-macos-x86_64-${{ hashFiles('scripts/setup-mpv.mjs') }}
+
+      - name: Upload Prepared macOS Intel libmpv Bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-x64-mpv-bundle
+          path: src-tauri/lib/
+          retention-days: 1
+          if-no-files-found: error
+
   # 阶段 2：4 端并发编译（复用前端 dist/、预编译 cargo-tauri、cargo-xwin Linux 交叉编译 Windows NSIS 及 main 热缓存）
   release-tauri:
     name: Build (${{ matrix.name_suffix }})
-    needs: build-frontend
-    if: needs.build-frontend.outputs.should_release == 'true'
+    needs: [build-frontend, prepare-macos-x64-mpv]
+    if: always() && needs.build-frontend.outputs.should_release == 'true' && (needs.prepare-macos-x64-mpv.result == 'success' || needs.prepare-macos-x64-mpv.result == 'skipped')
     permissions:
       contents: write
     strategy:
@@ -142,6 +266,7 @@ jobs:
             asset_name_pattern: '[name]_[version]_windows_[arch][setup][ext]'
             mpv_platform: 'windows'
             mpv_arch: 'x86_64'
+            mpv_cache_version: 'v1'
             cli_asset: 'cargo-tauri-x86_64-unknown-linux-gnu.tgz'
             cache_id: 'windows-x86_64-xwin'
             use_xwin: true
@@ -154,11 +279,12 @@ jobs:
             asset_name_pattern: '[name]_[version]_macos_aarch64[ext]'
             mpv_platform: 'macos'
             mpv_arch: 'aarch64'
+            mpv_cache_version: 'v2'
             cli_asset: 'cargo-tauri-aarch64-apple-darwin.zip'
             cache_id: 'macos-aarch64'
             use_xwin: false
 
-          # 3. macOS Intel (在 Apple Silicon macOS-15 上交叉编译 x86_64-apple-darwin，共享 ARM64 高速算力与 cargo-tauri)
+          # 3. macOS Intel (在 Apple Silicon macos-15 上交叉编译 x86_64-apple-darwin，共享 ARM64 高速算力与 cargo-tauri)
           - platform: macos-15
             args: '--target x86_64-apple-darwin --bundles app,dmg --config src-tauri/tauri.ci.conf.json'
             rust_targets: 'x86_64-apple-darwin'
@@ -166,6 +292,7 @@ jobs:
             asset_name_pattern: '[name]_[version]_macos_x64[ext]'
             mpv_platform: 'macos'
             mpv_arch: 'x86_64'
+            mpv_cache_version: 'v2'
             cli_asset: 'cargo-tauri-aarch64-apple-darwin.zip'
             cache_id: 'macos-x86_64-on-arm64'
             use_xwin: false
@@ -178,6 +305,7 @@ jobs:
             asset_name_pattern: '[name]_[version]_linux_[arch][ext]'
             mpv_platform: 'linux'
             mpv_arch: 'x86_64'
+            mpv_cache_version: 'v1'
             cli_asset: 'cargo-tauri-x86_64-unknown-linux-gnu.tgz'
             cache_id: 'linux-x86_64'
             use_xwin: false
@@ -348,7 +476,19 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: src-tauri/lib
-          key: mpv-bundle-v1-${{ matrix.mpv_platform }}-${{ matrix.mpv_arch }}-${{ hashFiles('scripts/setup-mpv.mjs') }}
+          key: mpv-bundle-${{ matrix.mpv_cache_version }}-${{ matrix.mpv_platform }}-${{ matrix.mpv_arch }}-${{ hashFiles('scripts/setup-mpv.mjs') }}
+
+      - name: Download Prepared macOS Intel libmpv Artifact
+        if: matrix.mpv_platform == 'macos' && matrix.mpv_arch == 'x86_64' && steps.mpv-cache.outputs.cache-hit != 'true' && needs.prepare-macos-x64-mpv.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-x64-mpv-bundle
+          path: src-tauri/lib/
+
+      - name: Restore Executable Permissions on Downloaded macOS dylibs
+        if: matrix.mpv_platform == 'macos' && matrix.mpv_arch == 'x86_64' && steps.mpv-cache.outputs.cache-hit != 'true' && needs.prepare-macos-x64-mpv.result == 'success'
+        shell: bash
+        run: chmod 755 src-tauri/lib/*.dylib
 
       - name: Verify Cached libmpv Libraries
         id: verify-mpv
@@ -400,60 +540,43 @@ jobs:
             echo "libmpv cache miss or incomplete for $MPV_PLATFORM ($MPV_ARCH), will fetch fresh libraries."
           fi
 
+      - name: Ensure macOS Intel libmpv Bundle Ready
+        if: matrix.mpv_platform == 'macos' && matrix.mpv_arch == 'x86_64' && steps.verify-mpv.outputs.ready != 'true'
+        shell: bash
+        run: |
+          echo "::error::Missing valid x86_64 macOS libmpv bundle on macos-15 runner (Rosetta Homebrew installation is unsupported). Re-run workflow on main to refresh mpv-bundle-v2-macos-x86_64 cache."
+          exit 1
+
       - name: Install macOS Dependencies
-        if: startsWith(matrix.platform, 'macos') && steps.verify-mpv.outputs.ready != 'true'
+        if: startsWith(matrix.platform, 'macos') && matrix.mpv_arch == 'aarch64' && steps.verify-mpv.outputs.ready != 'true'
         env:
           HOMEBREW_NO_AUTO_UPDATE: '1'
           HOMEBREW_NO_INSTALL_CLEANUP: '1'
           HOMEBREW_NO_ENV_HINTS: '1'
-          MPV_ARCH: ${{ matrix.mpv_arch }}
-        run: |
-          if [ "$MPV_ARCH" = "x86_64" ] && [ "$(uname -m)" = "arm64" ]; then
-            softwareupdate --install-rosetta --agree-to-license || true
-            if [ ! -x /usr/local/bin/brew ]; then
-              NONINTERACTIVE=1 arch -x86_64 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-            fi
-            arch -x86_64 /usr/local/bin/brew install mpv molten-vk dylibbundler
-          else
-            brew install mpv molten-vk dylibbundler
-          fi
+        run: brew install mpv molten-vk dylibbundler
 
       - name: Setup libmpv and Wrapper Libraries
-        if: steps.verify-mpv.outputs.ready != 'true'
+        if: steps.verify-mpv.outputs.ready != 'true' && !(matrix.mpv_platform == 'macos' && matrix.mpv_arch == 'x86_64')
         run: node scripts/setup-mpv.mjs --platform ${{ matrix.mpv_platform }} --arch ${{ matrix.mpv_arch }}${{ matrix.mpv_platform == 'macos' && ' --wrapper-only' || '' }}
 
       - name: Bundle Self-Contained libmpv & MoltenVK for macOS
-        if: startsWith(matrix.platform, 'macos') && steps.verify-mpv.outputs.ready != 'true'
-        env:
-          MPV_ARCH: ${{ matrix.mpv_arch }}
+        if: startsWith(matrix.platform, 'macos') && matrix.mpv_arch == 'aarch64' && steps.verify-mpv.outputs.ready != 'true'
         run: |
           set -euo pipefail
-          if [ "$MPV_ARCH" = "x86_64" ] && [ "$(uname -m)" = "arm64" ]; then
-            BREW_PREFIX="/usr/local"
-            DYLIBBUNDLER_CMD=(arch -x86_64 /usr/local/bin/dylibbundler)
-            EXPECTED_ARCH="x86_64"
-          else
-            BREW_PREFIX="$(brew --prefix)"
-            DYLIBBUNDLER_CMD=(dylibbundler)
-            EXPECTED_ARCH="$MPV_ARCH"
-            if [ "$EXPECTED_ARCH" = "aarch64" ]; then
-              EXPECTED_ARCH="arm64"
-            fi
-          fi
-
+          BREW_PREFIX="$(brew --prefix)"
           MPV_LIB="$BREW_PREFIX/opt/mpv/lib/libmpv.2.dylib"
           if [ ! -f "$MPV_LIB" ]; then
             MPV_LIB="$BREW_PREFIX/lib/libmpv.dylib"
           fi
 
-          # 确保目录和已有文件具有写权限，并先清理旧软链/文件，杜绝 cp 报错 Permission denied
+          # 确保目录和已有文件具有写权限，并精确清理核心 libmpv 文件，严禁使用 libmpv*.dylib 误删 libmpv-wrapper.dylib
           chmod -R u+w src-tauri/lib/ 2>/dev/null || true
-          rm -f src-tauri/lib/libmpv*.dylib
+          rm -f src-tauri/lib/libmpv.dylib src-tauri/lib/libmpv.2.dylib
           cp -fL "$MPV_LIB" src-tauri/lib/libmpv.dylib
           chmod 755 src-tauri/lib/libmpv.dylib
 
           # 将 libmpv.dylib 的所有非系统动态库依赖打包进 src-tauri/lib/ 并重写为 @loader_path/
-          "${DYLIBBUNDLER_CMD[@]}" -of -b \
+          dylibbundler -of -b \
             -x src-tauri/lib/libmpv.dylib \
             -d src-tauri/lib/ \
             -p "@loader_path/"
@@ -488,8 +611,8 @@ jobs:
           find src-tauri/lib -maxdepth 1 -name '*.dylib' -exec chmod 755 {} +
           find src-tauri/lib -maxdepth 1 -name '*.dylib' -print0 | xargs -0 -P "$(sysctl -n hw.ncpu)" -I {} codesign --force --sign - "{}"
           for lib in src-tauri/lib/libmpv-wrapper.dylib src-tauri/lib/libmpv.dylib src-tauri/lib/libMoltenVK.dylib; do
-            if ! lipo -archs "$lib" 2>/dev/null | grep -qw "$EXPECTED_ARCH"; then
-              echo "Architecture check failed for $lib (expected $EXPECTED_ARCH):"
+            if ! lipo -archs "$lib" 2>/dev/null | grep -qw "arm64"; then
+              echo "Architecture check failed for $lib (expected arm64):"
               lipo -info "$lib" || true
               exit 1
             fi
@@ -497,11 +620,11 @@ jobs:
           ls -lh src-tauri/lib/
 
       - name: Save Self-Contained libmpv Bundle Cache
-        if: github.ref == 'refs/heads/main' && steps.verify-mpv.outputs.ready != 'true'
+        if: github.ref == 'refs/heads/main' && steps.mpv-cache.outputs.cache-hit != 'true' && (steps.verify-mpv.outputs.ready != 'true' || (matrix.mpv_platform == 'macos' && matrix.mpv_arch == 'x86_64'))
         uses: actions/cache/save@v4
         with:
           path: src-tauri/lib
-          key: mpv-bundle-v1-${{ matrix.mpv_platform }}-${{ matrix.mpv_arch }}-${{ hashFiles('scripts/setup-mpv.mjs') }}
+          key: mpv-bundle-${{ matrix.mpv_cache_version }}-${{ matrix.mpv_platform }}-${{ matrix.mpv_arch }}-${{ hashFiles('scripts/setup-mpv.mjs') }}
 
       - name: Configure Updater Signing
         shell: bash

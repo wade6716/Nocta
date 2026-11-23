@@ -657,7 +657,7 @@ pnpm tauri build
 - **变更要点（[`.github/workflows/release.yml`](file:///d:/wade/code/emby-tauri-player/.github/workflows/release.yml)）**：
   - 将 `Build (macOS Intel)` 的 `platform` 从老旧慢速 `macos-15-intel` 迁至 `macos-15`（ARM64），交叉编译 `--target x86_64-apple-darwin`；
   - 将 `cli_asset` 改为宿主对应的 `cargo-tauri-aarch64-apple-darwin.zip`，`cache_id` 设为 `macos-x86_64-on-arm64`（与原 Intel 宿主 `proc-macro` 缓存隔离），同时延续 `mpv-bundle-v1-macos-x86_64-*` 复用已有 `x86_64` `libmpv`/`MoltenVK` 动态库缓存；
-  - 在 `verify-mpv` 与 `Bundle Self-Contained libmpv & MoltenVK for macOS` 接入 `lipo -archs` 强制架构校验，缓存未命中时通过 Rosetta (`arch -x86_64 /usr/local/bin/brew`) 安装与打包纯 `x86_64` 依赖。
+  - 在 `verify-mpv` 与 `Bundle Self-Contained libmpv & MoltenVK for macOS` 接入 `lipo -archs` 强制架构校验；修复了原 `rm -f src-tauri/lib/libmpv*.dylib` 通配符误删 `libmpv-wrapper.dylib` 并污染 `v1` macOS 缓存的历史缺陷（改为精确删 `libmpv.dylib` 与 `libmpv.2.dylib` 并将 macOS `mpv_cache_version` 升为 `v2`）；针对 Homebrew 拒绝 Rosetta 安装 Intel 版的问题，新增按需前哨任务 `prepare-macos-x64-mpv`——仅当 `main` 上缺失 `mpv-bundle-v2-macos-x86_64-*` 时才拉起 `macos-15-intel` 预打包 `x86_64` 动态库，常规构建 0 秒跳过，全程在 `macos-15` 完成交叉编译。
 - **发版升级**：同步更新 [`package.json`](file:///d:/wade/code/emby-tauri-player/package.json) 至 `0.1.0-alpha.15`，推送 `main` 后由工作流在热缓存上下文自动触发构建与发布。
 
 

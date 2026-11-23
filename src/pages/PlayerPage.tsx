@@ -1937,6 +1937,8 @@ export const PlayerPage: React.FC = () => {
   const proxySummaryLabel =
     proxyInfo?.mode === 'system_http' || proxyInfo?.mode === 'manual_http'
       ? 'HTTP 代理'
+      : proxyInfo?.mode === 'socks5_bridge'
+      ? 'SOCKS5 隧道代理'
       : proxyInfo?.mode === 'lan_bypass'
       ? 'LAN 直通'
       : '直连';
@@ -1983,7 +1985,7 @@ export const PlayerPage: React.FC = () => {
       const started = await invoke<{ token: string; localUrl: string }>('start_stream_relay', {
         request: {
           url: target,
-          proxyUrl: resolvedProxy.effectiveProxy || null,
+          proxyUrl: (resolvedProxy.rustProxy ?? resolvedProxy.effectiveProxy) || null,
           headers: {
             'User-Agent': ua,
             ...streamHeaders,
@@ -2027,7 +2029,7 @@ export const PlayerPage: React.FC = () => {
         const report = await invoke<StreamDiagnosticReport>('diagnose_stream_url', {
           request: {
             url: target,
-            proxyUrl: resolvedProxy.effectiveProxy || null,
+            proxyUrl: (resolvedProxy.rustProxy ?? resolvedProxy.effectiveProxy) || null,
             headers: {
               'User-Agent': ua,
               ...streamHeaders,
@@ -2076,7 +2078,7 @@ export const PlayerPage: React.FC = () => {
             const altReport = await invoke<StreamDiagnosticReport>('diagnose_stream_url', {
               request: {
                 url: candidateUrl,
-                proxyUrl: candidateProxy.effectiveProxy || null,
+                proxyUrl: (candidateProxy.rustProxy ?? candidateProxy.effectiveProxy) || null,
                 headers: {
                   'User-Agent': ua,
                   ...streamHeaders,
@@ -2237,7 +2239,7 @@ export const PlayerPage: React.FC = () => {
       `错误描述: ${videoError || '-'}`,
       `播放内核: ${engineType} (${usingRelayStream ? '内置透明中转' : '直连'})`,
       `服务器: ${currentServer?.name || '-'} (${currentServer?.url || '-'})`,
-      `代理路线: ${proxyInfo?.effectiveProxy || proxySummaryLabel}`,
+      `代理路线: ${proxyInfo?.configuredProxy || proxyInfo?.effectiveProxy || proxySummaryLabel}`,
       `User-Agent: ${diagnosticReport?.userAgent || currentUserAgent}`,
       `媒体源 Container: ${mediaSource?.Container || '-'} · IsRemote: ${String(Boolean(mediaSource?.IsRemote))}`,
       `DirectStreamUrl: ${redactUrlForReport(mediaSource?.DirectStreamUrl)}`,
@@ -2698,7 +2700,7 @@ export const PlayerPage: React.FC = () => {
               </p>
               {proxyInfo && (
                 <p className="text-[11px] text-sky-400/90 font-mono mt-1.5">
-                  网络路线: {proxyInfo.effectiveProxy ? `代理 ${proxyInfo.effectiveProxy}` : proxySummaryLabel}
+                  网络路线: {proxyInfo.configuredProxy || proxyInfo.effectiveProxy ? `代理 ${proxyInfo.configuredProxy || proxyInfo.effectiveProxy}` : proxySummaryLabel}
                 </p>
               )}
             </div>
@@ -2732,7 +2734,7 @@ export const PlayerPage: React.FC = () => {
                     <div className="flex items-center space-x-2 min-w-0">
                       <Wifi className="w-3.5 h-3.5 text-sky-400 shrink-0" />
                       <span className="truncate">
-                        当前路线: {proxyInfo.effectiveProxy || proxySummaryLabel}
+                        当前路线: {proxyInfo.configuredProxy || proxyInfo.effectiveProxy || proxySummaryLabel}
                       </span>
                     </div>
                     {usingRelayStream && (

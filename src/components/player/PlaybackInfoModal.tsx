@@ -76,6 +76,8 @@ function formatProxyLabel(info?: ResolvedStreamProxyInfo | null): string {
       return `系统 HTTP 代理 (${info.effectiveProxy})`;
     case 'manual_http':
       return `手动 HTTP 代理 (${info.effectiveProxy})`;
+    case 'socks5_bridge':
+      return `SOCKS5 本地隧道代理 (${info.configuredProxy || info.effectiveProxy})`;
     case 'lan_bypass':
       return '局域网自动旁路直连';
     case 'socks5_fallback_direct':

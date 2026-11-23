@@ -360,7 +360,7 @@ export function useNextEpisodePreloader({
             preloadDurationSec: playerPreferences.preloadNextDurationSeconds,
             maxMemoryBytes: playerPreferences.cacheMemoryCapMB * 1024 * 1024,
             bitrateBps: session.mediaSource.Bitrate ?? null,
-            proxyUrl: proxyInfo.effectiveProxy || null,
+            proxyUrl: (proxyInfo.rustProxy ?? proxyInfo.effectiveProxy) || null,
             headers: {
               'User-Agent': resolveEmbyUserAgent(currentServer.userAgent, currentServer.url),
               ...buildEmbyStreamHeaders(currentServer.userId, currentServer.accessToken, {

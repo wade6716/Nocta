@@ -8,11 +8,18 @@ export type VideoAspectPreset = 'auto' | '16:9' | '21:9' | '4:3' | 'fill';
 export type StreamProxyOverride = 'follow' | 'direct' | 'proxy';
 
 export interface ResolvedStreamProxyInfo {
-  mode: 'lan_bypass' | 'direct' | 'system_http' | 'manual_http' | 'socks5_fallback_direct';
-  effectiveProxy: string; // 实际传给 mpv http-proxy 的值（直连为空串）
+  mode:
+    | 'lan_bypass'
+    | 'direct'
+    | 'system_http'
+    | 'manual_http'
+    | 'socks5_bridge'
+    | 'socks5_fallback_direct';
+  effectiveProxy: string; // 实际传给 mpv http-proxy 的值（直连为空串，SOCKS5 时为本地 HTTP 隧道桥接地址）
+  rustProxy?: string; // 传给 Rust reqwest 的原始代理地址（支持直接走 socks5:// / http://）
   configuredProxy?: string; // 全局/服务器原始配置代理 URL（含 socks5）
   overrideMode: StreamProxyOverride;
-  notice?: string; // 例如 socks5 无法直接用于 libmpv 的友好提示
+  notice?: string; // 例如 SOCKS5 本地隧道状态或回退直连的友好提示
 }
 
 export interface PlayerTelemetry {

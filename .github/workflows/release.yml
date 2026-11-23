@@ -1,6 +1,9 @@
 name: Release
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       tag_name:
@@ -24,11 +27,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # 阶段 1：在最廉价高效的 Linux Runner 上单次编译前端并解析发版元数据
+  # 阶段 1：检测是否需要发版，并在最廉价高效的 Linux Runner 上单次编译前端
   build-frontend:
     name: Build Frontend & Metadata
     runs-on: ubuntu-latest
     outputs:
+      should_release: ${{ steps.meta.outputs.should_release }}
       tag_name: ${{ steps.meta.outputs.tag_name }}
       release_name: ${{ steps.meta.outputs.release_name }}
       is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
@@ -45,22 +49,42 @@ jobs:
           INPUT_TAG_NAME: ${{ inputs.tag_name }}
           INPUT_PRERELEASE: ${{ inputs.prerelease }}
           INPUT_RELEASE_DRAFT: ${{ inputs.release_draft }}
+          EVENT_NAME: ${{ github.event_name }}
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
         run: |
           node -e '
             const fs = require("fs");
+            const { execFileSync } = require("child_process");
             const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            const eventName = process.env.EVENT_NAME || "";
             const refType = process.env.REF_TYPE || "";
             const refName = process.env.REF_NAME || "";
             const inputTag = (process.env.INPUT_TAG_NAME || "").trim();
             const tagName = refType === "tag" ? refName : (inputTag || ("v" + pkg.version));
+
+            let shouldRelease = "true";
+            if (eventName === "push" && refType === "branch") {
+              const existing = execFileSync(
+                "git",
+                ["ls-remote", "--tags", "origin", `refs/tags/${tagName}`],
+                { encoding: "utf8" }
+              ).trim();
+              if (existing) {
+                shouldRelease = "false";
+                console.log(`Tag ${tagName} already exists on origin; skipping release for branch push.`);
+              } else {
+                console.log(`New version tag ${tagName} detected on ${refName}; starting release with hot main cache.`);
+              }
+            }
+
             const releaseName = "Nocta · 夜幕 " + tagName;
             const isPrerelease = (process.env.INPUT_PRERELEASE === "true" || /(alpha|beta|rc)/i.test(tagName)) ? "true" : "false";
             const releaseDraft = process.env.INPUT_RELEASE_DRAFT === "true" ? "true" : "false";
             const rawCli = (pkg.devDependencies && pkg.devDependencies["@tauri-apps/cli"]) || "2.12.2";
             const tauriCliVersion = rawCli.replace(/^[^\d]*/, "");
             const lines = [
+              `should_release=${shouldRelease}`,
               `tag_name=${tagName}`,
               `release_name=${releaseName}`,
               `is_prerelease=${isPrerelease}`,
@@ -72,21 +96,26 @@ jobs:
           '
 
       - name: Setup pnpm
+        if: steps.meta.outputs.should_release == 'true'
         uses: pnpm/action-setup@v4
 
       - name: Setup Node.js
+        if: steps.meta.outputs.should_release == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: 'pnpm'
 
       - name: Install Frontend Dependencies
+        if: steps.meta.outputs.should_release == 'true'
         run: pnpm install --frozen-lockfile
 
       - name: Build Frontend
+        if: steps.meta.outputs.should_release == 'true'
         run: pnpm build
 
       - name: Upload Prebuilt Frontend Dist
+        if: steps.meta.outputs.should_release == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: frontend-dist
@@ -94,25 +123,28 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
-  # 阶段 2：4 端并发复编译（直接复用前端 dist/、预编译 cargo-tauri、多层缓存 Rust 与 libmpv）
+  # 阶段 2：4 端并发编译（复用前端 dist/、预编译 cargo-tauri、cargo-xwin Linux 交叉编译 Windows NSIS 及 main 热缓存）
   release-tauri:
     name: Build (${{ matrix.name_suffix }})
     needs: build-frontend
+    if: needs.build-frontend.outputs.should_release == 'true'
     permissions:
       contents: write
     strategy:
       fail-fast: false
       matrix:
         include:
-          # 1. Windows x64 (NSIS + zlib 压缩，跳过重复前端编译与 MSI)
-          - platform: windows-latest
-            args: '--bundles nsis --config src-tauri/tauri.ci.conf.json'
-            rust_targets: ''
+          # 1. Windows x64（Ubuntu 24.04 + cargo-xwin + lld + NSIS 交叉编译，彻底摆脱 Defender 与 NTFS 瓶颈）
+          - platform: ubuntu-24.04
+            args: '--runner cargo-xwin --target x86_64-pc-windows-msvc --bundles nsis --config src-tauri/tauri.ci.conf.json'
+            rust_targets: 'x86_64-pc-windows-msvc'
             name_suffix: 'Windows x64'
             asset_name_pattern: '[name]_[version]_windows_[arch][setup][ext]'
             mpv_platform: 'windows'
             mpv_arch: 'x86_64'
-            cli_asset: 'cargo-tauri-x86_64-pc-windows-msvc.zip'
+            cli_asset: 'cargo-tauri-x86_64-unknown-linux-gnu.tgz'
+            cache_id: 'windows-x86_64-xwin'
+            use_xwin: true
 
           # 2. macOS Apple Silicon (M1/M2/M3/M4 系列芯片)
           - platform: macos-15
@@ -123,6 +155,8 @@ jobs:
             mpv_platform: 'macos'
             mpv_arch: 'aarch64'
             cli_asset: 'cargo-tauri-aarch64-apple-darwin.zip'
+            cache_id: 'macos-aarch64'
+            use_xwin: false
 
           # 3. macOS Intel (x86_64 系列芯片，使用原生 Intel Runner 确保 Homebrew dylib 架构一致)
           - platform: macos-15-intel
@@ -133,8 +167,10 @@ jobs:
             mpv_platform: 'macos'
             mpv_arch: 'x86_64'
             cli_asset: 'cargo-tauri-x86_64-apple-darwin.zip'
+            cache_id: 'macos-x86_64'
+            use_xwin: false
 
-          # 4. Linux x64 (仅构建 .deb 安装包，去除 AppImage 重度压缩)
+          # 4. Linux x64 (保持 Ubuntu 22.04 兼容 glibc 2.35，仅构建 .deb 并启用 lld 快速链接)
           - platform: ubuntu-22.04
             args: '--bundles deb --config src-tauri/tauri.ci.conf.json'
             rust_targets: ''
@@ -143,18 +179,13 @@ jobs:
             mpv_platform: 'linux'
             mpv_arch: 'x86_64'
             cli_asset: 'cargo-tauri-x86_64-unknown-linux-gnu.tgz'
+            cache_id: 'linux-x86_64'
+            use_xwin: false
 
     runs-on: ${{ matrix.platform }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-
-      - name: Disable Windows Defender for Build Performance
-        if: matrix.platform == 'windows-latest'
-        run: |
-          Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction SilentlyContinue
-          Add-MpPreference -ExclusionPath "${{ github.workspace }}" -ErrorAction SilentlyContinue
-          Add-MpPreference -ExclusionProcess "cargo.exe", "rustc.exe", "link.exe" -ErrorAction SilentlyContinue
 
       - name: Download Prebuilt Frontend Dist
         uses: actions/download-artifact@v4
@@ -167,19 +198,31 @@ jobs:
         with:
           targets: ${{ matrix.rust_targets }}
 
-      - name: Install Linux Dependencies (Ubuntu, Cached)
+      - name: Install Linux Dependencies (Ubuntu 22.04, Cached)
         if: matrix.platform == 'ubuntu-22.04'
         uses: awalsh128/cache-apt-pkgs-action@v1
         with:
-          packages: libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libmpv-dev patchelf xdg-utils
-          version: ubuntu22-tauri2-v1
+          packages: libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libmpv-dev patchelf xdg-utils lld
+          version: ubuntu22-tauri2-v2
 
-      - name: Restore Prebuilt Tauri CLI Cache
+      - name: Configure Fast Linux Linker (lld)
+        if: matrix.platform == 'ubuntu-22.04'
+        shell: bash
+        run: echo "RUSTFLAGS=-C link-arg=-fuse-ld=lld" >> "$GITHUB_ENV"
+
+      - name: Install Windows Cross-Compile Dependencies (Ubuntu 24.04, Cached)
+        if: matrix.use_xwin == true
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: clang lld llvm nsis p7zip-full
+          version: ubuntu24-xwin-v1
+
+      - name: Install Prebuilt cargo-tauri CLI Cache Restore
         id: tauri-cli-cache
         uses: actions/cache/restore@v4
         with:
           path: ~/.cargo/bin/cargo-tauri*
-          key: tauri-cli-${{ needs.build-frontend.outputs.tauri_cli_version }}-${{ matrix.mpv_platform }}-${{ matrix.mpv_arch }}
+          key: tauri-cli-${{ needs.build-frontend.outputs.tauri_cli_version }}-${{ runner.os }}-${{ runner.arch }}
 
       - name: Install Prebuilt cargo-tauri CLI
         if: steps.tauri-cli-cache.outputs.cache-hit != 'true'
@@ -227,11 +270,11 @@ jobs:
           cargo tauri --version
 
       - name: Save Prebuilt Tauri CLI Cache
-        if: steps.tauri-cli-cache.outputs.cache-hit != 'true'
+        if: github.ref == 'refs/heads/main' && steps.tauri-cli-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ~/.cargo/bin/cargo-tauri*
-          key: tauri-cli-${{ needs.build-frontend.outputs.tauri_cli_version }}-${{ matrix.mpv_platform }}-${{ matrix.mpv_arch }}
+          key: tauri-cli-${{ needs.build-frontend.outputs.tauri_cli_version }}-${{ runner.os }}-${{ runner.arch }}
 
       - name: Verify cargo-tauri CLI
         if: steps.tauri-cli-cache.outputs.cache-hit == 'true'
@@ -245,11 +288,61 @@ jobs:
           chmod +x "$CARGO_BIN_DIR/cargo-tauri" 2>/dev/null || true
           cargo tauri --version
 
+      - name: Install Prebuilt cargo-xwin
+        if: matrix.use_xwin == true
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-xwin
+
+      - name: Verify Cross-Compile Toolchain & Configure XWIN Cache
+        if: matrix.use_xwin == true
+        shell: bash
+        run: |
+          set -euo pipefail
+          for tool in clang-cl lld-link llvm-rc llvm-lib; do
+            if ! command -v "$tool" >/dev/null 2>&1; then
+              versioned="$(compgen -c | grep -E "^${tool}-[0-9]+$" | sort -V | tail -n 1 || true)"
+              if [ -n "$versioned" ]; then
+                echo "Linking $versioned -> /usr/local/bin/$tool"
+                sudo ln -sf "$(command -v "$versioned")" "/usr/local/bin/$tool"
+              fi
+            fi
+          done
+          mkdir -p "$HOME/.cache/cargo-xwin" "$HOME/.cache/tauri"
+          {
+            echo "XWIN_CACHE_DIR=$HOME/.cache/cargo-xwin"
+            echo "RC=llvm-rc"
+          } >> "$GITHUB_ENV"
+          command -v cargo-xwin clang-cl lld-link llvm-rc makensis 7z
+          cargo-xwin --version
+          clang-cl --version
+          lld-link --version
+          llvm-rc --version
+          makensis -VERSION
+
+      - name: Restore cargo-xwin Windows SDK Cache
+        if: matrix.use_xwin == true
+        id: xwin-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/cargo-xwin
+          key: xwin-sdk-v1-x86_64-pc-windows-msvc
+
+      - name: Restore Tauri Bundler Tools Cache
+        if: matrix.use_xwin == true
+        id: tauri-tools-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/tauri
+          key: tauri-tools-v1-${{ matrix.cache_id }}-${{ needs.build-frontend.outputs.tauri_cli_version }}
+
       - name: Rust Cache
         uses: swatinem/rust-cache@v2
         with:
           workspaces: './src-tauri -> target'
-          shared-key: "release-${{ matrix.mpv_platform }}-${{ matrix.mpv_arch }}-v1"
+          shared-key: "release-${{ matrix.cache_id }}-v2"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: false
 
       - name: Restore Self-Contained libmpv Bundle Cache
         id: mpv-cache
@@ -359,7 +452,7 @@ jobs:
           ls -lh src-tauri/lib/
 
       - name: Save Self-Contained libmpv Bundle Cache
-        if: steps.verify-mpv.outputs.ready != 'true'
+        if: github.ref == 'refs/heads/main' && steps.verify-mpv.outputs.ready != 'true'
         uses: actions/cache/save@v4
         with:
           path: src-tauri/lib
@@ -406,10 +499,25 @@ jobs:
           prerelease: ${{ needs.build-frontend.outputs.is_prerelease }}
           args: ${{ matrix.args }}
 
+      - name: Save cargo-xwin Windows SDK Cache
+        if: matrix.use_xwin == true && github.ref == 'refs/heads/main' && steps.xwin-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/cargo-xwin
+          key: xwin-sdk-v1-x86_64-pc-windows-msvc
+
+      - name: Save Tauri Bundler Tools Cache
+        if: matrix.use_xwin == true && github.ref == 'refs/heads/main' && steps.tauri-tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/tauri
+          key: tauri-tools-v1-${{ matrix.cache_id }}-${{ needs.build-frontend.outputs.tauri_cli_version }}
+
   # 阶段 3：无论 Release 是否已提前创建，构建完成后由该 Job 统一强制更新 Release 正文、清理旧名称产物并汇总更新清单
   finalize-release:
     name: Finalize Release Notes & Updater Manifest
     needs: [build-frontend, release-tauri]
+    if: needs.build-frontend.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write

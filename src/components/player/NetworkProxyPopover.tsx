@@ -52,6 +52,11 @@ function getProxyModeBadge(info: ResolvedStreamProxyInfo | null): {
         label: '手动 HTTP 代理',
         color: 'text-sky-300 bg-sky-500/15 border-sky-500/30',
       };
+    case 'socks5_bridge':
+      return {
+        label: 'SOCKS5 隧道代理',
+        color: 'text-violet-300 bg-violet-500/15 border-violet-500/30',
+      };
     case 'lan_bypass':
       return {
         label: '局域网直通旁路',
@@ -137,9 +142,9 @@ export const NetworkProxyPopover: React.FC<NetworkProxyPopoverProps> = ({
               </span>
             </div>
 
-            {proxyInfo?.effectiveProxy ? (
+            {proxyInfo?.configuredProxy || proxyInfo?.effectiveProxy ? (
               <div className="font-mono text-[11px] text-emerald-300 bg-emerald-500/10 px-2.5 py-1.5 rounded-lg border border-emerald-500/20 truncate">
-                出口节点: {proxyInfo.effectiveProxy}
+                出口节点: {proxyInfo.configuredProxy || proxyInfo.effectiveProxy}
               </div>
             ) : (
               <div className="font-mono text-[11px] text-slate-400 bg-white/[0.04] px-2.5 py-1.5 rounded-lg border border-white/[0.06] flex items-center space-x-1.5">

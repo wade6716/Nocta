@@ -60,6 +60,8 @@ function renderViewCountBadge(counts?: ViewCounts) {
 export const HomePage: React.FC = () => {
   const navigate = useNavigate();
   const currentServer = useAuthStore((s) => s.getCurrentServer());
+  // 订阅代理/UA 修订号，确保站内弹层修改代理后首页海报立即按新策略刷新
+  useAuthStore((s) => s.imageProxyRevision);
 
   const {
     serverId,

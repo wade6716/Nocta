@@ -4,6 +4,7 @@ mod system;
 mod osd_overlay;
 mod preload;
 mod updater;
+mod image_proxy;
 #[cfg(target_os = "macos")]
 mod mpv_embed;
 
@@ -283,6 +284,9 @@ pub fn run() {
             Ok(())
         })
         .manage(updater::UpdaterState::default())
+        .register_asynchronous_uri_scheme_protocol("nocta-img", |_ctx, request, responder| {
+            image_proxy::handle_image_protocol_request(request, responder);
+        })
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_libmpv::init())
@@ -294,6 +298,8 @@ pub fn run() {
             osd_overlay::show_osd_overlay,
             osd_overlay::close_osd_overlay,
             proxy::get_system_proxy,
+            proxy::sync_runtime_proxy_config,
+            proxy::ensure_socks5_http_bridge,
             sync::sync_smb_test,
             sync::sync_smb_read,
             sync::sync_smb_write,

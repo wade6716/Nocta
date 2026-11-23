@@ -626,5 +626,30 @@ pnpm tauri build
   - [`PlayerPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/PlayerPage.tsx)：当 `diagnose_stream_url` 发现主直连不可达时，单次自动探测备用直连链路并无缝切换重播，错误卡片操作按钮支持手动切换备用直连链路。
   - [`preload.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/preload.rs)：抽离 `summarize_diagnostic_outcome` 并精准识别 Cloudflare `HTTP 530 (error code: 1033)` 与 `521~526` 源站异常提示，补充单元测试覆盖。
 
+## 33. 全栈网络代理架构升级、SOCKS5 本地隧道桥接与 `nocta-img` 海报代理 (2026-11-23)
+
+- **统一旁路规则与前置直连优化**：
+  - [`proxy.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/proxy.rs) 扩展 `SystemProxyInfo` 采集 Windows `ProxyOverride`、macOS `scutil --proxy`（含 `SOCKS` 与 `ExceptionsList`）及 `NO_PROXY`，并提供 3 秒缓存 `detect_system_proxy_cached` 与 `should_bypass_proxy`。
+  - [`http.ts`](file:///d:/wade/code/emby-tauri-player/src/api/http.ts) 新增 `shouldBypassProxy` 与 `bypassLan` 选项，对内网/环回及系统旁路目标前置直连并置 `noProxy: '*'`；[`useAuthStore.ts`](file:///d:/wade/code/emby-tauri-player/src/stores/useAuthStore.ts) 在 `testProxyConnection` 中显式设置 `bypassLan: false`。
+- **SOCKS5 按需 L4 本地隧道桥接与直连解耦**：
+  - [`proxy.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/proxy.rs) 新增 `ensure_socks5_http_bridge`（`HTTP CONNECT` + 明文 HTTP 转 SOCKS5，兼容 RFC 1928/1929 鉴权），[`MpvPlayerEngine.ts`](file:///d:/wade/code/emby-tauri-player/src/player/MpvPlayerEngine.ts) 在 `socks*` 代理下自动启用并向 `libmpv` 下发本地桥接地址（保留 `rustProxy` 原始代理），HTTP 代理则保持零中转直传。
+  - [`types.ts`](file:///d:/wade/code/emby-tauri-player/src/player/types.ts)、[`PlayerPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/PlayerPage.tsx)、[`useNextEpisodePreloader.ts`](file:///d:/wade/code/emby-tauri-player/src/player/hooks/useNextEpisodePreloader.ts)、[`NetworkProxyPopover.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/NetworkProxyPopover.tsx) & [`PlaybackInfoModal.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/PlaybackInfoModal.tsx) 统一适配 `socks5_bridge` 状态展示与原始 `rustProxy` 透传。
+- **海报/背景图统一走 Rust `nocta-img` 协议栈**：
+  - 新增 [`image_proxy.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/image_proxy.rs) 并在 [`lib.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/lib.rs) 注册异步 URI Scheme `nocta-img`（24 并发、16 槽 `(proxy, ua)` 连接池、`20 MiB` 限制、自签证书兼容与错误 `no-store`），通过 [`proxy.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/proxy.rs) `sync_runtime_proxy_config` 同步运行态策略与各服 UA。
+  - [`embyClient.ts`](file:///d:/wade/code/emby-tauri-player/src/api/embyClient.ts) 通过 `wrapEmbyImageUrl` / `unwrapEmbyImageUrl` 与 `imageProxyRevision` 适配 Windows/macOS/Linux 不同 Scheme 映射并升级 `stripImageFormatWebp`；[`HomePage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/HomePage.tsx) 订阅 `imageProxyRevision` 保证站内弹窗改代理后即时刷新。
+- **Preload / 中转引擎增强与验证**：
+  - [`src-tauri/Cargo.toml`](file:///d:/wade/code/emby-tauri-player/src-tauri/Cargo.toml) 为 `reqwest 0.12` 启用 `"socks"`；[`preload.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/preload.rs) 原生支持 SOCKS5、HTTP/1.1 Keep-Alive 连接复用、90 秒 302/307 目标缓存与跨域剥头。
+  - 验证通过：`cargo test --manifest-path src-tauri/Cargo.toml`（20/20 passed）、`cargo check`、`pnpm build`（0 errors）与 `tsx` 单元测试。
+
+## 34. GitHub Actions 多端构建二次提速：Linux `cargo-xwin` 交叉编译 Windows NSIS、`main` 自动发版热缓存闭环与 Release Profile 调优 (2026-11-23)
+
+- **根因排查（34m 37s，Windows 独占 15m 40s）**：
+  - `v0.1.0-alpha.11` ~ `alpha.14` 连续以 `push tag` 发版且 `release.yml` 曾移除 `save-if: github.ref == 'refs/heads/main'`，导致 `main` 作用域长期空缓存、4 端 100% 冷编译且每次结尾白传 4 份下个 Tag 读不到的“死缓存”；
+  - Windows 原生 Runner 同时受 Microsoft Defender 扫描、`~/.cargo`/Temp 漏排除、NTFS 大量 `.rlib`/`.d` 文件清理阻塞、`opt-level = 3` 全量编译及 `link.exe` 串行链接拖累。
+- **核心优化落地**：
+  - **Windows NSIS 迁至 `ubuntu-24.04` + `cargo-xwin` 交叉编译（[`.github/workflows/release.yml`](file:///d:/wade/code/emby-tauri-player/.github/workflows/release.yml)）**：使用 `awalsh128/cache-apt-pkgs-action@v1` 缓存 `clang lld llvm nsis p7zip-full`（`ubuntu24-xwin-v1`），自动为带版本号的 LLVM 工具建立无版本软链至 `/usr/local/bin` 并导出 `RC=llvm-rc` 与 `XWIN_CACHE_DIR=$HOME/.cache/cargo-xwin`，通过 `taiki-e/install-action@v2` 安装 `cargo-xwin`，并单独缓存 `~/.cache/cargo-xwin` 与 `~/.cache/tauri`（仅 `matrix.use_xwin == true`）；彻底消除 Windows Defender/NTFS 损耗并将该 Job 计费倍率由 2x 降至 1x。
+  - **`main` 自动发版与缓存闭环（[`.github/workflows/release.yml`](file:///d:/wade/code/emby-tauri-player/.github/workflows/release.yml)）**：避免 `on.push` 中 `tags:` 与 `paths:` 互斥报错，采用监听 `push: branches: [main]` + `tags: ['v*']` 并在 `Resolve Release Metadata` 用 `git ls-remote --tags origin "refs/tags/${tagName}"` 检查版本 Tag 是否已存在——普通代码提交 ~5 秒跳过，仅当 `package.json` 升版推送至 `main` 时直接在 `refs/heads/main` 上下文并发发版并写入热缓存；全面恢复 `save-if: ${{ github.ref == 'refs/heads/main' }}`、`cache-on-failure: false`、宿主共享 `tauri-cli` 键及 `release-${{ matrix.cache_id }}-v2`；Linux `ubuntu-22.04` 追加 `lld` 与 `-C link-arg=-fuse-ld=lld`。
+  - **Release Profile 与 CI 同步调优**：[`src-tauri/Cargo.toml`](file:///d:/wade/code/emby-tauri-player/src-tauri/Cargo.toml) 新增 `[profile.release]`（`opt-level = 2`、`codegen-units = 16`、`lto = false`、`strip = "symbols"`）；[`.github/workflows/ci.yml`](file:///d:/wade/code/emby-tauri-player/.github/workflows/ci.yml) 为 `windows-latest` `rust-check` 补齐全量 Defender 排除并共享 `ubuntu22-tauri2-v2` APT 缓存。
+  - **本地验证通过**：`cargo test`（20/20 passed）、`cargo build --release`（1m 22s 冷编译产出剥离符号发行版）、`pnpm build` 及工作流静态校验通过。
 
 

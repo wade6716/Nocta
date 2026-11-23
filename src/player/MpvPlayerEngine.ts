@@ -22,7 +22,11 @@ import {
   VideoAspectPreset,
 } from './types';
 import { DEFAULT_EMBY_USER_AGENT, MappedTrack } from '../api/embyClient';
-import { resolveEffectiveProxyDetailed } from '../api/http';
+import {
+  isTauriEnvironment,
+  resolveEffectiveProxyDetailed,
+  shouldBypassProxy,
+} from '../api/http';
 
 const IS_MACOS = /Macintosh|Mac OS X/i.test(navigator.userAgent);
 const MPV_EMBED_WINDOW_TITLE = 'Nocta Video Surface';
@@ -48,34 +52,6 @@ const OBSERVED_PROPERTIES = [
   ['demuxer-cache-time', 'double', 'none'],
 ] as const satisfies readonly MpvObservableProperty[];
 
-function isLanOrLoopbackUrl(rawUrl?: string): boolean {
-  if (!rawUrl) return false;
-  try {
-    const u = new URL(rawUrl);
-    const host = u.hostname.toLowerCase();
-    if (
-      host === 'localhost' ||
-      host === '127.0.0.1' ||
-      host === '::1' ||
-      host.endsWith('.local') ||
-      host.endsWith('.lan')
-    ) {
-      return true;
-    }
-    if (/^10\./.test(host) || /^192\.168\./.test(host)) {
-      return true;
-    }
-    const match172 = host.match(/^172\.(\d+)\./);
-    if (match172) {
-      const secondOctet = Number(match172[1]);
-      if (secondOctet >= 16 && secondOctet <= 31) return true;
-    }
-    return false;
-  } catch {
-    return false;
-  }
-}
-
 export async function resolveMpvProxyDetailed(
   targetUrl?: string,
   override: StreamProxyOverride = 'follow'
@@ -84,12 +60,13 @@ export async function resolveMpvProxyDetailed(
     return { mode: 'direct', effectiveProxy: '', overrideMode: 'direct' };
   }
 
-  if (override === 'follow' && targetUrl && isLanOrLoopbackUrl(targetUrl)) {
-    return { mode: 'lan_bypass', effectiveProxy: '', overrideMode: 'follow' };
-  }
-
   try {
     const detail = await resolveEffectiveProxyDetailed();
+
+    if (override === 'follow' && targetUrl && shouldBypassProxy(targetUrl, detail.bypass)) {
+      return { mode: 'lan_bypass', effectiveProxy: '', overrideMode: 'follow' };
+    }
+
     if (!detail.url) {
       return {
         mode: 'direct',
@@ -105,19 +82,38 @@ export async function resolveMpvProxyDetailed(
       return {
         mode: detail.source === 'system' ? 'system_http' : 'manual_http',
         effectiveProxy: trimmed,
+        rustProxy: trimmed,
         configuredProxy: trimmed,
         overrideMode: override,
       };
     }
 
     if (/^socks/i.test(trimmed)) {
+      if (isTauriEnvironment()) {
+        try {
+          const bridgeUrl = await invoke<string>('ensure_socks5_http_bridge', {
+            socksUrl: trimmed,
+          });
+          return {
+            mode: 'socks5_bridge',
+            effectiveProxy: bridgeUrl,
+            rustProxy: trimmed,
+            configuredProxy: trimmed,
+            overrideMode: override,
+          };
+        } catch (bridgeErr) {
+          console.warn('[MpvEngine SOCKS5 Bridge Fallback]', bridgeErr);
+        }
+      }
+
       return {
         mode: 'socks5_fallback_direct',
         effectiveProxy: '',
+        rustProxy: trimmed,
         configuredProxy: trimmed,
         overrideMode: override,
         notice:
-          'libmpv 视频流仅支持 HTTP 代理，检测到当前配置为 SOCKS5，视频流已自动直连；建议使用代理工具的 HTTP/混合端口（如 Clash 7890）',
+          'SOCKS5 本地隧道桥接启动失败，libmpv 视频流已自动回退直连；建议使用 HTTP/混合端口（如 7890）或重试',
       };
     }
 
@@ -129,6 +125,9 @@ export async function resolveMpvProxyDetailed(
     };
   } catch (e) {
     console.warn('[MpvEngine Resolve Proxy Warning]', e);
+    if (override === 'follow' && targetUrl && shouldBypassProxy(targetUrl)) {
+      return { mode: 'lan_bypass', effectiveProxy: '', overrideMode: 'follow' };
+    }
     return { mode: 'direct', effectiveProxy: '', overrideMode: override };
   }
 }
@@ -710,7 +709,7 @@ export class MpvPlayerEngine implements IPlayerEngine {
         proxyTargetUrl,
         options.proxyOverride ?? 'follow'
       );
-      mpvEffectiveProxy = isLanOrLoopbackUrl(options.url) ? '' : resolvedProxyInfo.effectiveProxy;
+      mpvEffectiveProxy = shouldBypassProxy(options.url) ? '' : resolvedProxyInfo.effectiveProxy;
       this._lastProxyInfo = resolvedProxyInfo;
       this.proxyResolvedListeners.forEach((cb) => cb(resolvedProxyInfo));
       await setProperty('http-proxy', mpvEffectiveProxy);

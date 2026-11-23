@@ -936,8 +936,54 @@ export function resolveEmbyFallbackStreamCandidates(
   return result;
 }
 
+let imageProxyRevision = 1;
+
+export function bumpImageProxyRevision(): number {
+  imageProxyRevision += 1;
+  return imageProxyRevision;
+}
+
+export function getImageProxyRevision(): number {
+  return imageProxyRevision;
+}
+
+export function isWrappedNoctaImageUrl(url?: string | null): boolean {
+  if (!url) return false;
+  return /^https?:\/\/nocta-img\.localhost\//i.test(url) || /^nocta-img:\/\//i.test(url);
+}
+
+export function unwrapEmbyImageUrl(url: string): string {
+  if (!isWrappedNoctaImageUrl(url)) return url;
+  try {
+    const normalized = url.replace(/^nocta-img:\/\//i, 'http://');
+    const parsed = new URL(normalized);
+    return parsed.searchParams.get('url') || url;
+  } catch {
+    return url;
+  }
+}
+
+export function wrapEmbyImageUrl(
+  rawUrl: string,
+  options?: { isTauri?: boolean; isWindows?: boolean }
+): string {
+  if (!rawUrl || isWrappedNoctaImageUrl(rawUrl) || !/^https?:\/\//i.test(rawUrl)) {
+    return rawUrl;
+  }
+  const inTauri = options?.isTauri ?? isTauriEnvironment();
+  if (!inTauri) return rawUrl;
+
+  const isWin =
+    options?.isWindows ??
+    (typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent));
+  const encoded = encodeURIComponent(rawUrl);
+  return isWin
+    ? `http://nocta-img.localhost/fetch?url=${encoded}&v=${imageProxyRevision}`
+    : `nocta-img://localhost/fetch?url=${encoded}&v=${imageProxyRevision}`;
+}
+
 /**
- * 构造海报封面图片 URL (默认自动添加 webp 与尺寸优化)
+ * 构造海报封面图片 URL (默认自动添加 webp 与尺寸优化；Tauri 下自动走 Rust nocta-img 代理协议)
  */
 export function buildItemImageUrl(
   serverUrl: string,
@@ -959,15 +1005,19 @@ export function buildItemImageUrl(
   const tagParam = imageTag ? `&tag=${imageTag}` : '';
   const indexSegment = type === 'Backdrop' ? '/0' : '';
 
-  return `${base}/emby/Items/${itemId}/Images/${type}${indexSegment}?maxWidth=${maxWidth}&quality=${quality}${formatParam}${tagParam}`;
+  const rawUrl = `${base}/emby/Items/${itemId}/Images/${type}${indexSegment}?maxWidth=${maxWidth}&quality=${quality}${formatParam}${tagParam}`;
+  return wrapEmbyImageUrl(rawUrl);
 }
 
 /**
  * 剥离图片 URL 中的 format=webp 参数（保留 tag 与尺寸），用于部分 Emby 服务端 WebP 编码异常时的一次性重试
  */
 export function stripImageFormatWebp(url?: string | null): string | null {
-  if (!url || !/[?&]format=webp(?:&|$)/i.test(url)) return null;
-  const next = url
+  if (!url) return null;
+  const wrapped = isWrappedNoctaImageUrl(url);
+  const targetUrl = wrapped ? unwrapEmbyImageUrl(url) : url;
+  if (!/[?&]format=webp(?:&|$)/i.test(targetUrl)) return null;
+  const next = targetUrl
     .replace(/([?&])format=webp(?:&|$)/i, (match, sep: string, offset: number, str: string) => {
       if (sep === '?') {
         return offset + match.length < str.length ? '?' : '';
@@ -976,7 +1026,13 @@ export function stripImageFormatWebp(url?: string | null): string | null {
     })
     .replace(/\?&/, '?')
     .replace(/[?&]$/, '');
-  return next !== url ? next : null;
+  if (next === targetUrl) return null;
+  return wrapped
+    ? wrapEmbyImageUrl(next, {
+        isTauri: true,
+        isWindows: /^https?:\/\/nocta-img\.localhost\//i.test(url),
+      })
+    : next;
 }
 
 function buildTaggedImageCandidate(

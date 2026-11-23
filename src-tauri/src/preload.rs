@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use reqwest::header::{
     HeaderMap, HeaderName, HeaderValue, ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE,
@@ -20,6 +20,8 @@ const TAIL_INDEX_BYTES: u64 = 4 * 1024 * 1024; // 4 MiB 容器尾索引 (MKV Cue
 const SMALL_FULL_FILE_THRESHOLD: u64 = 16 * 1024 * 1024; // 16 MiB 以下文件直接整文件拉取
 const PROXY_READ_SLICE_BYTES: usize = 64 * 1024; // 64 KiB 回环切片读取粒度
 const MAX_STREAM_REDIRECTS: usize = 6;
+const REDIRECT_CACHE_TTL: Duration = Duration::from_secs(90);
+const KEEP_ALIVE_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 #[derive(Debug, Clone, Deserialize)]
@@ -513,6 +515,12 @@ impl SessionRuntime {
     }
 }
 
+#[derive(Debug, Clone)]
+struct ResolvedTargetCache {
+    final_url: String,
+    expires_at: Instant,
+}
+
 struct PreloadSession {
     token: String,
     item_id: String,
@@ -521,6 +529,7 @@ struct PreloadSession {
     upstream_url: String,
     client: reqwest::Client,
     headers: HeaderMap,
+    resolved_target: RwLock<Option<ResolvedTargetCache>>,
     start_seconds: f64,
     duration_seconds: f64,
     target_duration_seconds: f64,
@@ -619,6 +628,7 @@ struct RelaySession {
     upstream_url: String,
     client: reqwest::Client,
     headers: HeaderMap,
+    resolved_target: RwLock<Option<ResolvedTargetCache>>,
 }
 
 #[derive(Default)]
@@ -711,49 +721,113 @@ async fn ensure_proxy_server_started() -> Result<u16, String> {
     Ok(port)
 }
 
-async fn handle_proxy_connection(mut stream: TcpStream) -> Result<(), ()> {
-    let _ = stream.set_nodelay(true);
-    let mut reader = BufReader::new(&mut stream);
-
-    let mut request_line = String::new();
-    if reader.read_line(&mut request_line).await.unwrap_or(0) == 0 {
-        return Ok(());
+fn should_keep_alive(http_version: &str, connection_hdr: Option<&str>) -> bool {
+    let conn = connection_hdr
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_default();
+    if conn.split(',').any(|t| t.trim() == "close") {
+        return false;
     }
-    let mut parts = request_line.split_whitespace();
-    let method = parts.next().unwrap_or("");
-    let raw_path = parts.next().unwrap_or("");
+    if http_version.eq_ignore_ascii_case("HTTP/1.0") {
+        return conn.split(',').any(|t| t.trim() == "keep-alive");
+    }
+    true
+}
 
-    let mut range_header: Option<String> = None;
+async fn handle_proxy_connection(stream: TcpStream) -> Result<(), ()> {
+    let _ = stream.set_nodelay(true);
+    let mut reader = BufReader::new(stream);
+    let mut request_line = String::new();
     let mut line = String::new();
-    loop {
-        line.clear();
-        let n = reader.read_line(&mut line).await.unwrap_or(0);
-        if n == 0 || line == "\r\n" || line == "\n" {
+
+    for _req_idx in 0..100 {
+        request_line.clear();
+        let Ok(Ok(n)) =
+            tokio::time::timeout(KEEP_ALIVE_IDLE_TIMEOUT, reader.read_line(&mut request_line))
+                .await
+        else {
+            break;
+        };
+        if n == 0 {
             break;
         }
-        if let Some((k, v)) = line.split_once(':') {
-            if k.trim().eq_ignore_ascii_case("range") {
-                range_header = Some(v.trim().to_string());
+        if request_line == "\r\n" || request_line == "\n" {
+            continue;
+        }
+
+        let mut parts = request_line.split_whitespace();
+        let method = parts.next().unwrap_or("").to_string();
+        let raw_path = parts.next().unwrap_or("").to_string();
+        let http_version = parts.next().unwrap_or("HTTP/1.1").to_string();
+
+        let mut range_header: Option<String> = None;
+        let mut connection_header: Option<String> = None;
+        loop {
+            line.clear();
+            let Ok(Ok(hdr_n)) =
+                tokio::time::timeout(KEEP_ALIVE_IDLE_TIMEOUT, reader.read_line(&mut line)).await
+            else {
+                return Ok(());
+            };
+            if hdr_n == 0 || line == "\r\n" || line == "\n" {
+                break;
             }
+            if let Some((k, v)) = line.split_once(':') {
+                let key = k.trim();
+                if key.eq_ignore_ascii_case("range") {
+                    range_header = Some(v.trim().to_string());
+                } else if key.eq_ignore_ascii_case("connection") {
+                    connection_header = Some(v.trim().to_string());
+                }
+            }
+        }
+
+        let keep_alive = should_keep_alive(&http_version, connection_header.as_deref());
+
+        if !method.eq_ignore_ascii_case("GET") && !method.eq_ignore_ascii_case("HEAD") {
+            let resp =
+                "HTTP/1.1 405 Method Not Allowed\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+            let _ = reader.get_mut().write_all(resp.as_bytes()).await;
+            break;
+        }
+
+        let path = raw_path.split('?').next().unwrap_or(&raw_path);
+        let continue_loop = if let Some(relay_token) = path.strip_prefix("/relay/") {
+            handle_relay_request(
+                reader.get_mut(),
+                &method,
+                relay_token,
+                range_header,
+                keep_alive,
+            )
+            .await
+            .unwrap_or(false)
+        } else {
+            let token = path.strip_prefix("/stream/").unwrap_or("");
+            handle_stream_request(reader.get_mut(), &method, token, range_header, keep_alive)
+                .await
+                .unwrap_or(false)
+        };
+
+        if !continue_loop {
+            break;
         }
     }
 
-    if !method.eq_ignore_ascii_case("GET") && !method.eq_ignore_ascii_case("HEAD") {
-        let resp = "HTTP/1.1 405 Method Not Allowed\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
-        let _ = stream.write_all(resp.as_bytes()).await;
-        return Ok(());
-    }
+    Ok(())
+}
 
-    let path = raw_path.split('?').next().unwrap_or(raw_path);
-    if let Some(relay_token) = path.strip_prefix("/relay/") {
-        return handle_relay_connection(stream, method, relay_token, range_header).await;
-    }
-
-    let token = path.strip_prefix("/stream/").unwrap_or("");
+async fn handle_stream_request(
+    stream: &mut TcpStream,
+    method: &str,
+    token: &str,
+    range_header: Option<String>,
+    keep_alive: bool,
+) -> Result<bool, ()> {
     let Some(session) = find_session_by_token(token) else {
         let resp = "HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
         let _ = stream.write_all(resp.as_bytes()).await;
-        return Ok(());
+        return Ok(false);
     };
 
     let (total_size, content_type) = {
@@ -764,18 +838,13 @@ async fn handle_proxy_connection(mut stream: TcpStream) -> Result<(), ()> {
     if total_size == 0 {
         let resp = "HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
         let _ = stream.write_all(resp.as_bytes()).await;
-        return Ok(());
+        return Ok(false);
     }
 
     let is_head = method.eq_ignore_ascii_case("HEAD");
     let (status_line, req_start, req_end, content_range_hdr) =
         match parse_http_range(range_header.as_deref(), total_size) {
-            RangeParseResult::None => (
-                "HTTP/1.1 200 OK",
-                0,
-                total_size - 1,
-                None,
-            ),
+            RangeParseResult::None => ("HTTP/1.1 200 OK", 0, total_size - 1, None),
             RangeParseResult::Satisfiable(s, e) => (
                 "HTTP/1.1 206 Partial Content",
                 s,
@@ -787,13 +856,18 @@ async fn handle_proxy_connection(mut stream: TcpStream) -> Result<(), ()> {
                     "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */{total_size}\r\nAccept-Ranges: bytes\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
                 );
                 let _ = stream.write_all(resp.as_bytes()).await;
-                return Ok(());
+                return Ok(false);
             }
         };
 
     let content_len = req_end - req_start + 1;
+    let conn_hdr = if keep_alive {
+        "Connection: keep-alive\r\nKeep-Alive: timeout=30, max=100\r\n"
+    } else {
+        "Connection: close\r\n"
+    };
     let mut header_buf = format!(
-        "{status_line}\r\nContent-Type: {content_type}\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {content_len}\r\nConnection: close\r\n"
+        "{status_line}\r\nContent-Type: {content_type}\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {content_len}\r\n{conn_hdr}"
     );
     if let Some(cr) = content_range_hdr {
         header_buf.push_str(&cr);
@@ -801,11 +875,12 @@ async fn handle_proxy_connection(mut stream: TcpStream) -> Result<(), ()> {
     header_buf.push_str("\r\n");
 
     if stream.write_all(header_buf.as_bytes()).await.is_err() {
-        return Ok(());
+        return Ok(false);
     }
 
     if is_head {
-        return Ok(());
+        let _ = stream.flush().await;
+        return Ok(keep_alive);
     }
 
     let mut cursor = req_start;
@@ -834,23 +909,27 @@ async fn handle_proxy_connection(mut stream: TcpStream) -> Result<(), ()> {
             SliceAction::Cached(bytes) => {
                 let len = bytes.len() as u64;
                 if stream.write_all(&bytes).await.is_err() {
-                    return Ok(());
+                    return Ok(false);
                 }
                 cursor += len;
             }
             SliceAction::GapTo(gap_end) => {
                 let range_val = format!("bytes={cursor}-{gap_end}");
-                let mut req = session.client.get(&session.upstream_url).header(RANGE, range_val);
-                for (k, v) in session.headers.iter() {
-                    req = req.header(k, v);
-                }
-
-                let Ok(mut resp) = req.send().await else {
-                    return Ok(());
+                let Ok((mut resp, _)) = send_with_cached_redirects(
+                    &session.client,
+                    &session.upstream_url,
+                    &session.headers,
+                    Some(&range_val),
+                    false,
+                    &session.resolved_target,
+                )
+                .await
+                else {
+                    return Ok(false);
                 };
                 if !resp.status().is_success() && resp.status() != reqwest::StatusCode::PARTIAL_CONTENT
                 {
-                    return Ok(());
+                    return Ok(false);
                 }
 
                 let expected_gap = gap_end - cursor + 1;
@@ -869,26 +948,28 @@ async fn handle_proxy_connection(mut stream: TcpStream) -> Result<(), ()> {
                             }
                             if stream.write_all(slice).await.is_err() {
                                 // 播放器断连（切集或 Seek）时立即中止上游拉流
-                                return Ok(());
+                                return Ok(false);
                             }
                             let written = slice.len() as u64;
                             sent_gap += written;
                             cursor += written;
                         }
                         Ok(None) => break,
-                        Err(_) => return Ok(()),
+                        Err(_) => return Ok(false),
                     }
                 }
 
                 if sent_gap == 0 {
-                    break;
+                    return Ok(false);
                 }
             }
         }
     }
 
-    let _ = stream.flush().await;
-    Ok(())
+    if stream.flush().await.is_err() {
+        return Ok(false);
+    }
+    Ok(keep_alive)
 }
 
 fn parse_request_headers(raw_headers: Option<HashMap<String, String>>) -> (String, HeaderMap) {
@@ -996,11 +1077,8 @@ fn build_no_redirect_http_client(
         .connect_timeout(Duration::from_secs(15))
         .read_timeout(Duration::from_secs(30));
 
-    if let Some(px) = proxy_url
-        .map(str::trim)
-        .filter(|s| s.starts_with("http://") || s.starts_with("https://"))
-    {
-        let proxy = reqwest::Proxy::all(px).map_err(|e| format!("代理地址无效 ({px}): {e}"))?;
+    if let Some(px) = proxy_url.and_then(crate::proxy::normalize_proxy_url) {
+        let proxy = reqwest::Proxy::all(&px).map_err(|e| format!("代理地址无效 ({px}): {e}"))?;
         builder = builder.proxy(proxy);
     } else {
         builder = builder.no_proxy();
@@ -1077,45 +1155,117 @@ async fn send_with_safe_redirects(
     Err("媒体流重定向次数过多".to_string())
 }
 
-async fn handle_relay_connection(
-    mut stream: TcpStream,
+async fn send_with_cached_redirects(
+    client: &reqwest::Client,
+    origin_url_str: &str,
+    base_headers: &HeaderMap,
+    range_header: Option<&str>,
+    is_head: bool,
+    cache: &RwLock<Option<ResolvedTargetCache>>,
+) -> Result<(reqwest::Response, String), String> {
+    let cached_url = cache
+        .read()
+        .ok()
+        .and_then(|g| g.clone())
+        .filter(|entry| Instant::now() < entry.expires_at)
+        .map(|entry| entry.final_url);
+
+    if let Some(ref target) = cached_url {
+        if let (Ok(origin_parsed), Ok(target_parsed)) =
+            (Url::parse(origin_url_str), Url::parse(target))
+        {
+            let mut req = if is_head {
+                client.head(target.as_str())
+            } else {
+                client.get(target.as_str())
+            };
+            let is_same = same_origin(&origin_parsed, &target_parsed);
+            req = apply_origin_safe_headers(req, base_headers, is_same);
+            if let Some(rng) = range_header {
+                req = req.header(RANGE, rng);
+            }
+
+            if let Ok(resp) = req.send().await {
+                if matches!(resp.status().as_u16(), 200 | 206) {
+                    return Ok((resp, target.clone()));
+                }
+            }
+        }
+        if let Ok(mut guard) = cache.write() {
+            *guard = None;
+        }
+    }
+
+    let (resp, final_url) =
+        send_with_safe_redirects(client, origin_url_str, base_headers, range_header, is_head)
+            .await?;
+
+    if matches!(resp.status().as_u16(), 200 | 206) && final_url != origin_url_str {
+        if let Ok(mut guard) = cache.write() {
+            *guard = Some(ResolvedTargetCache {
+                final_url: final_url.clone(),
+                expires_at: Instant::now() + REDIRECT_CACHE_TTL,
+            });
+        }
+    }
+
+    Ok((resp, final_url))
+}
+
+async fn handle_relay_request(
+    stream: &mut TcpStream,
     method: &str,
     token: &str,
     range_header: Option<String>,
-) -> Result<(), ()> {
+    keep_alive: bool,
+) -> Result<bool, ()> {
     let Some(session) = find_relay_by_token(token) else {
         let resp = "HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
         let _ = stream.write_all(resp.as_bytes()).await;
-        return Ok(());
+        return Ok(false);
     };
 
     let is_head = method.eq_ignore_ascii_case("HEAD");
-    let Ok((mut resp, _final_url)) = send_with_safe_redirects(
+    let Ok((mut resp, _final_url)) = send_with_cached_redirects(
         &session.client,
         &session.upstream_url,
         &session.headers,
         range_header.as_deref(),
         is_head,
+        &session.resolved_target,
     )
     .await
     else {
         let err_resp = "HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
         let _ = stream.write_all(err_resp.as_bytes()).await;
-        return Ok(());
+        return Ok(false);
     };
 
     let status = resp.status();
     let reason = status.canonical_reason().unwrap_or("OK");
+    let cl_opt = resp
+        .headers()
+        .get(CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let can_keep_alive = keep_alive && (is_head || cl_opt.is_some());
+    let conn_val = if can_keep_alive {
+        "keep-alive\r\nKeep-Alive: timeout=30, max=100"
+    } else {
+        "close"
+    };
+
     let mut header_buf = format!(
-        "HTTP/1.1 {} {}\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n",
+        "HTTP/1.1 {} {}\r\nAccess-Control-Allow-Origin: *\r\nConnection: {}\r\n",
         status.as_u16(),
-        reason
+        reason,
+        conn_val
     );
 
     if let Some(ct) = resp.headers().get(CONTENT_TYPE).and_then(|v| v.to_str().ok()) {
         header_buf.push_str(&format!("Content-Type: {ct}\r\n"));
     }
-    if let Some(cl) = resp.headers().get(CONTENT_LENGTH).and_then(|v| v.to_str().ok()) {
+    if let Some(ref cl) = cl_opt {
         header_buf.push_str(&format!("Content-Length: {cl}\r\n"));
     }
     if let Some(cr) = resp.headers().get(CONTENT_RANGE).and_then(|v| v.to_str().ok()) {
@@ -1129,41 +1279,24 @@ async fn handle_relay_connection(
     header_buf.push_str(&format!("Accept-Ranges: {accept_ranges}\r\n\r\n"));
 
     if stream.write_all(header_buf.as_bytes()).await.is_err() {
-        return Ok(());
+        return Ok(false);
     }
 
     if is_head {
-        return Ok(());
+        let _ = stream.flush().await;
+        return Ok(can_keep_alive);
     }
 
     while let Ok(Some(chunk)) = resp.chunk().await {
         if stream.write_all(&chunk).await.is_err() {
-            return Ok(());
+            return Ok(false);
         }
     }
 
-    let _ = stream.flush().await;
-    Ok(())
-}
-
-fn build_http_client(proxy_url: Option<&str>, user_agent: &str) -> Result<reqwest::Client, String> {
-    let mut builder = reqwest::Client::builder()
-        .user_agent(user_agent)
-        .danger_accept_invalid_certs(true)
-        .danger_accept_invalid_hostnames(true)
-        .connect_timeout(Duration::from_secs(15))
-        .read_timeout(Duration::from_secs(30));
-
-    if let Some(px) = proxy_url.map(str::trim).filter(|s| !s.is_empty()) {
-        let proxy = reqwest::Proxy::all(px).map_err(|e| format!("代理地址无效 ({px}): {e}"))?;
-        builder = builder.proxy(proxy);
-    } else {
-        builder = builder.no_proxy();
+    if stream.flush().await.is_err() {
+        return Ok(false);
     }
-
-    builder
-        .build()
-        .map_err(|e| format!("创建 HTTP 预加载客户端失败: {e}"))
+    Ok(can_keep_alive)
 }
 
 fn parse_content_range_total(header_val: Option<&str>) -> Option<u64> {
@@ -1173,24 +1306,26 @@ fn parse_content_range_total(header_val: Option<&str>) -> Option<u64> {
 }
 
 async fn run_preload_worker(session: Arc<PreloadSession>) {
-    let probe_res = {
-        let mut req = session.client.get(&session.upstream_url).header(RANGE, "bytes=0-0");
-        for (k, v) in session.headers.iter() {
-            req = req.header(k, v);
-        }
-        req.send().await
-    };
+    let probe_res = send_with_cached_redirects(
+        &session.client,
+        &session.upstream_url,
+        &session.headers,
+        Some("bytes=0-0"),
+        false,
+        &session.resolved_target,
+    )
+    .await;
 
     if session.cancelled.load(Ordering::Relaxed) {
         return;
     }
 
     let mut probe_resp = match probe_res {
-        Ok(r) => r,
+        Ok((r, _)) => r,
         Err(e) => {
             if let Ok(mut rt) = session.runtime.write() {
                 rt.status = "error".to_string();
-                rt.error = Some(format!("探测上游失败: {e}"));
+                rt.error = Some(e);
             }
             return;
         }
@@ -1357,13 +1492,17 @@ async fn run_preload_worker(session: Arc<PreloadSession>) {
         }
 
         let range_hdr = format!("bytes={fetch_start}-{}", range_end_excl - 1);
-        let mut req = session.client.get(&session.upstream_url).header(RANGE, range_hdr);
-        for (k, v) in session.headers.iter() {
-            req = req.header(k, v);
-        }
-
-        let mut resp = match req.send().await {
-            Ok(r) => r,
+        let mut resp = match send_with_cached_redirects(
+            &session.client,
+            &session.upstream_url,
+            &session.headers,
+            Some(&range_hdr),
+            false,
+            &session.resolved_target,
+        )
+        .await
+        {
+            Ok((r, _)) => r,
             Err(e) => {
                 if !session.cancelled.load(Ordering::Relaxed) {
                     if let Ok(mut rt) = session.runtime.write() {
@@ -1442,7 +1581,7 @@ pub async fn start_next_episode_preload(
     request: StartPreloadRequest,
 ) -> Result<PreloadStatusDto, String> {
     let (user_agent, header_map) = parse_request_headers(request.headers);
-    let client = build_http_client(request.proxy_url.as_deref(), &user_agent)?;
+    let client = build_no_redirect_http_client(request.proxy_url.as_deref(), &user_agent)?;
 
     let token = Uuid::new_v4().to_string();
     let max_mem = request.max_memory_bytes.max(64 * 1024 * 1024);
@@ -1456,6 +1595,7 @@ pub async fn start_next_episode_preload(
         upstream_url: request.url,
         client,
         headers: header_map,
+        resolved_target: RwLock::new(None),
         start_seconds: request.start_sec.max(0.0),
         duration_seconds: request.duration_sec.max(0.0),
         target_duration_seconds: request.preload_duration_sec.max(1.0),
@@ -1946,6 +2086,7 @@ pub async fn start_stream_relay(request: StartRelayRequest) -> Result<StartedRel
         upstream_url: request.url,
         client,
         headers: header_map,
+        resolved_target: RwLock::new(None),
     });
 
     {
@@ -2192,5 +2333,17 @@ mod tests {
         let summary_522 = summarize_diagnostic_outcome(false, false, Some(&hop_522), Some(522), false);
         assert!(summary_522.contains("522"));
         assert!(summary_522.contains("Cloudflare"));
+    }
+
+    #[test]
+    fn test_should_keep_alive_and_proxy_client_accepts_socks5() {
+        assert!(should_keep_alive("HTTP/1.1", None));
+        assert!(should_keep_alive("HTTP/1.1", Some("keep-alive")));
+        assert!(!should_keep_alive("HTTP/1.1", Some("close")));
+        assert!(!should_keep_alive("HTTP/1.0", None));
+        assert!(should_keep_alive("HTTP/1.0", Some("keep-alive")));
+
+        assert!(build_no_redirect_http_client(Some("socks5://127.0.0.1:10808"), "Nocta").is_ok());
+        assert!(build_no_redirect_http_client(Some("http://127.0.0.1:7890"), "Nocta").is_ok());
     }
 }

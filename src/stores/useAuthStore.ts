@@ -1,7 +1,20 @@
 import { create } from 'zustand';
 import { DanmuConfig } from '../api/danmuClient';
-import { normalizeServerUrl, registerEmbyUserAgentGetter } from '../api/embyClient';
-import { ProxyConfig, httpClient, registerProxyGetter } from '../api/http';
+import {
+  DEFAULT_EMBY_USER_AGENT,
+  bumpImageProxyRevision,
+  normalizeServerUrl,
+  registerEmbyUserAgentGetter,
+} from '../api/embyClient';
+import {
+  ProxyConfig,
+  RuntimeServerProxyEntry,
+  fetchSystemProxy,
+  formatProxyUrl,
+  httpClient,
+  registerProxyGetter,
+  syncRuntimeProxyToRust,
+} from '../api/http';
 
 export interface SavedServer {
   id: string;
@@ -30,6 +43,7 @@ interface AuthState {
   currentServerId: string | null;
   danmuConfig: DanmuConfig;
   globalProxyConfig: ProxyConfig;
+  imageProxyRevision: number;
 
   // Actions
   addOrUpdateServer: (
@@ -100,17 +114,59 @@ function loadInitialGlobalProxy(): ProxyConfig {
   }
 }
 
+function buildAndSyncRuntimeProxy(
+  globalProxyConfig: ProxyConfig,
+  servers: SavedServer[]
+) {
+  const serverUserAgents: Record<string, string> = {};
+  const serverProxies: Record<string, RuntimeServerProxyEntry> = {};
+
+  for (const s of servers) {
+    const key = normalizeServerUrl(s.url);
+    if (!key) continue;
+    const ua = s.userAgent?.trim();
+    if (ua) serverUserAgents[key] = ua;
+    if (s.proxyConfig) {
+      serverProxies[key] = {
+        mode: s.proxyConfig.type || 'system',
+        manualUrl: formatProxyUrl(s.proxyConfig),
+      };
+    }
+  }
+
+  void syncRuntimeProxyToRust({
+    mode: globalProxyConfig.type || 'system',
+    manualUrl: formatProxyUrl(globalProxyConfig),
+    defaultUserAgent: DEFAULT_EMBY_USER_AGENT,
+    serverUserAgents,
+    serverProxies,
+  });
+}
+
 export const useAuthStore = create<AuthState>((set, get) => {
   const initialServers = loadInitialServers();
   const initialDanmu = loadInitialDanmu();
   const initialGlobalProxy = loadInitialGlobalProxy();
   const defaultCurrentId = loadInitialCurrentServerId(initialServers);
 
+  const syncWithOptionalRevision = (bumpImage: boolean) => {
+    const state = get();
+    buildAndSyncRuntimeProxy(state.globalProxyConfig, state.servers);
+    if (bumpImage) {
+      const nextRev = bumpImageProxyRevision();
+      set({ imageProxyRevision: nextRev });
+      if ((state.globalProxyConfig.type || 'system') === 'system') {
+        void fetchSystemProxy(true);
+      }
+    }
+  };
+
   return {
     servers: initialServers,
     currentServerId: defaultCurrentId,
     danmuConfig: initialDanmu,
     globalProxyConfig: initialGlobalProxy,
+    imageProxyRevision: 1,
 
     addOrUpdateServer: (serverData, options) => {
       set((state) => {
@@ -151,6 +207,7 @@ export const useAuthStore = create<AuthState>((set, get) => {
           currentServerId: nextCurrentId,
         };
       });
+      syncWithOptionalRevision(true);
     },
 
     /**
@@ -158,9 +215,10 @@ export const useAuthStore = create<AuthState>((set, get) => {
      * 不改变当前选中的服务器，也不刷新 lastActive 排序，仅用于"编辑服务器信息"场景。
      */
     updateServer: (id, updates) => {
+      let changed = false;
       set((state) => {
         if (!state.servers.some((s) => s.id === id)) return state;
-
+        changed = true;
         const newServers = state.servers.map((s) => (s.id === id ? { ...s, ...updates } : s));
 
         try {
@@ -171,6 +229,9 @@ export const useAuthStore = create<AuthState>((set, get) => {
 
         return { servers: newServers };
       });
+      if (changed) {
+        syncWithOptionalRevision(true);
+      }
     },
 
     removeServer: (id: string) => {
@@ -199,6 +260,7 @@ export const useAuthStore = create<AuthState>((set, get) => {
           currentServerId: nextId,
         };
       });
+      syncWithOptionalRevision(true);
     },
 
     setCurrentServer: (id: string) => {
@@ -218,6 +280,7 @@ export const useAuthStore = create<AuthState>((set, get) => {
           currentServerId: id,
         };
       });
+      syncWithOptionalRevision(false);
     },
 
     updateDanmuConfig: (config) => {
@@ -239,6 +302,7 @@ export const useAuthStore = create<AuthState>((set, get) => {
       } catch (e) {
         console.error(e);
       }
+      syncWithOptionalRevision(true);
     },
 
     getCurrentServer: () => {
@@ -266,6 +330,7 @@ export const useAuthStore = create<AuthState>((set, get) => {
           method: 'GET',
           headers: { Accept: '*/*' },
           proxy,
+          bypassLan: false,
         });
         const latency = Math.round(performance.now() - startTime);
         if (res.ok || res.status === 204 || (res.status >= 200 && res.status < 400)) {
@@ -332,9 +397,16 @@ export const useAuthStore = create<AuthState>((set, get) => {
           currentServerId: nextCurrentId,
         };
       });
+      syncWithOptionalRevision(true);
     },
   };
 });
+
+// 初始化后立即把当前全局代理与各服务器 UA 同步到 Rust（供 nocta-img 图片协议直接使用）
+{
+  const initialState = useAuthStore.getState();
+  buildAndSyncRuntimeProxy(initialState.globalProxyConfig, initialState.servers);
+}
 
 // 全局注册活动代理配置解析器，供 httpClient 和视频播放引擎自动提取
 registerProxyGetter(() => {

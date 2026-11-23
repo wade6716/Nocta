@@ -43,12 +43,23 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      - name: Exclude Cargo & Target from Windows Defender
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path $env:USERPROFILE ".cargo" }
+          $excludePaths = @("${{ github.workspace }}", $cargoHome, $env:RUNNER_TEMP) | Where-Object { $_ -and $_.Trim() -ne "" }
+          foreach ($p in $excludePaths) {
+            Add-MpPreference -ExclusionPath $p -ErrorAction SilentlyContinue
+          }
+          Add-MpPreference -ExclusionProcess "cargo.exe", "rustc.exe", "link.exe", "lld-link.exe", "cl.exe" -ErrorAction SilentlyContinue
+
       - name: Install Linux Dependencies (Ubuntu, Cached)
         if: matrix.platform == 'ubuntu-22.04'
         uses: awalsh128/cache-apt-pkgs-action@v1
         with:
-          packages: libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libmpv-dev patchelf xdg-utils
-          version: ubuntu22-tauri2-v1
+          packages: libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libmpv-dev patchelf xdg-utils lld
+          version: ubuntu22-tauri2-v2
 
       - name: Setup Rust Stable
         uses: dtolnay/rust-toolchain@stable

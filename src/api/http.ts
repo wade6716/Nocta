@@ -15,11 +15,27 @@ export interface ProxyConfig {
 
 export interface HttpRequestOptions extends RequestInit {
   proxy?: ProxyConfig;
+  /** 是否对内网/本地及系统绕过规则命中目标自动旁路代理（默认 true） */
+  bypassLan?: boolean;
 }
 
 export interface SystemProxyResult {
   enabled: boolean;
   url: string | null;
+  bypass?: string[];
+}
+
+export interface RuntimeServerProxyEntry {
+  mode: string;
+  manualUrl?: string;
+}
+
+export interface RuntimeProxySyncPayload {
+  mode: string;
+  manualUrl?: string;
+  defaultUserAgent?: string;
+  serverUserAgents?: Record<string, string>;
+  serverProxies?: Record<string, RuntimeServerProxyEntry>;
 }
 
 /**
@@ -102,9 +118,84 @@ export async function fetchSystemProxy(forceRefresh = false): Promise<SystemProx
   return fallback;
 }
 
+export function shouldBypassProxy(targetUrl?: string, bypassRules: string[] = []): boolean {
+  if (!targetUrl) return false;
+  try {
+    const parsed = new URL(targetUrl);
+    const host = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+    if (!host) return false;
+
+    if (
+      host === 'localhost' ||
+      host === '::1' ||
+      host === '0.0.0.0' ||
+      host.endsWith('.local') ||
+      host.endsWith('.lan') ||
+      /^127\./.test(host) ||
+      /^10\./.test(host) ||
+      /^192\.168\./.test(host) ||
+      /^169\.254\./.test(host) ||
+      /^fe80:/i.test(host) ||
+      /^f[cd][0-9a-f]{2}:/i.test(host)
+    ) {
+      return true;
+    }
+
+    const match172 = host.match(/^172\.(\d+)\./);
+    if (match172) {
+      const secondOctet = Number(match172[1]);
+      if (secondOctet >= 16 && secondOctet <= 31) return true;
+    }
+
+    const port = parsed.port || (parsed.protocol === 'https:' ? '443' : '80');
+    const hostPort = `${host}:${port}`;
+
+    for (const rawRule of bypassRules) {
+      let rule = rawRule.trim().toLowerCase();
+      if (!rule) continue;
+      rule = rule.replace(/^https?:\/\//i, '').split('/')[0];
+      if (rule === '<local>') {
+        if (!host.includes('.')) return true;
+        continue;
+      }
+      if (rule === '*') return true;
+      if (rule.startsWith('.')) {
+        const suffix = rule.slice(1);
+        if (host === suffix || host.endsWith(rule)) return true;
+        continue;
+      }
+      const regexStr =
+        '^' +
+        rule
+          .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+          .replace(/\*/g, '.*')
+          .replace(/\?/g, '.') +
+        '$';
+      const re = new RegExp(regexStr);
+      if (rule.includes(':') ? re.test(hostPort) || re.test(host) : re.test(host)) {
+        return true;
+      }
+    }
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+export async function syncRuntimeProxyToRust(payload: RuntimeProxySyncPayload): Promise<void> {
+  if (!isTauriEnvironment()) return;
+  try {
+    await invoke('sync_runtime_proxy_config', { config: payload });
+  } catch (e) {
+    console.warn('[Sync Runtime Proxy Error]', e);
+  }
+}
+
 export async function resolveEffectiveProxyDetailed(config?: ProxyConfig): Promise<{
   url?: string;
   source: 'direct' | 'system' | 'manual';
+  bypass?: string[];
 }> {
   const targetConfig = config || (activeProxyGetter ? activeProxyGetter() : undefined);
   if (!targetConfig) {
@@ -118,8 +209,8 @@ export async function resolveEffectiveProxyDetailed(config?: ProxyConfig): Promi
   if (targetConfig.type === 'system') {
     const sys = await fetchSystemProxy();
     return sys.enabled && sys.url
-      ? { url: sys.url, source: 'system' }
-      : { source: 'direct' };
+      ? { url: sys.url, source: 'system', bypass: sys.bypass }
+      : { source: 'direct', bypass: sys.bypass };
   }
 
   // manual / http / socks5
@@ -149,7 +240,18 @@ export async function httpClient(
 ): Promise<Response> {
   if (isTauriEnvironment()) {
     const proxyDetail = await resolveEffectiveProxyDetailed(init?.proxy);
-    const effectiveProxy = proxyDetail.url;
+    const targetUrlStr =
+      typeof input === 'string'
+        ? input
+        : input instanceof URL
+        ? input.toString()
+        : input.url;
+    const bypassed =
+      Boolean(proxyDetail.url) &&
+      init?.bypassLan !== false &&
+      shouldBypassProxy(targetUrlStr, proxyDetail.bypass || []);
+    const effectiveProxy = bypassed ? undefined : proxyDetail.url;
+
     const baseRequestOptions: any = {
       ...init,
       danger: {
@@ -159,9 +261,10 @@ export async function httpClient(
       },
     };
     delete baseRequestOptions.proxy;
+    delete baseRequestOptions.bypassLan;
 
-    // 显式选择 direct 时，通过 noProxy: '*' 强制旁路 reqwest 内置系统代理探测
-    if (proxyDetail.source === 'direct' && !effectiveProxy) {
+    // 显式选择 direct 或命中局域网/绕过规则时，通过 noProxy: '*' 强制旁路 reqwest 内置系统代理探测
+    if ((proxyDetail.source === 'direct' || bypassed) && !effectiveProxy) {
       baseRequestOptions.proxy = {
         all: {
           url: 'http://127.0.0.1:1',

@@ -158,16 +158,16 @@ jobs:
             cache_id: 'macos-aarch64'
             use_xwin: false
 
-          # 3. macOS Intel (x86_64 系列芯片，使用原生 Intel Runner 确保 Homebrew dylib 架构一致)
-          - platform: macos-15-intel
+          # 3. macOS Intel (在 Apple Silicon macOS-15 上交叉编译 x86_64-apple-darwin，共享 ARM64 高速算力与 cargo-tauri)
+          - platform: macos-15
             args: '--target x86_64-apple-darwin --bundles app,dmg --config src-tauri/tauri.ci.conf.json'
             rust_targets: 'x86_64-apple-darwin'
             name_suffix: 'macOS Intel'
             asset_name_pattern: '[name]_[version]_macos_x64[ext]'
             mpv_platform: 'macos'
             mpv_arch: 'x86_64'
-            cli_asset: 'cargo-tauri-x86_64-apple-darwin.zip'
-            cache_id: 'macos-x86_64'
+            cli_asset: 'cargo-tauri-aarch64-apple-darwin.zip'
+            cache_id: 'macos-x86_64-on-arm64'
             use_xwin: false
 
           # 4. Linux x64 (保持 Ubuntu 22.04 兼容 glibc 2.35，仅构建 .deb 并启用 lld 快速链接)
@@ -355,6 +355,7 @@ jobs:
         shell: bash
         env:
           MPV_PLATFORM: ${{ matrix.mpv_platform }}
+          MPV_ARCH: ${{ matrix.mpv_arch }}
         run: |
           ready=false
           case "$MPV_PLATFORM" in
@@ -364,12 +365,25 @@ jobs:
               fi
               ;;
             macos)
+              expected_arch="$MPV_ARCH"
+              if [ "$expected_arch" = "aarch64" ]; then
+                expected_arch="arm64"
+              fi
               if [ -s "src-tauri/lib/libmpv-wrapper.dylib" ] && \
                  [ -s "src-tauri/lib/libmpv.dylib" ] && \
                  [ -s "src-tauri/lib/libmpv.2.dylib" ] && \
                  [ -s "src-tauri/lib/libMoltenVK.dylib" ] && \
                  [ -s "src-tauri/lib/MoltenVK_icd.json" ]; then
-                ready=true
+                arch_ok=true
+                for lib in src-tauri/lib/libmpv-wrapper.dylib src-tauri/lib/libmpv.dylib src-tauri/lib/libMoltenVK.dylib; do
+                  if ! lipo -archs "$lib" 2>/dev/null | grep -qw "$expected_arch"; then
+                    echo "Cached $lib does not match expected arch $expected_arch ($(lipo -info "$lib" 2>/dev/null || echo unknown))"
+                    arch_ok=false
+                  fi
+                done
+                if [ "$arch_ok" = "true" ]; then
+                  ready=true
+                fi
               fi
               ;;
             linux)
@@ -380,10 +394,10 @@ jobs:
           esac
           echo "ready=$ready" >> "$GITHUB_OUTPUT"
           if [ "$ready" = "true" ]; then
-            echo "Restored cached libmpv bundle for $MPV_PLATFORM:"
+            echo "Restored cached libmpv bundle for $MPV_PLATFORM ($MPV_ARCH):"
             ls -lh src-tauri/lib/
           else
-            echo "libmpv cache miss or incomplete for $MPV_PLATFORM, will fetch fresh libraries."
+            echo "libmpv cache miss or incomplete for $MPV_PLATFORM ($MPV_ARCH), will fetch fresh libraries."
           fi
 
       - name: Install macOS Dependencies
@@ -392,7 +406,17 @@ jobs:
           HOMEBREW_NO_AUTO_UPDATE: '1'
           HOMEBREW_NO_INSTALL_CLEANUP: '1'
           HOMEBREW_NO_ENV_HINTS: '1'
-        run: brew install mpv molten-vk dylibbundler
+          MPV_ARCH: ${{ matrix.mpv_arch }}
+        run: |
+          if [ "$MPV_ARCH" = "x86_64" ] && [ "$(uname -m)" = "arm64" ]; then
+            softwareupdate --install-rosetta --agree-to-license || true
+            if [ ! -x /usr/local/bin/brew ]; then
+              NONINTERACTIVE=1 arch -x86_64 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+            fi
+            arch -x86_64 /usr/local/bin/brew install mpv molten-vk dylibbundler
+          else
+            brew install mpv molten-vk dylibbundler
+          fi
 
       - name: Setup libmpv and Wrapper Libraries
         if: steps.verify-mpv.outputs.ready != 'true'
@@ -400,8 +424,23 @@ jobs:
 
       - name: Bundle Self-Contained libmpv & MoltenVK for macOS
         if: startsWith(matrix.platform, 'macos') && steps.verify-mpv.outputs.ready != 'true'
+        env:
+          MPV_ARCH: ${{ matrix.mpv_arch }}
         run: |
-          BREW_PREFIX=$(brew --prefix)
+          set -euo pipefail
+          if [ "$MPV_ARCH" = "x86_64" ] && [ "$(uname -m)" = "arm64" ]; then
+            BREW_PREFIX="/usr/local"
+            DYLIBBUNDLER_CMD=(arch -x86_64 /usr/local/bin/dylibbundler)
+            EXPECTED_ARCH="x86_64"
+          else
+            BREW_PREFIX="$(brew --prefix)"
+            DYLIBBUNDLER_CMD=(dylibbundler)
+            EXPECTED_ARCH="$MPV_ARCH"
+            if [ "$EXPECTED_ARCH" = "aarch64" ]; then
+              EXPECTED_ARCH="arm64"
+            fi
+          fi
+
           MPV_LIB="$BREW_PREFIX/opt/mpv/lib/libmpv.2.dylib"
           if [ ! -f "$MPV_LIB" ]; then
             MPV_LIB="$BREW_PREFIX/lib/libmpv.dylib"
@@ -414,7 +453,7 @@ jobs:
           chmod 755 src-tauri/lib/libmpv.dylib
 
           # 将 libmpv.dylib 的所有非系统动态库依赖打包进 src-tauri/lib/ 并重写为 @loader_path/
-          dylibbundler -of -b \
+          "${DYLIBBUNDLER_CMD[@]}" -of -b \
             -x src-tauri/lib/libmpv.dylib \
             -d src-tauri/lib/ \
             -p "@loader_path/"
@@ -448,6 +487,13 @@ jobs:
           chmod -R u+w src-tauri/lib/
           find src-tauri/lib -maxdepth 1 -name '*.dylib' -exec chmod 755 {} +
           find src-tauri/lib -maxdepth 1 -name '*.dylib' -print0 | xargs -0 -P "$(sysctl -n hw.ncpu)" -I {} codesign --force --sign - "{}"
+          for lib in src-tauri/lib/libmpv-wrapper.dylib src-tauri/lib/libmpv.dylib src-tauri/lib/libMoltenVK.dylib; do
+            if ! lipo -archs "$lib" 2>/dev/null | grep -qw "$EXPECTED_ARCH"; then
+              echo "Architecture check failed for $lib (expected $EXPECTED_ARCH):"
+              lipo -info "$lib" || true
+              exit 1
+            fi
+          done
           ls -lh src-tauri/lib/
 
       - name: Save Self-Contained libmpv Bundle Cache

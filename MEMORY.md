@@ -652,4 +652,12 @@ pnpm tauri build
   - **Release Profile 与 CI 同步调优**：[`src-tauri/Cargo.toml`](file:///d:/wade/code/emby-tauri-player/src-tauri/Cargo.toml) 新增 `[profile.release]`（`opt-level = 2`、`codegen-units = 16`、`lto = false`、`strip = "symbols"`）；[`.github/workflows/ci.yml`](file:///d:/wade/code/emby-tauri-player/.github/workflows/ci.yml) 为 `windows-latest` `rust-check` 补齐全量 Defender 排除并共享 `ubuntu22-tauri2-v2` APT 缓存。
   - **本地验证通过**：`cargo test`（20/20 passed）、`cargo build --release`（1m 22s 冷编译产出剥离符号发行版）、`pnpm build` 及工作流静态校验通过。
 
+## 35. macOS Intel 迁移至 Apple Silicon (`macos-15`) 交叉编译与 `v0.1.0-alpha.15` 发布 (2026-11-23)
+
+- **变更要点（[`.github/workflows/release.yml`](file:///d:/wade/code/emby-tauri-player/.github/workflows/release.yml)）**：
+  - 将 `Build (macOS Intel)` 的 `platform` 从老旧慢速 `macos-15-intel` 迁至 `macos-15`（ARM64），交叉编译 `--target x86_64-apple-darwin`；
+  - 将 `cli_asset` 改为宿主对应的 `cargo-tauri-aarch64-apple-darwin.zip`，`cache_id` 设为 `macos-x86_64-on-arm64`（与原 Intel 宿主 `proc-macro` 缓存隔离），同时延续 `mpv-bundle-v1-macos-x86_64-*` 复用已有 `x86_64` `libmpv`/`MoltenVK` 动态库缓存；
+  - 在 `verify-mpv` 与 `Bundle Self-Contained libmpv & MoltenVK for macOS` 接入 `lipo -archs` 强制架构校验，缓存未命中时通过 Rosetta (`arch -x86_64 /usr/local/bin/brew`) 安装与打包纯 `x86_64` 依赖。
+- **发版升级**：同步更新 [`package.json`](file:///d:/wade/code/emby-tauri-player/package.json) 至 `0.1.0-alpha.15`，推送 `main` 后由工作流在热缓存上下文自动触发构建与发布。
+
 

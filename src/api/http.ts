@@ -15,8 +15,10 @@ export interface ProxyConfig {
 
 export interface HttpRequestOptions extends RequestInit {
   proxy?: ProxyConfig;
-  /** 是否对内网/本地及系统绕过规则命中目标自动旁路代理（默认 true） */
-  bypassLan?: boolean;
+  /** 是否遵循操作系统跳过代理列表（默认 true；代理连通性测速设为 false） */
+  respectSystemBypass?: boolean;
+  /** 代理请求失败时是否允许静默回退直连（默认 true；强制代理/测速应设为 false） */
+  fallbackToDirect?: boolean;
 }
 
 export interface SystemProxyResult {
@@ -47,9 +49,22 @@ export function isTauriEnvironment(): boolean {
 
 // 代理配置外部注入解耦机制，避免与 store 产生循环依赖
 let activeProxyGetter: (() => ProxyConfig | undefined) | null = null;
+let globalProxyGetter: (() => ProxyConfig | undefined) | null = null;
 
 export function registerProxyGetter(fn: () => ProxyConfig | undefined) {
   activeProxyGetter = fn;
+}
+
+export function registerGlobalProxyGetter(fn: () => ProxyConfig | undefined) {
+  globalProxyGetter = fn;
+}
+
+export function getGlobalProxyConfig(): ProxyConfig | undefined {
+  return globalProxyGetter
+    ? globalProxyGetter()
+    : activeProxyGetter
+    ? activeProxyGetter()
+    : undefined;
 }
 
 /**
@@ -118,61 +133,230 @@ export async function fetchSystemProxy(forceRefresh = false): Promise<SystemProx
   return fallback;
 }
 
-export function shouldBypassProxy(targetUrl?: string, bypassRules: string[] = []): boolean {
+/**
+ * 判断 URL 是否指向本机回环地址（仅用于拦截 libmpv 对 Nocta 本地预载/中转流误走外部代理）
+ */
+export function isLoopbackUrl(targetUrl?: string): boolean {
   if (!targetUrl) return false;
   try {
     const parsed = new URL(targetUrl);
     const host = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
-    if (!host) return false;
-
-    if (
+    return (
       host === 'localhost' ||
       host === '::1' ||
       host === '0.0.0.0' ||
-      host.endsWith('.local') ||
-      host.endsWith('.lan') ||
-      /^127\./.test(host) ||
-      /^10\./.test(host) ||
-      /^192\.168\./.test(host) ||
-      /^169\.254\./.test(host) ||
-      /^fe80:/i.test(host) ||
-      /^f[cd][0-9a-f]{2}:/i.test(host)
-    ) {
-      return true;
-    }
+      /^127\./.test(host)
+    );
+  } catch {
+    return false;
+  }
+}
 
-    const match172 = host.match(/^172\.(\d+)\./);
-    if (match172) {
-      const secondOctet = Number(match172[1]);
-      if (secondOctet >= 16 && secondOctet <= 31) return true;
-    }
+function parseIpv4ToUint32(raw: string): number | null {
+  const clean = raw.trim();
+  if (!/^\d{1,3}(?:\.\d{1,3}){3}$/.test(clean)) return null;
+  const parts = clean.split('.');
+  let acc = 0;
+  for (const part of parts) {
+    const num = Number(part);
+    if (!Number.isInteger(num) || num < 0 || num > 255) return null;
+    acc = acc * 256 + num;
+  }
+  return acc >>> 0;
+}
 
-    const port = parsed.port || (parsed.protocol === 'https:' ? '443' : '80');
-    const hostPort = `${host}:${port}`;
+function parseIpv6ToBigInt(raw: string): bigint | null {
+  let clean = raw.trim().replace(/^\[|\]$/g, '').split('%')[0].toLowerCase();
+  if (!clean || !clean.includes(':')) return null;
+
+  const doubleColonParts = clean.split('::');
+  if (doubleColonParts.length > 2) return null;
+
+  const expandSide = (side: string): number[] | null => {
+    if (!side) return [];
+    const tokens = side.split(':');
+    const groups: number[] = [];
+    for (let i = 0; i < tokens.length; i++) {
+      const tok = tokens[i];
+      if (!tok) return null;
+      if (tok.includes('.')) {
+        if (i !== tokens.length - 1) return null;
+        const v4 = parseIpv4ToUint32(tok);
+        if (v4 === null) return null;
+        groups.push((v4 >>> 16) & 0xffff, v4 & 0xffff);
+      } else {
+        if (!/^[0-9a-f]{1,4}$/.test(tok)) return null;
+        groups.push(parseInt(tok, 16));
+      }
+    }
+    return groups;
+  };
+
+  let groups: number[] | null = null;
+  if (doubleColonParts.length === 2) {
+    const left = expandSide(doubleColonParts[0]);
+    const right = expandSide(doubleColonParts[1]);
+    if (!left || !right) return null;
+    const missing = 8 - (left.length + right.length);
+    if (missing < 1) return null;
+    groups = [...left, ...new Array<number>(missing).fill(0), ...right];
+  } else {
+    const parsed = expandSide(clean);
+    if (!parsed || parsed.length !== 8) return null;
+    groups = parsed;
+  }
+
+  let acc = 0n;
+  for (const g of groups) {
+    acc = (acc << 16n) | BigInt(g);
+  }
+  return acc;
+}
+
+function matchCidrRule(targetHost: string, addrPart: string, prefixPart: string): boolean | null {
+  const cleanAddr = addrPart.trim().replace(/^\[|\]$/g, '');
+  const prefixStr = prefixPart.trim();
+  if (!/^\d+$/.test(prefixStr)) return null;
+  const prefix = Number(prefixStr);
+
+  const netV4 = parseIpv4ToUint32(cleanAddr);
+  if (netV4 !== null) {
+    if (prefix < 0 || prefix > 32) return null;
+    const targetV4 = parseIpv4ToUint32(targetHost);
+    if (targetV4 === null) return false;
+    const mask = prefix === 0 ? 0 : (~0 << (32 - prefix)) >>> 0;
+    return ((targetV4 & mask) >>> 0) === ((netV4 & mask) >>> 0);
+  }
+
+  const netV6 = parseIpv6ToBigInt(cleanAddr);
+  if (netV6 !== null) {
+    if (prefix < 0 || prefix > 128) return null;
+    const targetV6 = parseIpv6ToBigInt(targetHost);
+    if (targetV6 === null) return false;
+    const fullMask = (1n << 128n) - 1n;
+    const mask = prefix === 0 ? 0n : (fullMask << BigInt(128 - prefix)) & fullMask;
+    return (targetV6 & mask) === (netV6 & mask);
+  }
+
+  return null;
+}
+
+function splitRuleHostPort(rule: string): [string, string | null] {
+  if (rule.startsWith('[')) {
+    const closeIdx = rule.indexOf(']');
+    if (closeIdx > 0) {
+      const inner = rule.slice(1, closeIdx);
+      const after = rule.slice(closeIdx + 1);
+      if (after.startsWith(':')) {
+        return [inner, after.slice(1)];
+      }
+      return [inner, null];
+    }
+  }
+  const firstColon = rule.indexOf(':');
+  if (firstColon !== -1 && firstColon === rule.lastIndexOf(':')) {
+    return [rule.slice(0, firstColon), rule.slice(firstColon + 1)];
+  }
+  return [rule, null];
+}
+
+function globMatch(pattern: string, text: string): boolean {
+  let pi = 0;
+  let ti = 0;
+  let starIdx = -1;
+  let matchIdx = 0;
+
+  while (ti < text.length) {
+    if (pi < pattern.length && (pattern[pi] === '?' || pattern[pi] === text[ti])) {
+      pi++;
+      ti++;
+    } else if (pi < pattern.length && pattern[pi] === '*') {
+      starIdx = pi;
+      matchIdx = ti;
+      pi++;
+    } else if (starIdx !== -1) {
+      pi = starIdx + 1;
+      matchIdx++;
+      ti = matchIdx;
+    } else {
+      return false;
+    }
+  }
+
+  while (pi < pattern.length && pattern[pi] === '*') {
+    pi++;
+  }
+  return pi === pattern.length;
+}
+
+/**
+ * 严格依据操作系统「跳过代理」列表及 NO_PROXY 规则判断目标 URL 是否旁路代理
+ */
+export function shouldBypassProxy(targetUrl?: string, bypassRules: string[] = []): boolean {
+  if (!targetUrl || !bypassRules || bypassRules.length === 0) return false;
+  try {
+    const parsed = new URL(targetUrl);
+    const scheme = parsed.protocol.replace(/:$/, '').toLowerCase();
+    const host = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+    if (!host) return false;
+
+    const port = parsed.port || (scheme === 'https' ? '443' : scheme === 'http' ? '80' : '');
+    const hostV4 = parseIpv4ToUint32(host);
+    const hostV6 = hostV4 === null ? parseIpv6ToBigInt(host) : null;
 
     for (const rawRule of bypassRules) {
       let rule = rawRule.trim().toLowerCase();
       if (!rule) continue;
-      rule = rule.replace(/^https?:\/\//i, '').split('/')[0];
+
+      if (rule.startsWith('http://')) {
+        if (scheme !== 'http') continue;
+        rule = rule.slice('http://'.length);
+      } else if (rule.startsWith('https://')) {
+        if (scheme !== 'https') continue;
+        rule = rule.slice('https://'.length);
+      }
+
+      if (rule === '*') return true;
       if (rule === '<local>') {
         if (!host.includes('.')) return true;
         continue;
       }
-      if (rule === '*') return true;
-      if (rule.startsWith('.')) {
-        const suffix = rule.slice(1);
-        if (host === suffix || host.endsWith(rule)) return true;
+
+      const slashIdx = rule.indexOf('/');
+      if (slashIdx !== -1) {
+        const addrPart = rule.slice(0, slashIdx);
+        const suffixPart = rule.slice(slashIdx + 1);
+        const cidrMatch = matchCidrRule(host, addrPart, suffixPart);
+        if (cidrMatch !== null) {
+          if (cidrMatch) return true;
+          continue;
+        }
+        rule = addrPart;
+      }
+
+      const [ruleHost, rulePort] = splitRuleHostPort(rule);
+      if (rulePort) {
+        if (!port || !globMatch(rulePort, port)) {
+          continue;
+        }
+      }
+      if (!ruleHost) continue;
+
+      if (hostV4 !== null) {
+        const ruleV4 = parseIpv4ToUint32(ruleHost);
+        if (ruleV4 !== null && ruleV4 === hostV4) return true;
+      } else if (hostV6 !== null) {
+        const ruleV6 = parseIpv6ToBigInt(ruleHost);
+        if (ruleV6 !== null && ruleV6 === hostV6) return true;
+      }
+
+      if (ruleHost.startsWith('.')) {
+        const suffix = ruleHost.slice(1);
+        if (host === suffix || host.endsWith(ruleHost)) return true;
         continue;
       }
-      const regexStr =
-        '^' +
-        rule
-          .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-          .replace(/\*/g, '.*')
-          .replace(/\?/g, '.') +
-        '$';
-      const re = new RegExp(regexStr);
-      if (rule.includes(':') ? re.test(hostPort) || re.test(host) : re.test(host)) {
+
+      if (globMatch(ruleHost, host)) {
         return true;
       }
     }
@@ -213,10 +397,12 @@ export async function resolveEffectiveProxyDetailed(config?: ProxyConfig): Promi
       : { source: 'direct', bypass: sys.bypass };
   }
 
-  // manual / http / socks5
+  // manual / http / socks5：同样遵循操作系统的跳过代理列表
+  const sys = await fetchSystemProxy();
   return {
     url: formatProxyUrl(targetConfig),
     source: 'manual',
+    bypass: sys.bypass,
   };
 }
 
@@ -248,9 +434,14 @@ export async function httpClient(
         : input.url;
     const bypassed =
       Boolean(proxyDetail.url) &&
-      init?.bypassLan !== false &&
+      init?.respectSystemBypass !== false &&
       shouldBypassProxy(targetUrlStr, proxyDetail.bypass || []);
-    const effectiveProxy = bypassed ? undefined : proxyDetail.url;
+    const rawEffectiveProxy = bypassed ? undefined : proxyDetail.url;
+    // 将 socks5:// 升级为 socks5h://，由代理远端解析 DNS（避免本地 DNS 污染导致域名解析失败）
+    const effectiveProxy = rawEffectiveProxy
+      ? rawEffectiveProxy.replace(/^socks5:\/\//i, 'socks5h://')
+      : undefined;
+    const allowFallbackToDirect = init?.fallbackToDirect !== false;
 
     const baseRequestOptions: any = {
       ...init,
@@ -261,9 +452,10 @@ export async function httpClient(
       },
     };
     delete baseRequestOptions.proxy;
-    delete baseRequestOptions.bypassLan;
+    delete baseRequestOptions.respectSystemBypass;
+    delete baseRequestOptions.fallbackToDirect;
 
-    // 显式选择 direct 或命中局域网/绕过规则时，通过 noProxy: '*' 强制旁路 reqwest 内置系统代理探测
+    // 显式选择 direct 或命中操作系统跳过代理列表时，通过 noProxy: '*' 强制旁路 reqwest 内置系统代理探测
     if ((proxyDetail.source === 'direct' || bypassed) && !effectiveProxy) {
       baseRequestOptions.proxy = {
         all: {
@@ -281,8 +473,8 @@ export async function httpClient(
     try {
       return await tauriFetch(input as any, requestOptions);
     } catch (err) {
-      // 代理不可用或局域网请求被代理中断时，自动退回无代理直连兜底一次
-      if (effectiveProxy && !init?.signal?.aborted) {
+      // 代理不可用或局域网请求被代理中断时，按需回退无代理直连兜底一次
+      if (effectiveProxy && allowFallbackToDirect && !init?.signal?.aborted) {
         try {
           console.warn('[Tauri HTTP Proxy Fallback -> Direct]', input, err);
           return await tauriFetch(input as any, {

@@ -12,6 +12,7 @@ import {
   fetchSystemProxy,
   formatProxyUrl,
   httpClient,
+  registerGlobalProxyGetter,
   registerProxyGetter,
   syncRuntimeProxyToRust,
 } from '../api/http';
@@ -330,7 +331,8 @@ export const useAuthStore = create<AuthState>((set, get) => {
           method: 'GET',
           headers: { Accept: '*/*' },
           proxy,
-          bypassLan: false,
+          respectSystemBypass: false,
+          fallbackToDirect: false,
         });
         const latency = Math.round(performance.now() - startTime);
         if (res.ok || res.status === 204 || (res.status >= 200 && res.status < 400)) {
@@ -414,6 +416,9 @@ registerProxyGetter(() => {
   const current = state.getCurrentServer();
   return current?.proxyConfig || state.globalProxyConfig;
 });
+
+// 全局注册纯全局代理配置解析器（供 WebDAV 等不隶属特定 Emby 服务器的同步服务使用）
+registerGlobalProxyGetter(() => useAuthStore.getState().globalProxyConfig);
 
 // 全局注册自定义 User-Agent 解析器，按服务器 URL 精确匹配对应配置
 registerEmbyUserAgentGetter((serverUrl?: string) => {

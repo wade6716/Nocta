@@ -1,7 +1,7 @@
 // src/api/sync/s3.ts
 
 import { AwsClient } from 'aws4fetch';
-import { httpClient } from '../http';
+import { getGlobalProxyConfig, httpClient } from '../http';
 import { SyncDriverTestResult } from './webdav';
 
 export interface S3Config {
@@ -70,6 +70,7 @@ export class S3SyncDriver {
       method: signedReq.method,
       headers,
       body: options.body,
+      proxy: getGlobalProxyConfig(),
     });
   }
 

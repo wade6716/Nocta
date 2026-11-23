@@ -72,6 +72,7 @@ export interface OsdSyncPayload {
   selectedSecondarySubtitleId?: string | null;
   danmakuStyle: OsdDanmakuStyle;
   isLoading: boolean;
+  isBuffering?: boolean;
   skipSegments?: SkipSegments | null;
   outroToast?: {
     visible: boolean;

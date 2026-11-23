@@ -1,6 +1,6 @@
 // src/api/sync/webdav.ts
 
-import { httpClient, isTauriEnvironment } from '../http';
+import { getGlobalProxyConfig, httpClient, isTauriEnvironment } from '../http';
 
 export interface WebDavConfig {
   url: string; // e.g. "https://dav.jianguoyun.com/dav/nocta/"
@@ -79,6 +79,7 @@ export class WebDavSyncDriver {
   /**
    * 统一发送 WebDAV 请求：
    * - 在 Tauri 环境移除默认 Origin 头，避免 WebDAV 服务校验拒收
+   * - 跟随全局代理配置（不受 Emby 单服代理覆写劫持），并遵循操作系统跳过代理列表
    * - 当用户填 http:// 连向实际为 HTTPS 的端口（如 5006 返回 400 或 TLS 协议错）时，自动升级为 https:// 重试并回写配置
    */
   private async request(
@@ -98,6 +99,7 @@ export class WebDavSyncDriver {
       return httpClient(url, {
         ...init,
         headers,
+        proxy: getGlobalProxyConfig(),
       });
     };
 

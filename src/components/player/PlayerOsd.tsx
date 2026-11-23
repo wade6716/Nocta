@@ -150,7 +150,7 @@ function getProxyShortBadge(info?: ResolvedStreamProxyInfo | null): {
     case 'manual_http':
       return { text: '代理', cls: 'text-emerald-400' };
     case 'lan_bypass':
-      return { text: 'LAN', cls: 'text-teal-400' };
+      return { text: '旁路', cls: 'text-teal-400' };
     case 'socks5_fallback_direct':
       return { text: '直连*', cls: 'text-amber-400' };
     case 'direct':

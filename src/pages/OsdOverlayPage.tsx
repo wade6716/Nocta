@@ -7,6 +7,7 @@ import { DanmakuLayer } from '../components/player/DanmakuLayer';
 import { MpvDanmakuBridge } from '../components/player/MpvDanmakuBridge';
 import { OutroSkipToast } from '../components/player/OutroSkipToast';
 import { SkipNoticeToast } from '../components/player/SkipNoticeToast';
+import { BufferingIndicator } from '../components/player/BufferingIndicator';
 import { MiniActionHud, MiniHudState } from '../components/player/MiniActionHud';
 import { PlayerContextMenu } from '../components/player/PlayerContextMenu';
 import { ShortcutsModal } from '../components/player/ShortcutsModal';
@@ -174,7 +175,7 @@ export const OsdOverlayPage: React.FC = () => {
 
       const bridge = bridgeRef.current;
       bridge.onMpvTimePos(payload.currentTime);
-      bridge.onMpvPauseChange(payload.paused || payload.isLoading);
+      bridge.onMpvPauseChange(payload.paused || payload.isLoading || Boolean(payload.isBuffering));
       bridge.onMpvSpeedChange(payload.playbackRate);
       if (bridge.offset !== payload.danmakuOffset) {
         bridge.offset = payload.danmakuOffset;
@@ -555,6 +556,11 @@ export const OsdOverlayPage: React.FC = () => {
       )}
 
       <MiniActionHud hud={miniHudState} fastForwardRate={sync.fastForwardRate ?? null} />
+
+      <BufferingIndicator
+        visible={Boolean(sync.isBuffering) && !sync.isLoading && !sync.centerIcon}
+        networkSpeed={sync.networkSpeed}
+      />
 
       <DanmakuLayer
         bridge={bridgeRef.current}

@@ -20,3 +20,13 @@ src-tauri/lib/*.dll
 src-tauri/lib/*.so
 src-tauri/lib/*.dylib
 !src-tauri/lib/.gitkeep
+
+# Environment & signing keys
+.env
+.env.*
+*.key
+*.pem
+
+# Local config backup exports
+nocta-backup*.json
+nocta-sync*.json

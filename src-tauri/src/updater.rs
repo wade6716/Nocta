@@ -16,6 +16,7 @@ pub const STABLE_RAW_MANIFEST_URL: &str =
     "https://raw.githubusercontent.com/wade6716/Nocta/updater-manifests/stable.json";
 pub const PRERELEASE_RAW_MANIFEST_URL: &str =
     "https://raw.githubusercontent.com/wade6716/Nocta/updater-manifests/prerelease.json";
+pub const GITHUB_REPO_API_URL: &str = "https://api.github.com/repos/wade6716/Nocta";
 
 pub const UPDATER_PROGRESS_EVENT: &str = "updater://progress";
 
@@ -148,10 +149,11 @@ fn parse_proxy_url(raw: Option<&str>) -> Option<Url> {
     if trimmed.is_empty() {
         return None;
     }
-    let normalized = if let Some(rest) = trimmed.strip_prefix("socks5h://") {
-        format!("socks5://{}", rest)
+    // 将 socks5:// 与 socks:// 升级为 socks5h://，由代理远端解析 GitHub DNS
+    let normalized = if let Some(rest) = trimmed.strip_prefix("socks5://") {
+        format!("socks5h://{}", rest)
     } else if let Some(rest) = trimmed.strip_prefix("socks://") {
-        format!("socks5://{}", rest)
+        format!("socks5h://{}", rest)
     } else {
         trimmed.to_string()
     };
@@ -180,6 +182,94 @@ fn build_updater(
         .map_err(|e| format!("初始化更新引擎失败: {}", e))
 }
 
+fn build_helper_reqwest_client(
+    proxy: Option<&Url>,
+    disable_proxy: bool,
+    timeout_secs: u64,
+) -> Result<reqwest::Client, String> {
+    let mut builder = reqwest::Client::builder()
+        .timeout(Duration::from_secs(timeout_secs))
+        .user_agent("Nocta-Updater");
+
+    if disable_proxy {
+        builder = builder.no_proxy();
+    } else if let Some(proxy_url) = proxy {
+        let proxy_cfg = reqwest::Proxy::all(proxy_url.as_str())
+            .map_err(|e| format!("代理配置无效: {}", e))?;
+        builder = builder.proxy(proxy_cfg);
+    }
+
+    builder
+        .build()
+        .map_err(|e| format!("初始化更新辅助网络客户端失败: {}", e))
+}
+
+async fn send_diag_once(
+    url: &str,
+    accept: &str,
+    proxy: Option<&Url>,
+    no_proxy: bool,
+) -> Option<u16> {
+    let client = build_helper_reqwest_client(proxy, no_proxy, 6).ok()?;
+    let mut req = client.get(url).header("Accept", accept);
+    if accept.contains("github") {
+        req = req.header("X-GitHub-Api-Version", "2022-11-28");
+    }
+    req.send().await.ok().map(|r| r.status().as_u16())
+}
+
+async fn send_diag_get(url: &str, accept: &str, proxy: Option<&Url>) -> Option<(u16, bool)> {
+    if let Some(p) = proxy {
+        if let Some(code) = send_diag_once(url, accept, Some(p), false).await {
+            return Some((code, false));
+        }
+        if let Some(code) = send_diag_once(url, accept, None, true).await {
+            return Some((code, true));
+        }
+        None
+    } else {
+        send_diag_once(url, accept, None, false)
+            .await
+            .map(|code| (code, false))
+    }
+}
+
+/// `tauri-plugin-updater` 会把 404/网络错误统一折叠为 "Could not fetch a valid release JSON"，
+/// 这里补充一次轻量诊断以区分「仓库不可见」「尚无正式版清单」等常见原因
+async fn diagnose_manifest_failure(
+    manifest_url: &Url,
+    channel: &str,
+    proxy: Option<&Url>,
+) -> Option<String> {
+    let (status, used_direct) =
+        send_diag_get(manifest_url.as_str(), "application/json, */*", proxy).await?;
+
+    if status == 404 {
+        let effective_proxy = if used_direct { None } else { proxy };
+        let repo_status = send_diag_get(
+            GITHUB_REPO_API_URL,
+            "application/vnd.github+json",
+            effective_proxy,
+        )
+        .await
+        .map(|(s, _)| s);
+
+        return Some(match repo_status {
+            Some(404) => "无法获取更新清单 (HTTP 404)：GitHub 仓库 wade6716/Nocta 当前不可公开访问，请稍后重试或前往 GitHub Releases 手动下载。".to_string(),
+            Some(200) if channel.eq_ignore_ascii_case("stable") => "当前仓库尚未发布正式版（Stable）更新清单 (HTTP 404)，仅有预发布版本，请切换至「预发布尝鲜版」通道检查更新。".to_string(),
+            _ => format!(
+                "未找到更新清单 (HTTP 404: {})，请确认对应通道的 Release 已完成构建并推送 updater-manifests。",
+                manifest_url
+            ),
+        });
+    }
+
+    if !(200..300).contains(&status) {
+        return Some(format!("远端更新清单返回异常状态 (HTTP {})", status));
+    }
+
+    None
+}
 fn normalize_channel(raw: Option<&str>) -> String {
     match raw.map(str::trim) {
         Some(c) if c.eq_ignore_ascii_case("prerelease") => "prerelease".to_string(),
@@ -222,8 +312,7 @@ pub async fn check_app_update(
     }
 
     let mut used_proxy = parsed_proxy.is_some();
-    let primary_updater =
-        build_updater(&app, endpoints.clone(), parsed_proxy.as_ref(), false)?;
+    let primary_updater = build_updater(&app, endpoints.clone(), parsed_proxy.as_ref(), false)?;
 
     let check_result = match primary_updater.check().await {
         Ok(res) => res,
@@ -233,22 +322,49 @@ pub async fn check_app_update(
                 "[Nocta Updater] 代理检查更新失败，尝试直连回退: {}",
                 primary_err
             );
-            let direct_updater = build_updater(&app, endpoints, None, true)?;
+            let direct_updater = build_updater(&app, endpoints.clone(), None, true)?;
             match direct_updater.check().await {
                 Ok(res) => {
                     used_proxy = false;
                     res
                 }
                 Err(direct_err) => {
+                    let primary_msg = primary_err.to_string();
+                    let direct_msg = direct_err.to_string();
+                    if primary_msg.contains("Could not fetch a valid release JSON")
+                        || direct_msg.contains("Could not fetch a valid release JSON")
+                    {
+                        if let Some(diag) = diagnose_manifest_failure(
+                            &endpoints[0],
+                            &channel,
+                            parsed_proxy.as_ref(),
+                        )
+                        .await
+                        {
+                            return Err(diag);
+                        }
+                    }
                     return Err(format!(
                         "检查更新失败（代理失败: {}; 直连失败: {}）",
-                        primary_err, direct_err
+                        primary_msg, direct_msg
                     ));
                 }
             }
         }
         Err(err) => {
-            return Err(format!("检查更新失败: {}", err));
+            let err_msg = err.to_string();
+            if err_msg.contains("Could not fetch a valid release JSON") {
+                if let Some(diag) = diagnose_manifest_failure(
+                    &endpoints[0],
+                    &channel,
+                    None,
+                )
+                .await
+                {
+                    return Err(diag);
+                }
+            }
+            return Err(format!("检查更新失败: {}", err_msg));
         }
     };
 
@@ -515,10 +631,22 @@ mod tests {
     fn test_parse_proxy_url_normalizes_socks_variants() {
         assert_eq!(parse_proxy_url(Some("   ")), None);
         assert_eq!(
+            parse_proxy_url(Some("socks5://127.0.0.1:10808"))
+                .unwrap()
+                .as_str(),
+            "socks5h://127.0.0.1:10808"
+        );
+        assert_eq!(
+            parse_proxy_url(Some("socks://127.0.0.1:10808"))
+                .unwrap()
+                .as_str(),
+            "socks5h://127.0.0.1:10808"
+        );
+        assert_eq!(
             parse_proxy_url(Some("socks5h://127.0.0.1:10808"))
                 .unwrap()
                 .as_str(),
-            "socks5://127.0.0.1:10808"
+            "socks5h://127.0.0.1:10808"
         );
         assert_eq!(
             parse_proxy_url(Some("http://127.0.0.1:7890"))

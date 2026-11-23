@@ -23,6 +23,7 @@ export class Html5PlayerEngine implements IPlayerEngine {
   private speedPollTimer: number | null = null;
   private lastBufferedEnd = 0;
   private lastProgressCheckTime = 0;
+  private mediaBitrateBps = 8_000_000;
 
   get state(): PlayerState {
     return this._state;
@@ -78,7 +79,9 @@ export class Html5PlayerEngine implements IPlayerEngine {
     };
 
     this.video.onwaiting = () => {
-      this.setState('buffering');
+      if (this._state !== 'loading' && !this._paused) {
+        this.setState('buffering');
+      }
     };
 
     this.video.onplaying = () => {
@@ -130,6 +133,11 @@ export class Html5PlayerEngine implements IPlayerEngine {
   async load(options: PlayerLoadOptions): Promise<void> {
     if (!this.video) return;
 
+    this.mediaBitrateBps =
+      options.bufferConfig?.mediaBitrateBps && options.bufferConfig.mediaBitrateBps > 0
+        ? options.bufferConfig.mediaBitrateBps
+        : 8_000_000;
+    this.lastBufferedEnd = 0;
     this.startSpeedPolling();
     this.setState('loading');
     this.video.src = options.url;
@@ -244,10 +252,9 @@ export class Html5PlayerEngine implements IPlayerEngine {
         const deltaSec = Math.max(0, maxBufferedEnd - this.lastBufferedEnd);
         this.lastBufferedEnd = maxBufferedEnd;
 
-        // 若缓冲向前延伸，按典型码率估算下载速率 (约 8 Mbps ~ 1MB/s)
+        // 若缓冲向前延伸，按当前片源码率（缺失时按 8 Mbps）估算下载速率
         if (deltaSec > 0) {
-          const estimatedBitrate = 8_000_000;
-          speed = (deltaSec * (estimatedBitrate / 8)) / dt;
+          speed = (deltaSec * (this.mediaBitrateBps / 8)) / dt;
         }
         const cacheDur = Math.max(0, maxBufferedEnd - (this.video.currentTime || 0));
         this.telemetryListeners.forEach((cb) =>

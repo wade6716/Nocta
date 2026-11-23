@@ -49,6 +49,7 @@ import { DanmakuLayer } from '../components/player/DanmakuLayer';
 import { PlayerOsd, formatTime } from '../components/player/PlayerOsd';
 import { DanmakuDrawer } from '../components/player/DanmakuDrawer';
 import { PlaybackInfoModal } from '../components/player/PlaybackInfoModal';
+import { BufferingIndicator } from '../components/player/BufferingIndicator';
 import { MiniActionHud, MiniHudState } from '../components/player/MiniActionHud';
 import { PlayerContextMenu } from '../components/player/PlayerContextMenu';
 import { ShortcutsModal } from '../components/player/ShortcutsModal';
@@ -172,6 +173,7 @@ export const PlayerPage: React.FC = () => {
   const updateTracks = usePlayerStore((s) => s.updateTracks);
   const updateTime = usePlayerStore((s) => s.updateTime);
   const setPaused = usePlayerStore((s) => s.setPaused);
+  const setBuffering = usePlayerStore((s) => s.setBuffering);
   const setVolume = usePlayerStore((s) => s.setVolume);
   const setPlaybackRate = usePlayerStore((s) => s.setPlaybackRate);
   const selectAudioTrack = usePlayerStore((s) => s.selectAudioTrack);
@@ -191,6 +193,7 @@ export const PlayerPage: React.FC = () => {
   const [currentStreamUrl, setCurrentStreamUrl] = useState<string | null>(streamUrl);
   const [reloadToken, setReloadToken] = useState(0);
   const [isLoadingVideo, setIsLoadingVideo] = useState(true);
+  const [isBuffering, setIsBuffering] = useState(false);
   const [videoError, setVideoError] = useState<string | null>(null);
   const [diagnosticReport, setDiagnosticReport] = useState<StreamDiagnosticReport | null>(null);
   const [diagnosingStream, setDiagnosingStream] = useState(false);
@@ -430,6 +433,14 @@ export const PlayerPage: React.FC = () => {
     showMiniHud,
   });
 
+  const updateBuffering = useCallback(
+    (next: boolean) => {
+      setIsBuffering(next);
+      setBuffering(next);
+    },
+    [setBuffering]
+  );
+
   // Sync streamUrl when store changes
   useEffect(() => {
     if (streamUrl) {
@@ -449,6 +460,7 @@ export const PlayerPage: React.FC = () => {
       }
       setCurrentStreamUrl(streamUrl);
       setIsLoadingVideo(true);
+      updateBuffering(false);
       setVideoError(null);
       setAbLoopA(null);
       setAbLoopB(null);
@@ -460,7 +472,7 @@ export const PlayerPage: React.FC = () => {
       lastStoreTimeUpdateRef.current = { at: 0, time: 0, dur: 0 };
       resetOutroForNewStream();
     }
-  }, [streamUrl, resetOutroForNewStream]);
+  }, [streamUrl, resetOutroForNewStream, updateBuffering]);
 
   // 采样 30 秒实时下载速率历史曲线
   useEffect(() => {
@@ -554,9 +566,11 @@ export const PlayerPage: React.FC = () => {
       switch (st) {
         case 'loading':
           setIsLoadingVideo(true);
+          updateBuffering(false);
           setVideoError(null);
           break;
         case 'playing':
+          updateBuffering(false);
           if (!hasInitialSeekedRef.current && initialTimeRef.current > 0) {
             setPaused(false);
             bridge.onMpvPauseChange(false);
@@ -567,6 +581,7 @@ export const PlayerPage: React.FC = () => {
           bridge.onMpvPauseChange(false);
           break;
         case 'paused':
+          updateBuffering(false);
           if (!hasInitialSeekedRef.current && initialTimeRef.current > 0) {
             setPaused(true);
             bridge.onMpvPauseChange(true);
@@ -577,11 +592,12 @@ export const PlayerPage: React.FC = () => {
           bridge.onMpvPauseChange(true);
           break;
         case 'buffering':
-          setIsLoadingVideo(true);
+          updateBuffering(true);
           bridge.onMpvPauseChange(true);
           break;
         case 'ended':
           setIsLoadingVideo(false);
+          updateBuffering(false);
           setPaused(true);
           clearOutroOnEnded();
           bridge.onMpvPauseChange(true);
@@ -656,10 +672,11 @@ export const PlayerPage: React.FC = () => {
       unlistenSpeed?.();
       unlistenTelemetry?.();
       unlistenProxy?.();
+      updateBuffering(false);
       engine.destroy();
       engineRef.current = null;
     };
-  }, [engineType]);
+  }, [engineType, updateBuffering]);
 
   // Sync streamUrl / reloadToken into active engine
   useEffect(() => {
@@ -949,7 +966,7 @@ export const PlayerPage: React.FC = () => {
       currentTime,
       duration: effectiveDuration,
       paused,
-      isLoadingVideo,
+      isLoadingVideo: isLoadingVideo || isBuffering,
       videoError,
       telemetry,
       proxyOverride,
@@ -965,6 +982,7 @@ export const PlayerPage: React.FC = () => {
       const reqId = ++episodeSwitchReqIdRef.current;
       try {
         setIsLoadingVideo(true);
+        updateBuffering(false);
         setVideoError(null);
         setActivePanel('none');
         setAutoNextCountdown(null);
@@ -1028,6 +1046,7 @@ export const PlayerPage: React.FC = () => {
       consumePreloadedSession,
       setPlaybackContext,
       showMiniHud,
+      updateBuffering,
     ]
   );
 
@@ -1056,6 +1075,7 @@ export const PlayerPage: React.FC = () => {
       initialTimeRef.current = liveSec;
       hasInitialSeekedRef.current = liveSec <= 0;
       setIsLoadingVideo(true);
+      updateBuffering(false);
       setVideoError(null);
       setPlaybackContext({
         item,
@@ -1084,6 +1104,7 @@ export const PlayerPage: React.FC = () => {
       releaseActivePreload,
       setPlaybackContext,
       showMiniHud,
+      updateBuffering,
     ]
   );
 
@@ -1094,6 +1115,7 @@ export const PlayerPage: React.FC = () => {
       !playerPreferences.autoPlayNext ||
       cancelAutoNext ||
       isLoadingVideo ||
+      isBuffering ||
       videoError ||
       effectiveDuration <= 60
     ) {
@@ -1117,6 +1139,7 @@ export const PlayerPage: React.FC = () => {
     playerPreferences.autoPlayNext,
     cancelAutoNext,
     isLoadingVideo,
+    isBuffering,
     videoError,
     effectiveDuration,
     currentTime,
@@ -1524,6 +1547,7 @@ export const PlayerPage: React.FC = () => {
       initialTimeRef.current = liveSec;
       hasInitialSeekedRef.current = liveSec <= 0;
       setIsLoadingVideo(true);
+      updateBuffering(false);
       setVideoError(null);
       if (upstreamStreamUrlRef.current && upstreamStreamUrlRef.current !== currentStreamUrl) {
         releaseActivePreload();
@@ -1541,7 +1565,7 @@ export const PlayerPage: React.FC = () => {
             : '正按全局代理配置重连...',
       });
     },
-    [currentStreamUrl, currentTime, releaseActivePreload, showMiniHud]
+    [currentStreamUrl, currentTime, releaseActivePreload, showMiniHud, updateBuffering]
   );
 
   const handleToggleFullscreen = async () => {
@@ -1886,6 +1910,7 @@ export const PlayerPage: React.FC = () => {
       console.warn('[Video Error Event] engine:', engineType, 'err:', errMsg);
 
       setIsLoadingVideo(false);
+      updateBuffering(false);
       setPaused(true);
 
       if (!currentServer || !item || !mediaSource || !playSessionId) {
@@ -1919,7 +1944,7 @@ export const PlayerPage: React.FC = () => {
         runStreamDiagnosticRef.current(true);
       }
     },
-    [currentServer, item, mediaSource, playSessionId, engineType, setPaused]
+    [currentServer, item, mediaSource, playSessionId, engineType, setPaused, updateBuffering]
   );
 
   useEffect(() => {
@@ -1940,7 +1965,7 @@ export const PlayerPage: React.FC = () => {
       : proxyInfo?.mode === 'socks5_bridge'
       ? 'SOCKS5 隧道代理'
       : proxyInfo?.mode === 'lan_bypass'
-      ? 'LAN 直通'
+      ? '绕过直连'
       : '直连';
 
   const currentUserAgent = resolveEmbyUserAgent(currentServer?.userAgent, currentServer?.url);
@@ -1999,6 +2024,7 @@ export const PlayerPage: React.FC = () => {
       setDiagnosticReport(null);
       setDiagnosticCopied(false);
       setIsLoadingVideo(true);
+      updateBuffering(false);
       hasInitialSeekedRef.current = false;
       resetOutroForNewStream();
       const resolvedInit = resolveInitialPlaybackTime(initialTimeRef.current);
@@ -2006,7 +2032,7 @@ export const PlayerPage: React.FC = () => {
       setCurrentStreamUrl(started.localUrl);
       setReloadToken((t) => t + 1);
     },
-    [currentStreamUrl, resetOutroForNewStream, resolveInitialPlaybackTime]
+    [currentStreamUrl, resetOutroForNewStream, resolveInitialPlaybackTime, updateBuffering]
   );
 
   const runStreamDiagnostic = useCallback(
@@ -2095,6 +2121,7 @@ export const PlayerPage: React.FC = () => {
               setDiagnosticCopied(false);
               setVideoError(null);
               setIsLoadingVideo(true);
+              updateBuffering(false);
               hasInitialSeekedRef.current = false;
               resetOutroForNewStream();
               upstreamStreamUrlRef.current = candidateUrl;
@@ -2128,6 +2155,7 @@ export const PlayerPage: React.FC = () => {
       startRelayPlayback,
       stopActiveRelay,
       showMiniHud,
+      updateBuffering,
     ]
   );
 
@@ -2148,6 +2176,7 @@ export const PlayerPage: React.FC = () => {
     setDiagnosticReport(null);
     setDiagnosticCopied(false);
     setIsLoadingVideo(true);
+    updateBuffering(false);
     setVideoError(null);
     hasInitialSeekedRef.current = false;
     resetOutroForNewStream();
@@ -2174,6 +2203,7 @@ export const PlayerPage: React.FC = () => {
     setDiagnosticReport(null);
     setDiagnosticCopied(false);
     setIsLoadingVideo(true);
+    updateBuffering(false);
     setVideoError(null);
     hasInitialSeekedRef.current = false;
     resetOutroForNewStream();
@@ -2196,6 +2226,7 @@ export const PlayerPage: React.FC = () => {
     setDiagnosticCopied(false);
     setVideoError(null);
     setIsLoadingVideo(true);
+    updateBuffering(false);
     hasInitialSeekedRef.current = false;
     resetOutroForNewStream();
 
@@ -2276,6 +2307,7 @@ export const PlayerPage: React.FC = () => {
   const handleSwitchToMpv = () => {
     setVideoError(null);
     setIsLoadingVideo(true);
+    updateBuffering(false);
     hasInitialSeekedRef.current = false;
     setEngineType('mpv');
   };
@@ -2337,6 +2369,7 @@ export const PlayerPage: React.FC = () => {
           bottomMargin: danmakuSettings.bottomMargin,
         },
         isLoading: isLoadingVideo,
+        isBuffering,
         skipSegments: currentSkipSegments || null,
         outroToast: {
           visible: Boolean(outroToast),
@@ -2397,6 +2430,7 @@ export const PlayerPage: React.FC = () => {
     selectedSubtitleId,
     selectedSecondarySubtitleId,
     isLoadingVideo,
+    isBuffering,
     videoSpecLabel,
     miniHud?.id ?? 0,
     fastForwardRate ?? '',
@@ -2656,6 +2690,12 @@ export const PlayerPage: React.FC = () => {
       {!osdOverlayActive && (
         <MiniActionHud hud={miniHud} fastForwardRate={fastForwardRate} />
       )}
+
+      {/* 播放中卡顿/缓冲时仅显示当前加载网速，不遮挡画面 */}
+      <BufferingIndicator
+        visible={isBuffering && !isLoadingVideo && !videoError && !osdOverlayActive && !centerIcon}
+        networkSpeed={networkSpeed}
+      />
 
       {/* 底层：原生视频表面穿透层与交互层 */}
       <div

@@ -280,8 +280,17 @@ export const NetworkProxyModal: React.FC<NetworkProxyModalProps> = ({ isOpen, on
                   <span>系统当前未开启代理（将自动采用直连访问）</span>
                 </div>
               )}
+              {systemProxy.bypass && systemProxy.bypass.length > 0 && (
+                <div
+                  className="text-[11px] text-gray-400 font-mono bg-white/[0.03] px-3 py-1.5 rounded-lg border border-white/5 truncate"
+                  title={systemProxy.bypass.join('; ')}
+                >
+                  系统跳过代理列表 ({systemProxy.bypass.length} 项)：
+                  {systemProxy.bypass.join(', ')}
+                </div>
+              )}
               <p className="text-[11px] text-gray-500 leading-normal">
-                提示：支持 Windows 注册表、macOS 预设与 Linux 系统代理。当您在 Clash / v2rayN 等工具中打开或关闭系统代理开关时，Nocta 将自动同步应用。
+                提示：支持 Windows 注册表（含跳过代理列表 ProxyOverride）、macOS 系统代理与忽略列表（ExceptionsList）及 Linux / NO_PROXY。绕过规则仅遵循操作系统列表，不再在应用内硬编码忽略局域网地址。
               </p>
             </div>
           )}

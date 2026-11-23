@@ -59,7 +59,7 @@ function getProxyModeBadge(info: ResolvedStreamProxyInfo | null): {
       };
     case 'lan_bypass':
       return {
-        label: '局域网直通旁路',
+        label: '系统绕过直连',
         color: 'text-teal-300 bg-teal-500/15 border-teal-500/30',
       };
     case 'socks5_fallback_direct':
@@ -151,7 +151,7 @@ export const NetworkProxyPopover: React.FC<NetworkProxyPopoverProps> = ({
                 <ShieldCheck className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                 <span className="truncate">
                   {proxyInfo?.mode === 'lan_bypass'
-                    ? '命中内网/本地地址规则，已自动旁路直连'
+                    ? '命中操作系统跳过代理列表，已自动旁路直连'
                     : '未使用 HTTP 代理，直接连接媒体服务器'}
                 </span>
               </div>

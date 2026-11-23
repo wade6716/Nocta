@@ -79,7 +79,7 @@ function formatProxyLabel(info?: ResolvedStreamProxyInfo | null): string {
     case 'socks5_bridge':
       return `SOCKS5 本地隧道代理 (${info.configuredProxy || info.effectiveProxy})`;
     case 'lan_bypass':
-      return '局域网自动旁路直连';
+      return '系统跳过代理列表旁路直连';
     case 'socks5_fallback_direct':
       return `SOCKS5 已配置 (${info.configuredProxy}) · 视频流直连`;
     case 'direct':

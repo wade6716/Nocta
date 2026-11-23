@@ -1,7 +1,19 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
-import { isTauriEnvironment, resolveEffectiveProxy } from '../api/http';
+import {
+  getGlobalProxyConfig,
+  isTauriEnvironment,
+  resolveEffectiveProxyDetailed,
+  shouldBypassProxy,
+} from '../api/http';
+
+async function resolveUpdaterProxy(mirrorPrefix: string): Promise<string | undefined> {
+  const detail = await resolveEffectiveProxyDetailed(getGlobalProxyConfig());
+  if (!detail.url) return undefined;
+  const target = mirrorPrefix.trim() || 'https://github.com';
+  return shouldBypassProxy(target, detail.bypass) ? undefined : detail.url;
+}
 
 export type UpdateChannel = 'stable' | 'prerelease';
 
@@ -163,7 +175,11 @@ export interface UpdaterState {
     partial: Partial<
       Pick<
         UpdaterPreferences,
-        'autoCheckOnStartup' | 'channel' | 'mirrorPrefix' | 'ignoredVersion' | 'lastCheckedAt'
+        | 'autoCheckOnStartup'
+        | 'channel'
+        | 'mirrorPrefix'
+        | 'ignoredVersion'
+        | 'lastCheckedAt'
       >
     >
   ) => void;
@@ -256,8 +272,8 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => ({
     }
 
     try {
-      const proxyUrl = await resolveEffectiveProxy();
       const { channel, mirrorPrefix, ignoredVersion } = get();
+      const proxyUrl = await resolveUpdaterProxy(mirrorPrefix);
 
       const res = await invoke<RustUpdateCheckResult>('check_app_update', {
         options: {
@@ -339,8 +355,8 @@ export const useUpdaterStore = create<UpdaterState>((set, get) => ({
     try {
       // 若此前安装曾失败（Rust 状态已被消费），自动重新探测一次刷新待安装会话
       if (currentStatus === 'error' || !get().updateInfo) {
-        const proxyUrl = await resolveEffectiveProxy();
         const { channel, mirrorPrefix } = get();
+        const proxyUrl = await resolveUpdaterProxy(mirrorPrefix);
         const recheck = await invoke<RustUpdateCheckResult>('check_app_update', {
           options: {
             channel,

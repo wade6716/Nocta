@@ -23,6 +23,7 @@ import {
 } from './types';
 import { DEFAULT_EMBY_USER_AGENT, MappedTrack } from '../api/embyClient';
 import {
+  isLoopbackUrl,
   isTauriEnvironment,
   resolveEffectiveProxyDetailed,
   shouldBypassProxy,
@@ -36,6 +37,7 @@ const OBSERVED_PROPERTIES = [
   ['time-pos', 'double', 'none'],
   ['duration', 'double', 'none'],
   ['paused-for-cache', 'flag'],
+  ['seeking', 'flag', 'none'],
   ['speed', 'double'],
   ['volume', 'double'],
   ['dwidth', 'int64', 'none'],
@@ -63,7 +65,7 @@ export async function resolveMpvProxyDetailed(
   try {
     const detail = await resolveEffectiveProxyDetailed();
 
-    if (override === 'follow' && targetUrl && shouldBypassProxy(targetUrl, detail.bypass)) {
+    if (override === 'follow' && Boolean(detail.url) && targetUrl && shouldBypassProxy(targetUrl, detail.bypass)) {
       return { mode: 'lan_bypass', effectiveProxy: '', overrideMode: 'follow' };
     }
 
@@ -125,9 +127,6 @@ export async function resolveMpvProxyDetailed(
     };
   } catch (e) {
     console.warn('[MpvEngine Resolve Proxy Warning]', e);
-    if (override === 'follow' && targetUrl && shouldBypassProxy(targetUrl)) {
-      return { mode: 'lan_bypass', effectiveProxy: '', overrideMode: 'follow' };
-    }
     return { mode: 'direct', effectiveProxy: '', overrideMode: override };
   }
 }
@@ -199,7 +198,11 @@ export class MpvPlayerEngine implements IPlayerEngine {
   private _volume = 100;
   private _playbackRate = 1.0;
   private _paused = true;
-  private _isBuffering = false;
+  private _pausedForCache = false;
+  private _isSeeking = false;
+  private _isSeekBuffering = false;
+  private seekBufferTimer: number | null = null;
+  private bufferingFreezeTimePos: number | null = null;
   private _videoWidth = 0;
   private _videoHeight = 0;
   private _networkSpeed = 0;
@@ -391,19 +394,54 @@ export class MpvPlayerEngine implements IPlayerEngine {
             break;
           }
           case 'paused-for-cache': {
-            const isBuffering = Boolean(data);
-            this._isBuffering = isBuffering;
+            this._pausedForCache = Boolean(data);
+            this.bufferingFreezeTimePos = this._pausedForCache ? this._currentTime : null;
             if (this._state !== 'loading') {
               this.updateCurrentState();
+            }
+            break;
+          }
+          case 'seeking': {
+            this._isSeeking = Boolean(data);
+            if (this._isSeeking) {
+              if (
+                this._state !== 'loading' &&
+                !this._isSeekBuffering &&
+                this.seekBufferTimer === null
+              ) {
+                this.seekBufferTimer = window.setTimeout(() => {
+                  this.seekBufferTimer = null;
+                  if (!this.isDestroyed && this._isSeeking && this._state !== 'loading') {
+                    this._isSeekBuffering = true;
+                    this.updateCurrentState();
+                  }
+                }, 250);
+              }
+            } else {
+              this.clearSeekBufferTimer();
+              this._isSeekBuffering = false;
+              if (this._state !== 'loading') {
+                this.updateCurrentState();
+              }
             }
             break;
           }
           case 'time-pos': {
             if (typeof data === 'number' && !Number.isNaN(data)) {
               this._currentTime = data;
-              if (this._isBuffering) {
-                this._isBuffering = false;
-                this.updateCurrentState();
+              if (
+                this._pausedForCache &&
+                !this._isSeeking &&
+                !this._paused &&
+                this.bufferingFreezeTimePos !== null &&
+                data - this.bufferingFreezeTimePos > 0.15 &&
+                data - this.bufferingFreezeTimePos < 3.0
+              ) {
+                this._pausedForCache = false;
+                this.bufferingFreezeTimePos = null;
+                if (this._state !== 'loading') {
+                  this.updateCurrentState();
+                }
               } else if (this._state === 'loading') {
                 this.updateCurrentState();
               }
@@ -546,7 +584,11 @@ export class MpvPlayerEngine implements IPlayerEngine {
         } else if (evName === 'playback-restart') {
           // 首帧或定点跳转后音视频解码恢复就绪，重置 start 属性以免影响后续切片
           setProperty('start', 'none').catch(() => {});
-          this._isBuffering = false;
+          this._pausedForCache = false;
+          this._isSeeking = false;
+          this._isSeekBuffering = false;
+          this.bufferingFreezeTimePos = null;
+          this.clearSeekBufferTimer();
           this.updateCurrentState();
           this.timeUpdateListeners.forEach((cb) => cb(this._currentTime, this._duration));
           this.attachMacWindow();
@@ -627,6 +669,13 @@ export class MpvPlayerEngine implements IPlayerEngine {
     }
   }
 
+  private clearSeekBufferTimer() {
+    if (this.seekBufferTimer !== null) {
+      window.clearTimeout(this.seekBufferTimer);
+      this.seekBufferTimer = null;
+    }
+  }
+
   private handleTrackList(tracks: any[]) {
     const audio: MappedTrack[] = [];
     const subtitles: MappedTrack[] = [];
@@ -665,10 +714,12 @@ export class MpvPlayerEngine implements IPlayerEngine {
   }
 
   private updateCurrentState() {
-    if (this._isBuffering) {
+    if (this._isSeekBuffering) {
       this.setState('buffering');
     } else if (this._paused) {
       this.setState('paused');
+    } else if (this._pausedForCache) {
+      this.setState('buffering');
     } else {
       this.setState('playing');
     }
@@ -709,7 +760,8 @@ export class MpvPlayerEngine implements IPlayerEngine {
         proxyTargetUrl,
         options.proxyOverride ?? 'follow'
       );
-      mpvEffectiveProxy = shouldBypassProxy(options.url) ? '' : resolvedProxyInfo.effectiveProxy;
+      const isInternalLocalRelay = Boolean(options.upstreamUrl && isLoopbackUrl(options.url));
+      mpvEffectiveProxy = isInternalLocalRelay ? '' : resolvedProxyInfo.effectiveProxy;
       this._lastProxyInfo = resolvedProxyInfo;
       this.proxyResolvedListeners.forEach((cb) => cb(resolvedProxyInfo));
       await setProperty('http-proxy', mpvEffectiveProxy);
@@ -733,6 +785,11 @@ export class MpvPlayerEngine implements IPlayerEngine {
     await setProperty('demuxer-mkv-subtitle-preroll', 'no').catch(() => {});
     await this.applyNetworkHeadersToMpv(options.userAgent, options.headers);
 
+    this._pausedForCache = false;
+    this._isSeeking = false;
+    this._isSeekBuffering = false;
+    this.bufferingFreezeTimePos = null;
+    this.clearSeekBufferTimer();
     this.setState('loading');
     this.pendingSeekTime = options.initialTime && options.initialTime > 0 ? options.initialTime : null;
     this._currentTime = 0;
@@ -787,7 +844,7 @@ export class MpvPlayerEngine implements IPlayerEngine {
     try {
       await setProperty('pause', false);
       this._paused = false;
-      this.setState('playing');
+      this.updateCurrentState();
     } catch (err) {
       console.warn('[MpvEngine Play Error]', err);
     }
@@ -798,7 +855,7 @@ export class MpvPlayerEngine implements IPlayerEngine {
     try {
       await setProperty('pause', true);
       this._paused = true;
-      this.setState('paused');
+      this.updateCurrentState();
     } catch (err) {
       console.warn('[MpvEngine Pause Error]', err);
     }
@@ -817,6 +874,9 @@ export class MpvPlayerEngine implements IPlayerEngine {
     try {
       await command('seek', [targetSeconds, 'absolute']);
       this._currentTime = targetSeconds;
+      if (this._pausedForCache) {
+        this.bufferingFreezeTimePos = targetSeconds;
+      }
       this.timeUpdateListeners.forEach((cb) => cb(targetSeconds, this._duration));
     } catch (err) {
       console.warn('[MpvEngine Seek Error]', err);
@@ -1110,6 +1170,11 @@ export class MpvPlayerEngine implements IPlayerEngine {
     }
 
     this.stopSpeedPolling();
+    this.clearSeekBufferTimer();
+    this._pausedForCache = false;
+    this._isSeeking = false;
+    this._isSeekBuffering = false;
+    this.bufferingFreezeTimePos = null;
     this.timeUpdateListeners.clear();
     this.stateChangeListeners.clear();
     this.errorListeners.clear();

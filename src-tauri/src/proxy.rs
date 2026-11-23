@@ -120,7 +120,7 @@ pub fn normalize_proxy_url(raw: &str) -> Option<String> {
 }
 
 fn parse_bypass_rules(raw: &str) -> Vec<String> {
-    raw.split(|c| c == ';' || c == ',' || c == '\n')
+    raw.split(|c: char| c == ';' || c == ',' || c.is_whitespace())
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
@@ -181,6 +181,7 @@ fn detect_macos_scutil_proxy() -> Option<SystemProxyInfo> {
     let mut https_port: u16 = 0;
     let mut bypass = Vec::new();
     let mut in_exceptions = false;
+    let mut exclude_simple_hostnames = false;
 
     for raw_line in text.lines() {
         let line = raw_line.trim();
@@ -195,7 +196,7 @@ fn detect_macos_scutil_proxy() -> Option<SystemProxyInfo> {
             }
             if let Some((_, val)) = line.split_once(':') {
                 let v = val.trim();
-                if !v.is_empty() {
+                if !v.is_empty() && !bypass.iter().any(|existing| existing == v) {
                     bypass.push(v.to_string());
                 }
             }
@@ -217,32 +218,30 @@ fn detect_macos_scutil_proxy() -> Option<SystemProxyInfo> {
             "SOCKSEnable" => socks_enabled = val == "1",
             "SOCKSProxy" => socks_host = val.to_string(),
             "SOCKSPort" => socks_port = val.parse().unwrap_or(0),
+            "ExcludeSimpleHostnames" => exclude_simple_hostnames = val == "1",
             _ => {}
         }
     }
 
-    if http_enabled && !http_host.is_empty() && http_port > 0 {
-        return Some(SystemProxyInfo {
-            enabled: true,
-            url: Some(format!("http://{http_host}:{http_port}")),
-            bypass,
-        });
+    if exclude_simple_hostnames && !bypass.iter().any(|r| r.eq_ignore_ascii_case("<local>")) {
+        bypass.push("<local>".to_string());
     }
-    if https_enabled && !https_host.is_empty() && https_port > 0 {
-        return Some(SystemProxyInfo {
-            enabled: true,
-            url: Some(format!("http://{https_host}:{https_port}")),
-            bypass,
-        });
-    }
-    if socks_enabled && !socks_host.is_empty() && socks_port > 0 {
-        return Some(SystemProxyInfo {
-            enabled: true,
-            url: Some(format!("socks5://{socks_host}:{socks_port}")),
-            bypass,
-        });
-    }
-    None
+
+    let url = if http_enabled && !http_host.is_empty() && http_port > 0 {
+        Some(format!("http://{http_host}:{http_port}"))
+    } else if https_enabled && !https_host.is_empty() && https_port > 0 {
+        Some(format!("http://{https_host}:{https_port}"))
+    } else if socks_enabled && !socks_host.is_empty() && socks_port > 0 {
+        Some(format!("socks5://{socks_host}:{socks_port}"))
+    } else {
+        None
+    };
+
+    Some(SystemProxyInfo {
+        enabled: url.is_some(),
+        url,
+        bypass,
+    })
 }
 
 /// 跨平台获取操作系统系统代理 (Windows / macOS / Linux)
@@ -288,6 +287,7 @@ pub fn detect_system_proxy() -> SystemProxyInfo {
 
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
+        let mut sysproxy_url: Option<String> = None;
         if let Ok(sys) = sysproxy::Sysproxy::get_system_proxy() {
             for rule in parse_bypass_rules(&sys.bypass) {
                 if !bypass.contains(&rule) {
@@ -295,23 +295,38 @@ pub fn detect_system_proxy() -> SystemProxyInfo {
                 }
             }
             if sys.enable && !sys.host.is_empty() && sys.port > 0 {
-                let url = format!("http://{}:{}", sys.host, sys.port);
-                return SystemProxyInfo {
-                    enabled: true,
-                    url: Some(url),
-                    bypass,
-                };
+                sysproxy_url = Some(format!("http://{}:{}", sys.host, sys.port));
             }
         }
 
         #[cfg(target_os = "macos")]
-        if let Some(mut info) = detect_macos_scutil_proxy() {
-            for rule in bypass {
-                if !info.bypass.contains(&rule) {
-                    info.bypass.push(rule);
+        let scutil_info = detect_macos_scutil_proxy();
+        #[cfg(target_os = "macos")]
+        if let Some(ref info) = scutil_info {
+            for rule in &info.bypass {
+                if !bypass.contains(rule) {
+                    bypass.push(rule.clone());
                 }
             }
-            return info;
+        }
+
+        if let Some(url) = sysproxy_url {
+            return SystemProxyInfo {
+                enabled: true,
+                url: Some(url),
+                bypass,
+            };
+        }
+
+        #[cfg(target_os = "macos")]
+        if let Some(info) = scutil_info {
+            if info.enabled && info.url.is_some() {
+                return SystemProxyInfo {
+                    enabled: true,
+                    url: info.url,
+                    bypass,
+                };
+            }
         }
     }
 
@@ -377,56 +392,104 @@ fn glob_match(pattern: &str, text: &str) -> bool {
     pi == p.len()
 }
 
-fn is_builtin_local_host(host: &str) -> bool {
-    if host == "localhost"
-        || host == "::1"
-        || host == "0.0.0.0"
-        || host.ends_with(".local")
-        || host.ends_with(".lan")
-    {
-        return true;
-    }
+fn match_cidr(host_ip: Option<IpAddr>, addr_part: &str, prefix_part: &str) -> Option<bool> {
+    let clean_addr = addr_part.trim().trim_matches(|c| c == '[' || c == ']');
+    let net_ip = clean_addr.parse::<IpAddr>().ok()?;
+    let prefix: u32 = prefix_part.trim().parse().ok()?;
 
-    if let Ok(ip) = host.parse::<IpAddr>() {
-        return match ip {
-            IpAddr::V4(v4) => {
-                v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
+    match net_ip {
+        IpAddr::V4(net_v4) => {
+            if prefix > 32 {
+                return None;
             }
-            IpAddr::V6(v6) => {
-                let seg0 = v6.segments()[0];
-                let is_ula = (seg0 & 0xfe00) == 0xfc00;
-                let is_link_local = (seg0 & 0xffc0) == 0xfe80;
-                v6.is_loopback() || v6.is_unspecified() || is_ula || is_link_local
+            let Some(IpAddr::V4(target_v4)) = host_ip else {
+                return Some(false);
+            };
+            let mask: u32 = if prefix == 0 {
+                0
+            } else {
+                !0u32 << (32 - prefix)
+            };
+            Some((u32::from(target_v4) & mask) == (u32::from(net_v4) & mask))
+        }
+        IpAddr::V6(net_v6) => {
+            if prefix > 128 {
+                return None;
             }
-        };
+            let Some(IpAddr::V6(target_v6)) = host_ip else {
+                return Some(false);
+            };
+            let mask: u128 = if prefix == 0 {
+                0
+            } else {
+                !0u128 << (128 - prefix)
+            };
+            Some((u128::from(target_v6) & mask) == (u128::from(net_v6) & mask))
+        }
     }
-
-    false
 }
 
-/// 判断目标 URL 是否命中内网/回环或系统绕过规则（如 Windows ProxyOverride / NO_PROXY）
+fn split_rule_host_port(rule: &str) -> (&str, Option<&str>) {
+    if let Some(rest) = rule.strip_prefix('[') {
+        if let Some((inner, after)) = rest.split_once(']') {
+            if let Some(port_part) = after.strip_prefix(':') {
+                return (inner, Some(port_part));
+            }
+            return (inner, None);
+        }
+    }
+
+    if rule.matches(':').count() == 1 {
+        if let Some((host_part, port_part)) = rule.split_once(':') {
+            return (host_part, Some(port_part));
+        }
+    }
+
+    (rule, None)
+}
+
+/// 严格依据操作系统「跳过代理」列表及 NO_PROXY 规则判断目标 URL 是否旁路代理
 pub fn should_bypass_proxy(target_url: &str, bypass_rules: &[String]) -> bool {
+    if bypass_rules.is_empty() {
+        return false;
+    }
+
     let Ok(parsed) = Url::parse(target_url) else {
         return false;
     };
     let Some(raw_host) = parsed.host_str() else {
         return false;
     };
-    let host = raw_host.trim_matches(|c| c == '[' || c == ']').to_ascii_lowercase();
-    if is_builtin_local_host(&host) {
-        return true;
+    let scheme = parsed.scheme().to_ascii_lowercase();
+    let host = raw_host
+        .trim_matches(|c| c == '[' || c == ']')
+        .to_ascii_lowercase();
+    if host.is_empty() {
+        return false;
     }
-
+    let host_ip = host.parse::<IpAddr>().ok();
     let port = parsed.port_or_known_default();
-    let host_port = port.map(|p| format!("{host}:{p}"));
 
     for raw_rule in bypass_rules {
         let mut rule = raw_rule.trim().to_ascii_lowercase();
         if rule.is_empty() {
             continue;
         }
-        if let Some(rest) = rule.strip_prefix("http://").or_else(|| rule.strip_prefix("https://")) {
-            rule = rest.split('/').next().unwrap_or(rest).to_string();
+
+        if let Some(rest) = rule.strip_prefix("http://") {
+            if scheme != "http" {
+                continue;
+            }
+            rule = rest.to_string();
+        } else if let Some(rest) = rule.strip_prefix("https://") {
+            if scheme != "https" {
+                continue;
+            }
+            rule = rest.to_string();
+        }
+
+        if rule == "*" {
+            return true;
         }
         if rule == "<local>" {
             if !host.contains('.') {
@@ -434,23 +497,46 @@ pub fn should_bypass_proxy(target_url: &str, bypass_rules: &[String]) -> bool {
             }
             continue;
         }
-        if rule == "*" {
-            return true;
+
+        if let Some((addr_part, suffix_part)) = rule.split_once('/') {
+            if let Some(matched) = match_cidr(host_ip, addr_part, suffix_part) {
+                if matched {
+                    return true;
+                }
+                continue;
+            }
+            rule = addr_part.to_string();
         }
-        if let Some(suffix) = rule.strip_prefix('.') {
-            if host == suffix || host.ends_with(&format!(".{suffix}")) {
+
+        let (rule_host, rule_port) = split_rule_host_port(&rule);
+        if let Some(rp) = rule_port {
+            if !rp.is_empty() {
+                let port_matched = port
+                    .map(|p| glob_match(rp, &p.to_string()))
+                    .unwrap_or(false);
+                if !port_matched {
+                    continue;
+                }
+            }
+        }
+        if rule_host.is_empty() {
+            continue;
+        }
+
+        if let (Some(target_ip), Ok(rule_ip)) = (host_ip, rule_host.parse::<IpAddr>()) {
+            if target_ip == rule_ip {
+                return true;
+            }
+        }
+
+        if let Some(suffix) = rule_host.strip_prefix('.') {
+            if host == suffix || host.ends_with(rule_host) {
                 return true;
             }
             continue;
         }
-        if rule.contains(':') {
-            if let Some(ref hp) = host_port {
-                if glob_match(&rule, hp) {
-                    return true;
-                }
-            }
-        }
-        if glob_match(&rule, &host) {
+
+        if glob_match(rule_host, &host) {
             return true;
         }
     }
@@ -557,7 +643,8 @@ pub fn resolve_runtime_proxy_and_ua(target_url: &str) -> (Option<String>, String
             }
         }
         "manual" | "http" | "socks5" => {
-            if should_bypass_proxy(target_url, &[]) {
+            let sys = detect_system_proxy_cached();
+            if should_bypass_proxy(target_url, &sys.bypass) {
                 None
             } else {
                 manual_url
@@ -1005,25 +1092,83 @@ mod tests {
 
     #[test]
     fn test_should_bypass_proxy_rules() {
-        let rules = vec![
+        // 1. 不得在应用内硬编码旁路任何私有网段或 .local（绕过列表为空时全部走代理）
+        assert!(!should_bypass_proxy("http://127.0.0.1:8096/emby", &[]));
+        assert!(!should_bypass_proxy("http://192.168.1.50:8096/emby", &[]));
+        assert!(!should_bypass_proxy("http://10.0.0.5:8096", &[]));
+        assert!(!should_bypass_proxy("http://172.20.1.8:8096", &[]));
+        assert!(!should_bypass_proxy("http://nas.local:8096", &[]));
+
+        // 2. 严格遵循操作系统跳过列表：例如列表中包含 10.* / 172.16-20.* 但未包含 192.168.*
+        let windows_rules = vec![
             "<local>".to_string(),
-            "192.168.*".to_string(),
-            "*.corp.example".to_string(),
-            "nas.example.com:8096".to_string(),
+            "localhost".to_string(),
+            "127.*".to_string(),
+            "10.*".to_string(),
+            "172.16.*".to_string(),
+            "172.20.*".to_string(),
         ];
+        assert!(should_bypass_proxy("http://127.0.0.1:8096/emby", &windows_rules));
+        assert!(should_bypass_proxy("http://localhost:8096/emby", &windows_rules));
+        assert!(should_bypass_proxy("http://10.0.0.5:8096", &windows_rules));
+        assert!(should_bypass_proxy("http://172.20.1.8:8096", &windows_rules));
+        assert!(should_bypass_proxy("http://my-emby:8096", &windows_rules));
+        assert!(!should_bypass_proxy("http://192.168.1.50:8096/emby", &windows_rules));
+        assert!(!should_bypass_proxy("http://nas.local:8096", &windows_rules));
 
-        assert!(should_bypass_proxy("http://127.0.0.1:8096/emby", &[]));
-        assert!(should_bypass_proxy("http://192.168.1.50:8096/emby", &[]));
-        assert!(should_bypass_proxy("http://10.0.0.5:8096", &[]));
-        assert!(should_bypass_proxy("http://172.20.1.8:8096", &[]));
-        assert!(should_bypass_proxy("http://nas.local:8096", &[]));
+        // 3. 通配符、前导点后缀、端口匹配、协议前缀、IPv4/IPv6 CIDR 与方括号 IPv6
+        let advanced_rules = vec![
+            "*.corp.example".to_string(),
+            ".suffix.example".to_string(),
+            "nas.example.com:8096".to_string(),
+            "http://192.168.1.*".to_string(),
+            "192.168.0.0/16".to_string(),
+            "172.16.0.0/12".to_string(),
+            "10.0.0.0/8".to_string(),
+            "[::1]:8096".to_string(),
+            "fc00::/7".to_string(),
+            "fe80::/10".to_string(),
+        ];
+        assert!(should_bypass_proxy("https://sub.corp.example/api", &advanced_rules));
+        assert!(should_bypass_proxy("https://suffix.example/api", &advanced_rules));
+        assert!(should_bypass_proxy("https://sub.suffix.example/api", &advanced_rules));
+        assert!(!should_bypass_proxy("https://mysuffix.example/api", &advanced_rules));
 
-        assert!(should_bypass_proxy("http://my-emby:8096", &rules));
-        assert!(should_bypass_proxy("https://sub.corp.example/api", &rules));
-        assert!(should_bypass_proxy("https://nas.example.com:8096/emby", &rules));
+        assert!(should_bypass_proxy("https://nas.example.com:8096/emby", &advanced_rules));
+        assert!(!should_bypass_proxy("https://nas.example.com:443/emby", &advanced_rules));
 
-        assert!(!should_bypass_proxy("https://emby.example.com/emby", &rules));
-        assert!(!should_bypass_proxy("https://nas.example.com:443/emby", &rules));
+        assert!(should_bypass_proxy("http://192.168.1.50:5005/dav", &advanced_rules));
+        assert!(should_bypass_proxy("https://192.168.2.50:5006/dav", &advanced_rules));
+        assert!(should_bypass_proxy("http://172.31.255.1:8096", &advanced_rules));
+        assert!(!should_bypass_proxy("http://172.32.0.1:8096", &advanced_rules));
+
+        assert!(should_bypass_proxy("http://[::1]:8096/emby", &advanced_rules));
+        assert!(!should_bypass_proxy("http://[::1]:8097/emby", &advanced_rules));
+        assert!(should_bypass_proxy("http://[fd12:3456:789a::1]:8096", &advanced_rules));
+        assert!(should_bypass_proxy("http://[fe80::1]:8096", &advanced_rules));
+        assert!(!should_bypass_proxy("https://emby.example.com/emby", &advanced_rules));
+
+        // 4. scheme 精确限制与 0.0.0.0/0、::1/128、* 规则
+        let scheme_only = vec!["http://192.168.1.*".to_string()];
+        assert!(should_bypass_proxy("http://192.168.1.10/dav", &scheme_only));
+        assert!(!should_bypass_proxy("https://192.168.1.10/dav", &scheme_only));
+
+        assert!(should_bypass_proxy("https://any.example.com", &["*".to_string()]));
+        assert!(should_bypass_proxy("https://1.2.3.4", &["0.0.0.0/0".to_string()]));
+        assert!(should_bypass_proxy("http://[::1]/", &["::1/128".to_string()]));
+
+        // 5. 多分隔符解析（分号 / 逗号 / 空格 / 换行）
+        let parsed = parse_bypass_rules("<local>; localhost, 192.168.0.0/16\n10.0.0.0/8 127.*");
+        assert_eq!(
+            parsed,
+            vec![
+                "<local>",
+                "localhost",
+                "192.168.0.0/16",
+                "10.0.0.0/8",
+                "127.*"
+            ]
+        );
     }
 
     #[tokio::test]

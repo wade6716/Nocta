@@ -84,7 +84,7 @@ import {
   DEFAULT_EMBY_USER_AGENT,
   EMBY_USER_AGENT_PRESETS,
 } from '../api/embyClient';
-import { ProxyConfig, ProxyType, fetchSystemProxy } from '../api/http';
+import { ProxyConfig, ProxyType } from '../api/http';
 
 type TabKey = 'servers' | 'danmu' | 'danmaku_pref' | 'playback' | 'network' | 'sync' | 'about';
 
@@ -1756,7 +1756,7 @@ export const SettingsPage: React.FC = () => {
               <div className="border-b border-white/10 pb-4">
                 <h2 className="text-base font-bold text-white">网络与全局代理配置</h2>
                 <p className="text-xs text-gray-400 mt-0.5">
-                  配置用于 Emby 服务器访问与弹幕拉取的网络代理规则
+                  配置用于 Emby 服务器、弹幕拉取与 WebDAV/S3 同步的全局网络代理规则
                 </p>
               </div>
 
@@ -1786,6 +1786,9 @@ export const SettingsPage: React.FC = () => {
                     );
                   })}
                 </div>
+                <p className="text-[11px] text-gray-500">
+                  绕过规则遵循操作系统的「跳过代理」列表与 NO_PROXY 环境变量，不再在应用内硬编码忽略局域网地址。
+                </p>
               </div>
 
               {proxyType === 'manual' && (
@@ -2731,7 +2734,7 @@ export const SettingsPage: React.FC = () => {
                     <div className="space-y-1 min-w-0">
                       <p className="font-medium break-words">{updater.error}</p>
                       <p className="text-[11px] text-red-300/80">
-                        请检查系统/手动代理设置，或尝试在下方配置 GitHub 下载加速镜像前缀。
+                        请检查系统/全局代理设置，或尝试在下方配置 GitHub 下载加速镜像前缀。
                       </p>
                     </div>
                   </div>

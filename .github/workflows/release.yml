@@ -32,13 +32,14 @@ jobs:
     name: Build Frontend & Metadata
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       actions: read
     outputs:
       should_release: ${{ steps.meta.outputs.should_release }}
       macos_x64_mpv_cached: ${{ steps.meta.outputs.macos_x64_mpv_cached }}
       tag_name: ${{ steps.meta.outputs.tag_name }}
       release_name: ${{ steps.meta.outputs.release_name }}
+      release_id: ${{ steps.ensure-release.outputs.release_id }}
       is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
       release_draft: ${{ steps.meta.outputs.release_draft }}
       tauri_cli_version: ${{ steps.meta.outputs.tauri_cli_version }}
@@ -157,6 +158,96 @@ jobs:
           path: dist/
           retention-days: 1
           if-no-files-found: error
+
+      - name: Ensure GitHub Release Exists
+        id: ensure-release
+        if: steps.meta.outputs.should_release == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TAG_NAME: ${{ steps.meta.outputs.tag_name }}
+          RELEASE_NAME: ${{ steps.meta.outputs.release_name }}
+          IS_PRERELEASE: ${{ steps.meta.outputs.is_prerelease }}
+          RELEASE_DRAFT: ${{ steps.meta.outputs.release_draft }}
+          TARGET_SHA: ${{ github.sha }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const { execFileSync } = require("child_process");
+            const repo = process.env.GITHUB_REPOSITORY || "";
+            const tagName = process.env.TAG_NAME || "";
+            const releaseName = process.env.RELEASE_NAME || tagName;
+            const isPrerelease = process.env.IS_PRERELEASE === "true";
+            const isDraft = process.env.RELEASE_DRAFT === "true";
+            const targetSha = process.env.TARGET_SHA || "main";
+
+            function ghJson(args, inputObj) {
+              const out = execFileSync("gh", args, {
+                encoding: "utf8",
+                input: inputObj !== undefined ? JSON.stringify(inputObj) : undefined,
+              });
+              return JSON.parse(out);
+            }
+
+            let release = null;
+            try {
+              release = ghJson(["api", `repos/${repo}/releases/tags/${encodeURIComponent(tagName)}`]);
+              console.log(`Reusing existing published release for ${tagName}: id=${release.id}`);
+            } catch {
+              // Ignore 404 for unpublished/draft/new tags and check full list next
+            }
+
+            if (!release) {
+              try {
+                const list = ghJson(["api", `repos/${repo}/releases?per_page=30`]);
+                if (Array.isArray(list)) {
+                  release = list.find((r) => r && r.tag_name === tagName) || null;
+                  if (release) {
+                    console.log(`Reusing existing release for ${tagName}: id=${release.id}`);
+                  }
+                }
+              } catch (err) {
+                console.warn(`Warning listing releases: ${err.message || err}`);
+              }
+            }
+
+            if (!release) {
+              try {
+                ghJson(["api", `repos/${repo}/git/ref/tags/${encodeURIComponent(tagName)}`]);
+                console.log(`Git tag ${tagName} already exists.`);
+              } catch {
+                try {
+                  ghJson(
+                    ["api", `repos/${repo}/git/refs`, "--method", "POST", "--input", "-"],
+                    { ref: `refs/tags/${tagName}`, sha: targetSha }
+                  );
+                  console.log(`Created git tag ${tagName} at ${targetSha}.`);
+                } catch (err) {
+                  console.warn(`Tag ref creation notice: ${err.message || err}`);
+                }
+              }
+
+              release = ghJson(
+                ["api", `repos/${repo}/releases`, "--method", "POST", "--input", "-"],
+                {
+                  tag_name: tagName,
+                  target_commitish: targetSha,
+                  name: releaseName,
+                  body: `正在构建并上传 ${tagName} 全平台安装包，完成后将自动同步更新日志。`,
+                  draft: isDraft,
+                  prerelease: isPrerelease,
+                }
+              );
+              console.log(`Created release for ${tagName}: id=${release.id}`);
+            }
+
+            if (!release || !release.id) {
+              throw new Error(`Failed to resolve GitHub release id for tag ${tagName}`);
+            }
+
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `release_id=${release.id}\n`);
+          '
 
   # 阶段 1.5（仅当 main 上缺少 x86_64 macOS libmpv 缓存时触发）：借 macos-15-intel 预装 Intel brew 生成纯 x86_64 动态库缓存
   prepare-macos-x64-mpv:
@@ -658,9 +749,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tauriScript: 'cargo tauri'
+          releaseId: ${{ needs.build-frontend.outputs.release_id }}
           tagName: ${{ needs.build-frontend.outputs.tag_name }}
           releaseName: ${{ needs.build-frontend.outputs.release_name }}
-          generateReleaseNotes: true
           includeUpdaterJson: false
           assetNamePattern: ${{ matrix.asset_name_pattern }}
           releaseDraft: ${{ needs.build-frontend.outputs.release_draft }}

@@ -291,8 +291,9 @@
 - **严禁因视觉参数变更触发 `DanmakuLayer` 重建 Canvas（消除闪烁红线）**：
   - `DanmakuLayer` 监听 `[bridge, comments]` 引用重建实例。因此 `PlayerPage` 构造 `formattedComments` 的 `useMemo` **只能依赖实际改变弹幕内容的字段**（`rawComments`, `fontSize`, `fontWeight`, `strokeWidth`, `colorMode`, `blockScroll`, `blockTop`, `blockBottom`, `blockColor`, `blockedWords`, `mergeDuplicates`）；
   - **绝不能将 `visible` / `opacity` / `speed` / `area` / `maxLines` / `bottomMargin` / `showHeatmap` 放入 `useMemo` 依赖**，否则拖动滑块调参时会造成满屏弹幕销毁重绘闪烁。
-- **进度条拖拽防抖与防进度丢失（Scrub Debounce & Session Progress Safety）**：
+- **进度条拖拽防抖、圆点垂直居中锚定与防进度丢失（Scrub Debounce, Thumb Centering & Session Progress Safety）**：
   - `PlayerOsd` 的进度条 `<input type="range">` 拖动过程中只更新本地 `scrubTime`（借助 `isScrubbingRef` + `scrubTimeRef`），仅在 `onPointerUp` / `onTouchEnd` / `onKeyUp` 释放时才调用 `onSeek`；
+  - 进度条外层交互区带有非对称 `pt-3 pb-1` 热区留白以容纳弹幕热力图，因此内部的轨道（`overflow-hidden`）、弹幕热力图（`bottom-full`）与圆形指示手柄必须共同包裹在**零内边距的 `relative w-full` 锚定容器**内，手柄统一使用 `top-1/2 -translate-x-1/2 -translate-y-1/2` 居中（**切勿混用 `bottom-*` + `top: calc(...)` 或误写正方向 `translate-y-1/2`，且禁止在手柄上使用 `transition-all` 导致 `left` 滞后于进度填充条**）；
   - 在播放页内原地切集或切换多版本片源时，必须先用 `lastValidTimeRef.current` 上报当前会话的 `reportPlaybackStopped` 并记录 `reportedStoppedSessionRef`，防止 `useEffect` 清理函数在引擎 `load()` 重置 `_currentTime = 0` 后误将 Emby 播放进度冲刷归零。
 - **无边框播放窗顶部拖拽区交互规范**：
   - `PlayerOsd` 顶部栏外层必须使用在 `visible` 状态下具备 `pointer-events-auto` 与 `data-tauri-drag-region`（`overlayMode` 下禁用）的有限高度容器，两侧毛玻璃胶囊内部通过 `stopPropagation` 防止事件干扰，才可确保无边框窗口态可平滑拖拽与双击最大化。
@@ -420,3 +421,12 @@
   - [`useAuthStore.ts`](file:///d:/wade/code/emby-tauri-player/src/stores/useAuthStore.ts) 在初始化、服务器/代理/UA 变更时自动调用 `sync_runtime_proxy_config` 同步策略与各服 `User-Agent` 至 Rust 内存态并递增 `imageProxyRevision`；内嵌 [`NetworkProxyModal`](file:///d:/wade/code/emby-tauri-player/src/components/settings/NetworkProxyModal.tsx) 且保持挂载的页面（如 [`HomePage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/HomePage.tsx)）需订阅 `s.imageProxyRevision` 以确保切代理/UA 后图片立即重载。
 - **`preload.rs` Keep-Alive 复用与 302/307 短时缓存**：
   - 本机透明中转与预载 HTTP 服务（`handle_proxy_connection`）采用 HTTP/1.1 Keep-Alive 连接复用；`send_with_cached_redirects` 为 302/307 最终跳转落点提供 90 秒短 TTL 缓存（按需自动失效重解析），`PreloadSession` 跨域跳转同样严格剥离 `authorization` 与 `X-Emby-*` 鉴权头。
+
+### 30. 操作系统媒体控制集成与耳机摘下/断开自动暂停架构 (`media_session.rs` / `souvlaki`)
+- **双层触发联动（兼容蓝牙 AVRCP 入耳检测、耳机断连放回充电盒、有线/USB 拔出与外放切耳机不误停）**：
+  1. **系统媒体会话 (`souvlaki`)**：在 [`lib.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/lib.rs) `.manage(MediaSessionState::default())`（必须在 `.setup(...)` 之前调用以便 `try_state` 获取句柄）后初始化 Windows SMTC / macOS `MPNowPlayingInfoCenter` + `MPRemoteCommandCenter` / Linux MPRIS2。Linux 必须采用 `souvlaki = { default-features = false, features = ["use_zbus"] }` 纯 Rust D-Bus 后端，免除 `libdbus-1-dev` 系统依赖以兼容 Ubuntu CI 构建。前端通过 [`useMediaSessionController.ts`](file:///d:/wade/code/emby-tauri-player/src/player/hooks/useMediaSessionController.ts) 实时同步标题、剧集副标题、播放状态及 5s 进度，接收蓝牙 AVRCP `Pause` / `Play` / `Toggle` / `Next` / `Previous` 指令与 Web `navigator.mediaSession` 兜底。
+  2. **原生音频输出路由与设备断开监测 (`init_audio_output_monitor`)**：
+     - **Windows**：在 [`media_session.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/media_session.rs) 使用 `windows 0.62`（需同时在 `Cargo.toml` 声明 `windows-core = "0.62"` 以支持 `#[implement(IMMNotificationClient)]`，且 `PROPERTYKEY` 位于 `Win32::Foundation::PROPERTYKEY`）于独立线程注册 WASAPI `IMMNotificationClient`（监听 `OnDefaultDeviceChanged` 与 `OnDeviceStateChanged` 并施以 350ms 防抖合帧），向前端派发 `media://audio-output-changed`。
+     - **macOS**：通过 [`audio_route_macos.m`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/audio_route_macos.m)（[`build.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/build.rs) 链接 `CoreAudio` 与 `CoreFoundation`）监听 `kAudioHardwarePropertyDefaultOutputDevice`、蓝牙传输类型与 3.5mm 插孔 `kAudioDevicePropertyDataSource`（`'hdpn'`→`'ispk'`）。
+     - **Linux / 浏览器兜底**：前端监听 `navigator.mediaDevices` `devicechange` 在 `audiooutput` 设备数减少时触发暂停。
+  - **智能路由判定 (`should_pause_on_audio_route_change`)**：原输出设备移除/断开或从耳机切回扬声器时触发自动暂停；外放期间新接入蓝牙耳机（扬声器→耳机）不误暂停；用户可通过 `PlayerPreferences.pauseOnHeadphoneDisconnect`（默认开启，设置页与备份同步全覆盖）自由开关。

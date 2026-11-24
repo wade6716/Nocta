@@ -43,6 +43,7 @@ import {
   Clock,
   RotateCcw,
   Sparkles,
+  Headphones,
 } from 'lucide-react';
 import { useAuthStore, SavedServer } from '../stores/useAuthStore';
 import { useDanmuStore, DanmuServerEntry } from '../stores/useDanmuStore';
@@ -1626,6 +1627,49 @@ export const SettingsPage: React.FC = () => {
                       </div>
                     </div>
                   )}
+                </div>
+              </div>
+
+              {/* 耳机与系统媒体控制 */}
+              <div className="p-4 bg-white/5 border border-white/10 rounded-xl space-y-3">
+                <div className="flex items-start gap-2.5">
+                  <div className="w-8 h-8 flex-shrink-0 rounded-xl bg-primary/15 border border-primary/25 text-primary flex items-center justify-center">
+                    <Headphones className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-xs font-semibold text-white">耳机与系统媒体控制</h3>
+                    <p className="text-[11px] text-gray-400 mt-0.5">
+                      对接系统媒体会话（SMTC / Now Playing / MPRIS2）与音频输出路由监测，响应蓝牙耳机入耳摘下暂停或设备断开事件
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between gap-4 p-3 rounded-lg bg-black/20 border border-white/5">
+                  <div>
+                    <p className="text-xs font-medium text-gray-200">耳机摘下 / 断开自动暂停</p>
+                    <p className="text-[11px] text-gray-500 mt-0.5">
+                      摘下支持佩戴检测的蓝牙耳机、放入充电盒断连，或拔下有线/USB 耳机导致音频退回外放时自动暂停播放（外放时连上耳机不中断）
+                    </p>
+                  </div>
+                  <button
+                    role="switch"
+                    aria-checked={playerPreferences.pauseOnHeadphoneDisconnect}
+                    onClick={() =>
+                      updatePlayerPreferences({
+                        pauseOnHeadphoneDisconnect: !playerPreferences.pauseOnHeadphoneDisconnect,
+                      })
+                    }
+                    className={`relative w-11 h-6 flex-shrink-0 rounded-full transition cursor-pointer ${
+                      playerPreferences.pauseOnHeadphoneDisconnect ? 'bg-primary' : 'bg-white/15'
+                    }`}
+                    title="耳机摘下 / 断开自动暂停"
+                  >
+                    <span
+                      className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
+                        playerPreferences.pauseOnHeadphoneDisconnect ? 'translate-x-5' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
                 </div>
               </div>
 

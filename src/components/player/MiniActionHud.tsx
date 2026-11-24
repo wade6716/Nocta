@@ -12,6 +12,7 @@ import {
   Repeat,
   Info,
   FolderOpen,
+  Headphones,
 } from 'lucide-react';
 
 export type MiniHudIconType =
@@ -25,6 +26,7 @@ export type MiniHudIconType =
   | 'pin'
   | 'screenshot'
   | 'loop'
+  | 'headphones'
   | 'info';
 
 export interface MiniHudState {
@@ -66,6 +68,8 @@ function renderIcon(icon: MiniHudIconType, progressWarn?: boolean) {
       return <Camera className={cls} />;
     case 'loop':
       return <Repeat className={cls} />;
+    case 'headphones':
+      return <Headphones className={cls} />;
     case 'info':
     default:
       return <Info className={cls} />;

@@ -5,6 +5,7 @@ mod osd_overlay;
 mod preload;
 mod updater;
 mod image_proxy;
+mod media_session;
 #[cfg(target_os = "macos")]
 mod mpv_embed;
 
@@ -244,6 +245,8 @@ pub fn run() {
     init_macos_mpv_environment(None);
 
     tauri::Builder::default()
+        .manage(updater::UpdaterState::default())
+        .manage(media_session::MediaSessionState::default())
         .setup(|app| {
             #[cfg(windows)]
             {
@@ -281,9 +284,11 @@ pub fn run() {
                 init_macos_mpv_environment(app.path().resource_dir().ok());
             }
 
+            media_session::init_media_session(app.handle());
+            media_session::init_audio_output_monitor(app.handle());
+
             Ok(())
         })
-        .manage(updater::UpdaterState::default())
         .register_asynchronous_uri_scheme_protocol("nocta-img", |_ctx, request, responder| {
             image_proxy::handle_image_protocol_request(request, responder);
         })
@@ -319,6 +324,8 @@ pub fn run() {
             updater::check_app_update,
             updater::download_and_install_update,
             updater::relaunch_app,
+            media_session::sync_media_session_metadata,
+            media_session::sync_media_session_playback,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

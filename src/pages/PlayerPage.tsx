@@ -77,6 +77,7 @@ import {
 import { useDanmakuSession } from '../player/hooks/useDanmakuSession';
 import { useMacOsdOverlaySync } from '../player/hooks/useMacOsdOverlaySync';
 import { useNextEpisodePreloader } from '../player/hooks/useNextEpisodePreloader';
+import { useMediaSessionController } from '../player/hooks/useMediaSessionController';
 
 type ActivePanelType =
   | 'none'
@@ -1218,26 +1219,63 @@ export const PlayerPage: React.FC = () => {
   };
 
   // 6. Playback controls
+  const applyPlaybackPaused = useCallback(
+    (nextPaused: boolean, fromKeyboard = false) => {
+      if (isLoadingVideo || videoError) return;
+      setPaused(nextPaused);
+      bridge.onMpvPauseChange(nextPaused);
+
+      if (engineRef.current) {
+        nextPaused ? engineRef.current.pause() : engineRef.current.play();
+      }
+      triggerCenterIcon(nextPaused ? 'pause' : 'play');
+      if (!fromKeyboard) {
+        resetHideTimer();
+      }
+
+      const liveTime = lastValidTimeRef.current || usePlayerStore.getState().currentTime;
+      reportEventProgress(liveTime, nextPaused, nextPaused ? 'Pause' : 'Unpause');
+    },
+    [isLoadingVideo, videoError, setPaused, bridge, resetHideTimer, reportEventProgress]
+  );
+
   const handleTogglePlay = (fromKeyboard = false) => {
-    if (isLoadingVideo || videoError) return;
-    const nextPaused = !paused;
-    setPaused(nextPaused);
-    bridge.onMpvPauseChange(nextPaused);
-
-    if (engineRef.current) {
-      nextPaused ? engineRef.current.pause() : engineRef.current.play();
-    }
-    triggerCenterIcon(nextPaused ? 'pause' : 'play');
-    if (!fromKeyboard) {
-      resetHideTimer();
-    }
-
-    reportEventProgress(
-      lastValidTimeRef.current || currentTime,
-      nextPaused,
-      nextPaused ? 'Pause' : 'Unpause'
-    );
+    applyPlaybackPaused(!usePlayerStore.getState().paused, fromKeyboard);
   };
+
+  const handleExplicitPlay = useCallback(() => {
+    applyPlaybackPaused(false, false);
+  }, [applyPlaybackPaused]);
+
+  const handleExplicitPause = useCallback(() => {
+    applyPlaybackPaused(true, false);
+  }, [applyPlaybackPaused]);
+
+  const mediaSessionTitle = item?.Name || 'Nocta · 夜幕';
+  const mediaSessionSubtitle = item?.SeriesName
+    ? `${item.SeriesName} · 第 ${item.IndexNumber || 1} 集`
+    : item?.ProductionYear
+    ? String(item.ProductionYear)
+    : undefined;
+
+  useMediaSessionController({
+    isTauri: isTauriEnvironment(),
+    itemId: item?.Id,
+    title: mediaSessionTitle,
+    subtitle: mediaSessionSubtitle,
+    duration: effectiveDuration,
+    paused,
+    isLoadingVideo,
+    hasError: Boolean(videoError),
+    getCurrentTime: () => lastValidTimeRef.current || usePlayerStore.getState().currentTime,
+    pauseOnHeadphoneDisconnect: playerPreferences.pauseOnHeadphoneDisconnect,
+    onPlay: handleExplicitPlay,
+    onPause: handleExplicitPause,
+    onTogglePlay: () => handleTogglePlay(true),
+    onNextEpisode: nextEpisode ? () => switchToEpisode(nextEpisode) : undefined,
+    onPrevEpisode: prevEpisode ? () => switchToEpisode(prevEpisode) : undefined,
+    showMiniHud,
+  });
 
   const handleSeek = (targetSeconds: number) => {
     const clamped = Math.max(0, effectiveDuration > 0 ? Math.min(effectiveDuration, targetSeconds) : targetSeconds);

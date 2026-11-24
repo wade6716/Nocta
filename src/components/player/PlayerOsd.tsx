@@ -601,23 +601,6 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
           onMouseLeave={handleMouseLeaveProgress}
           className="group relative flex items-center cursor-pointer select-none pt-3 pb-1"
         >
-          {/* 高能弹幕密度 SVG 曲线（贴合轨道上方） */}
-          {heatmapPath && (
-            <svg
-              viewBox="0 0 1000 24"
-              preserveAspectRatio="none"
-              className="absolute left-0 right-0 bottom-2.5 h-5 w-full pointer-events-none opacity-45 group-hover:opacity-85 transition-opacity"
-            >
-              <defs>
-                <linearGradient id="danmuHeatGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#38BDF8" stopOpacity="0.65" />
-                  <stop offset="100%" stopColor="#38BDF8" stopOpacity="0.05" />
-                </linearGradient>
-              </defs>
-              <path d={heatmapPath} fill="url(#danmuHeatGrad)" />
-            </svg>
-          )}
-
           {/* Hover 预览气泡：时间 + 章节名 */}
           {hoverTime !== null && (
             <div
@@ -633,53 +616,81 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
             </div>
           )}
 
-          {/* 轨道容器 */}
-          <div className="relative w-full h-1.5 group-hover:h-2.5 bg-white/15 rounded-full transition-all duration-200 overflow-hidden">
-            {/* 前向缓冲条 */}
-            {bufferedPercent > progressPercent && (
-              <div
-                className="absolute top-0 bottom-0 left-0 bg-white/25 pointer-events-none transition-[width] duration-300"
-                style={{ width: `${bufferedPercent}%` }}
-              />
+          {/* 零内边距轨道锚定容器：保证圆点圆心与弹幕热力图严格对齐轨道中线/上沿 */}
+          <div className="relative w-full flex items-center">
+            {/* 高能弹幕密度 SVG 曲线（严格贴合轨道上沿） */}
+            {heatmapPath && (
+              <svg
+                viewBox="0 0 1000 24"
+                preserveAspectRatio="none"
+                className="absolute left-0 right-0 bottom-full h-5 w-full pointer-events-none opacity-45 group-hover:opacity-85 transition-opacity"
+              >
+                <defs>
+                  <linearGradient id="danmuHeatGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#38BDF8" stopOpacity="0.65" />
+                    <stop offset="100%" stopColor="#38BDF8" stopOpacity="0.05" />
+                  </linearGradient>
+                </defs>
+                <path d={heatmapPath} fill="url(#danmuHeatGrad)" />
+              </svg>
             )}
 
-            {/* Hover preview ghost */}
-            {hoverTime !== null && (
-              <div
-                className="absolute top-0 bottom-0 left-0 bg-white/20 pointer-events-none"
-                style={{ width: `${hoverPosition}%` }}
-              />
-            )}
-
-            {/* A-B 循环区间高亮 */}
-            {abStartPct !== null && abEndPct !== null && abEndPct > abStartPct && (
-              <div
-                className="absolute top-0 bottom-0 bg-amber-400/60 pointer-events-none"
-                style={{ left: `${abStartPct}%`, width: `${abEndPct - abStartPct}%` }}
-              />
-            )}
-
-            {/* Active progress fill */}
+            {/* 轨道容器 */}
             <div
-              className="absolute top-0 bottom-0 left-0 bg-gradient-to-r from-sky-400 to-[#38BDF8] rounded-full"
-              style={{ width: `${progressPercent}%` }}
-            />
+              className={`relative w-full ${
+                isScrubbing ? 'h-2.5' : 'h-1.5 group-hover:h-2.5'
+              } bg-white/15 rounded-full transition-[height] duration-200 overflow-hidden`}
+            >
+              {/* 前向缓冲条 */}
+              {bufferedPercent > progressPercent && (
+                <div
+                  className="absolute top-0 bottom-0 left-0 bg-white/25 pointer-events-none transition-[width] duration-300"
+                  style={{ width: `${bufferedPercent}%` }}
+                />
+              )}
 
-            {/* Emby 章节分隔刻度点 */}
-            {chapterMarkers.map((c, idx) => (
+              {/* Hover preview ghost */}
+              {hoverTime !== null && (
+                <div
+                  className="absolute top-0 bottom-0 left-0 bg-white/20 pointer-events-none"
+                  style={{ width: `${hoverPosition}%` }}
+                />
+              )}
+
+              {/* A-B 循环区间高亮 */}
+              {abStartPct !== null && abEndPct !== null && abEndPct > abStartPct && (
+                <div
+                  className="absolute top-0 bottom-0 bg-amber-400/60 pointer-events-none"
+                  style={{ left: `${abStartPct}%`, width: `${abEndPct - abStartPct}%` }}
+                />
+              )}
+
+              {/* Active progress fill */}
               <div
-                key={`${c.time}-${idx}`}
-                className="absolute top-0 bottom-0 w-0.5 bg-white/75 pointer-events-none"
-                style={{ left: `${(c.time / duration) * 100}%` }}
+                className="absolute top-0 bottom-0 left-0 bg-gradient-to-r from-sky-400 to-[#38BDF8] rounded-full"
+                style={{ width: `${progressPercent}%` }}
               />
-            ))}
-          </div>
 
-          {/* 发光拖拽手柄 */}
-          <div
-            className="absolute bottom-1 translate-y-1/2 -translate-x-1/2 w-3.5 h-3.5 group-hover:w-4 group-hover:h-4 bg-white rounded-full border-2 border-primary shadow-[0_0_12px_rgba(56,189,248,0.9)] transition-all duration-75 pointer-events-none scale-0 group-hover:scale-100"
-            style={{ left: `${progressPercent}%`, top: 'calc(50% + 4px)' }}
-          />
+              {/* Emby 章节分隔刻度点 */}
+              {chapterMarkers.map((c, idx) => (
+                <div
+                  key={`${c.time}-${idx}`}
+                  className="absolute top-0 bottom-0 w-0.5 bg-white/75 pointer-events-none"
+                  style={{ left: `${(c.time / duration) * 100}%` }}
+                />
+              ))}
+            </div>
+
+            {/* 发光拖拽手柄（圆心垂直锚定在轨道正中央 top-1/2 -translate-y-1/2） */}
+            <div
+              className={`absolute top-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-full border-2 border-primary shadow-[0_0_12px_rgba(56,189,248,0.9)] transition-[transform,width,height,box-shadow] duration-150 pointer-events-none ${
+                isScrubbing
+                  ? 'w-4 h-4 scale-100'
+                  : 'w-3 h-3 group-hover:w-4 group-hover:h-4 scale-100'
+              }`}
+              style={{ left: `${progressPercent}%` }}
+            />
+          </div>
 
           {/* 防抖 Drag & Seek 输入层 */}
           <input
@@ -699,7 +710,7 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
             onTouchEnd={commitScrub}
             onKeyUp={commitScrub}
             onBlur={commitScrub}
-            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
           />
         </div>
 

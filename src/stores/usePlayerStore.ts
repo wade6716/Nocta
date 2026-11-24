@@ -74,6 +74,7 @@ export interface PlayerPreferences {
   subScale: number; // 0.6 ~ 1.8
   subPos: number; // 50 ~ 100
   autoPlayNext: boolean; // 自动连播下一集
+  pauseOnHeadphoneDisconnect: boolean; // 耳机摘下或断开连接时自动暂停
   longPressSpeed: 2.0 | 2.5 | 3.0; // 长按右方向键倍速
   skipIntroSeconds: number; // 快捷跳过片头秒数
   showRemainingTime: boolean; // 是否显示剩余时间
@@ -248,6 +249,7 @@ export const DEFAULT_PLAYER_PREFERENCES: PlayerPreferences = {
   subScale: 1.0,
   subPos: 100,
   autoPlayNext: true,
+  pauseOnHeadphoneDisconnect: true,
   longPressSpeed: 2.5,
   skipIntroSeconds: 85,
   showRemainingTime: false,
@@ -292,6 +294,10 @@ export function normalizePlayerPreferences(
     colorAdjust: raw?.colorAdjust
       ? { ...base.colorAdjust, ...raw.colorAdjust }
       : { ...base.colorAdjust },
+    pauseOnHeadphoneDisconnect:
+      typeof merged.pauseOnHeadphoneDisconnect === 'boolean'
+        ? merged.pauseOnHeadphoneDisconnect
+        : base.pauseOnHeadphoneDisconnect,
     bufferDurationSeconds: clampInt(merged.bufferDurationSeconds, 60, 1800, base.bufferDurationSeconds),
     preloadNextEnabled:
       typeof merged.preloadNextEnabled === 'boolean'

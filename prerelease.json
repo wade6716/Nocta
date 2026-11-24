@@ -1,31 +1,31 @@
 {
-  "version": "0.2.1",
-  "notes": "<!-- Release notes generated using configuration in .github/release.yml at v0.2.1 -->\n\n\n\n**Full Changelog**: https://github.com/wade6716/Nocta/compare/v0.2.0...v0.2.1",
-  "pub_date": "2026-11-24T07:33:02.105Z",
+  "version": "0.2.2",
+  "notes": "### 🚀 新功能\n- **更新日志自动生成**：新增零依赖发版日志脚本（`scripts/generate-release-notes.mjs`），发版时优先读取 `CHANGELOG.md` 精选说明，未配置时自动解析直推分支的 `git log` 按功能/修复/性能优化中文分类生成，告别空更新说明。\n\n### ♻️ 体验与架构优化\n- **应用内更新弹窗排版升级**：优化客户端发现更新浮窗与详情弹窗的 Markdown 渲染，自动过滤 HTML 注释，支持分类标题、列表项、加粗代码高亮与可点击对比链接。",
+  "pub_date": "2026-11-24T08:12:04.597Z",
   "platforms": {
     "linux-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUQVU1VFpoVS9CVVpmaHpacnZjYTd4VExJMnp3SUIveEJLcEk5ZkExV0xoQjc1eGlFd25DWTR2N1l4d3lGUVZYNDVtbVlDQkJuTEJmZG1scTRIT294bTVmb3huaXBKbUEwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NTA1NDc4CWZpbGU6Tm9jdGFfMC4yLjFfYW1kNjQuZGViCXZlcnNpb246MC4yLjEKNFNjb2JnbUFRQk9RY0FHSDg1WmttTFVPWThDK3UvWXBQb2FldFYyUko4VlVBWis1VVo4K0Z5MGNlNi90QkJ5T0JBdzA5a1M0RytlZUVJQUhveXAvQkE9PQo=",
-      "url": "https://github.com/wade6716/Nocta/releases/download/v0.2.1/Nocta_0.2.1_linux_amd64.deb"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUQVU1VFpoVS9CVVRycjQvdWJVMFJDUXk3NW5abytCY084WU15QWRMY2poZzJQT2o4YzVxb1JCRjh2U3M4S3podU1YMVRKU2JYNElQYmpySVJLYTZLL2FOWkNNR29XQWd3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NTA3ODE4CWZpbGU6Tm9jdGFfMC4yLjJfYW1kNjQuZGViCXZlcnNpb246MC4yLjIKU291N0pidSt5TWpocFRNcWxTb0ZGL0dXRkRXREtTT0RzNVNyTEFZaVJ5L01ZSEZtN3psZ2NQVHNyR084Q0IrZytvZVhxLy8xU05UeEhieFF0ZlBORGc9PQo=",
+      "url": "https://github.com/wade6716/Nocta/releases/download/v0.2.2/Nocta_0.2.2_linux_amd64.deb"
     },
     "linux-x86_64-deb": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUQVU1VFpoVS9CVVpmaHpacnZjYTd4VExJMnp3SUIveEJLcEk5ZkExV0xoQjc1eGlFd25DWTR2N1l4d3lGUVZYNDVtbVlDQkJuTEJmZG1scTRIT294bTVmb3huaXBKbUEwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NTA1NDc4CWZpbGU6Tm9jdGFfMC4yLjFfYW1kNjQuZGViCXZlcnNpb246MC4yLjEKNFNjb2JnbUFRQk9RY0FHSDg1WmttTFVPWThDK3UvWXBQb2FldFYyUko4VlVBWis1VVo4K0Z5MGNlNi90QkJ5T0JBdzA5a1M0RytlZUVJQUhveXAvQkE9PQo=",
-      "url": "https://github.com/wade6716/Nocta/releases/download/v0.2.1/Nocta_0.2.1_linux_amd64.deb"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUQVU1VFpoVS9CVVRycjQvdWJVMFJDUXk3NW5abytCY084WU15QWRMY2poZzJQT2o4YzVxb1JCRjh2U3M4S3podU1YMVRKU2JYNElQYmpySVJLYTZLL2FOWkNNR29XQWd3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NTA3ODE4CWZpbGU6Tm9jdGFfMC4yLjJfYW1kNjQuZGViCXZlcnNpb246MC4yLjIKU291N0pidSt5TWpocFRNcWxTb0ZGL0dXRkRXREtTT0RzNVNyTEFZaVJ5L01ZSEZtN3psZ2NQVHNyR084Q0IrZytvZVhxLy8xU05UeEhieFF0ZlBORGc9PQo=",
+      "url": "https://github.com/wade6716/Nocta/releases/download/v0.2.2/Nocta_0.2.2_linux_amd64.deb"
     },
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUQVU1VFpoVS9CVVliOUZ0Qnd2ZHZUZ0ZQY3FSUk5sK1FqTFloT2NQZys5TmxyeWtCakFKd05XVGcrMDhqWkIyM1hnRGdsTmJRM3Q5UUo0cDFzV1gzbkpUNUhiVDNCNHdjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NTA1NTY0CWZpbGU6Tm9jdGEuYXBwLnRhci5negl2ZXJzaW9uOjAuMi4xCkJRWXdMbFI0bG1FbkdzbHdmRnVjaHUvSnhmeVE4RE91bkNETmFWSG9EQThTdzZUOWpVYkpiWVQxbjBSRTBxWjhjQUMxS3d5a0lkK1JiUGFTZ2w4MkNRPT0K",
-      "url": "https://github.com/wade6716/Nocta/releases/download/v0.2.1/Nocta_0.2.1_macos_aarch64.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUQVU1VFpoVS9CVVVvdGNWVitDZlo2eVNUM3k5MEp4RTlyMFFzbHB5dHFvamdPc0FScE9jbDhNd295ZW02RC9waFBFL2oxYUJqZnJqYmNDR1lGeGMvNUpxN2lKdldMbEFrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NTA3OTAyCWZpbGU6Tm9jdGEuYXBwLnRhci5negl2ZXJzaW9uOjAuMi4yClBjcmVDdVI2OE4reHBYYWM1Y0xVNjZmYllMbVkzNzZueEtNb2wzLzlFM0ltNGQrRnhUUnBLWnJ4bFQvSHRnWjVxcVR3eW54L0J4WGlnRnFvQUJBREJnPT0K",
+      "url": "https://github.com/wade6716/Nocta/releases/download/v0.2.2/Nocta_0.2.2_macos_aarch64.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUQVU1VFpoVS9CVVJxdkZnQXJmb3B3MVZieU1BcWt6ck9qQktPQWtGQ1pTdnVBL2FraksycFRlVWd3TTN1eFoySC9taGVMNXJ0SXhtY2tra29VaUZIM0ZoWTk5ejg3d0FRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NTA1NTM5CWZpbGU6Tm9jdGEuYXBwLnRhci5negl2ZXJzaW9uOjAuMi4xCmEydmMzZjhUK241V000Y2lRYlpLbHgyay9UQ2hoQ3BiUVA3SE4zY2xHWTBQdkF0Tmg5c0VXeFlxQXQwVEx4eXlWdlZwS0Jub1VUMTIxRVJMdXpBYUFnPT0K",
-      "url": "https://github.com/wade6716/Nocta/releases/download/v0.2.1/Nocta_0.2.1_macos_x64.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUQVU1VFpoVS9CVVd5OVpVbEJtOEdKSjRoV2lITENaM2xkdm1pbjlXR2JsMzdWaXFOd2JnS1NjN3RYU0hJUUR2N1ZpTXlJTEZkbHd2ZXRNOC9JRGppZm1ZREtvL0I5UWdvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NTA3ODk1CWZpbGU6Tm9jdGEuYXBwLnRhci5negl2ZXJzaW9uOjAuMi4yCndJNXlucFU5THFRWDk3YnpMQTRMR0VsbXRLbVFBalBQRG1sd1F2cFlwR1JWYkNuczBYYlljTjQ4OUg4cjBnU0ZuNDNFZUwza1dNeDFyY3JIVG9sakJnPT0K",
+      "url": "https://github.com/wade6716/Nocta/releases/download/v0.2.2/Nocta_0.2.2_macos_x64.app.tar.gz"
     },
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUQVU1VFpoVS9CVVFiYkptNGdKK2V3UlpmbGJzQ05xa0s0QTllT0lnalE5bVBCMlV6TDl4VUdWT2NjSHYwb0dkcGgvdFM0OFdub0FLK0F1Y25pUDZteDZYZitEbzBsYVFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NTA1NTEzCWZpbGU6Tm9jdGFfMC4yLjFfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuMi4xCjh6ZmtaYVdaWkxobEdxa2dJVVl2ay9DbUdZbVBaM09wN2hWc2EwNFNWUXFlY2tOTWdRc2ZVTHA3RjRGa1AwN2FsTmkzc002OFpBQnVqVmtHL1Z6bkJnPT0K",
-      "url": "https://github.com/wade6716/Nocta/releases/download/v0.2.1/Nocta_0.2.1_windows_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUQVU1VFpoVS9CVWJsWU9ROFBIczVjVytCbkROb2xUTCtvaUhNWDk4ekVsc3RocjlLODNFdnJFdjNhNDFZMjVkR1YwREM2Q3ZEbWxmVnlmNXNHWmdVZGVZeVJwUzVxbUFnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NTA3ODYwCWZpbGU6Tm9jdGFfMC4yLjJfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuMi4yCmtYVFJLa2lwNDB2SmNsTldybDJLaUZFVEw4eUhWMkV5L1gwcnlpaFE5MzFZNmVvTW9QeTdFb25ERm5mNGIrZ1EvMzRjajZsMVh2eUhKZnNsMDlhbUR3PT0K",
+      "url": "https://github.com/wade6716/Nocta/releases/download/v0.2.2/Nocta_0.2.2_windows_x64-setup.exe"
     },
     "windows-x86_64-nsis": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUQVU1VFpoVS9CVVFiYkptNGdKK2V3UlpmbGJzQ05xa0s0QTllT0lnalE5bVBCMlV6TDl4VUdWT2NjSHYwb0dkcGgvdFM0OFdub0FLK0F1Y25pUDZteDZYZitEbzBsYVFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NTA1NTEzCWZpbGU6Tm9jdGFfMC4yLjFfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuMi4xCjh6ZmtaYVdaWkxobEdxa2dJVVl2ay9DbUdZbVBaM09wN2hWc2EwNFNWUXFlY2tOTWdRc2ZVTHA3RjRGa1AwN2FsTmkzc002OFpBQnVqVmtHL1Z6bkJnPT0K",
-      "url": "https://github.com/wade6716/Nocta/releases/download/v0.2.1/Nocta_0.2.1_windows_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUQVU1VFpoVS9CVWJsWU9ROFBIczVjVytCbkROb2xUTCtvaUhNWDk4ekVsc3RocjlLODNFdnJFdjNhNDFZMjVkR1YwREM2Q3ZEbWxmVnlmNXNHWmdVZGVZeVJwUzVxbUFnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NTA3ODYwCWZpbGU6Tm9jdGFfMC4yLjJfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuMi4yCmtYVFJLa2lwNDB2SmNsTldybDJLaUZFVEw4eUhWMkV5L1gwcnlpaFE5MzFZNmVvTW9QeTdFb25ERm5mNGIrZ1EvMzRjajZsMVh2eUhKZnNsMDlhbUR3PT0K",
+      "url": "https://github.com/wade6716/Nocta/releases/download/v0.2.2/Nocta_0.2.2_windows_x64-setup.exe"
     }
   }
 }

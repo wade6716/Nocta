@@ -77,7 +77,7 @@ export const EpisodeDrawer: React.FC<EpisodeDrawerProps> = ({
   return (
     <>
       <div className="fixed inset-0 z-20 bg-transparent" onClick={onClose} />
-      <div className="fixed top-16 bottom-24 right-6 z-30 w-80 md:w-96 rounded-2xl bg-[#0B0E17]/95 backdrop-blur-2xl border border-white/15 shadow-[0_20px_50px_rgba(0,0,0,0.75)] flex flex-col text-gray-200 select-none animate-in slide-in-from-right duration-200 overflow-hidden">
+      <div className="fixed top-16 bottom-24 right-6 z-30 w-80 md:w-96 rounded-2xl bg-[#0B0E17]/95 backdrop-blur-2xl border border-white/15 flex flex-col text-gray-200 select-none animate-in slide-in-from-right duration-200 overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-white/10 bg-white/[0.02]">
           <div className="flex items-center space-x-2">

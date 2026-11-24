@@ -54,6 +54,7 @@
 
 ### 2. 原生播放器双层穿透视窗 (Window Layering)
 - **全局背景色透明要求**：`src/index.css` 的 `html, body, #root` 必须保持 `background-color: transparent;`。深色背景必须由 `App.tsx` 在非播放路由动态赋予。一旦 `#root` 设置了不透明背景，WebView2 将遮挡底层 Win32/Direct3D 视频画面，导致「只有弹幕黑屏飞过、无视频画面」。
+- **透明穿透浮层禁大半径外阴影**：在 Windows 透明 WebView2（`transparent: true` + 预乘 Alpha）上，直接悬浮在视频画布上的播放器浮层（OSD 胶囊、抽屉、弹窗、Toast、右键菜单、迷你 HUD 等）**严禁使用大半径外阴影**（如 `shadow-xl`、`shadow-2xl`、`shadow-[0_20px_50px_...]`），否则阴影衰减至最外沿低 Alpha 阈值时会产生一圈明显的 **1px 黑色轮廓伪影线**；统一依赖 `border-white/15` 细腻描边与深色半透底衬（`bg-[#0B0E17]/95`）区隔层次。
 - **系统代理透传**：Windows 下 `libmpv` 不会自动读取注册表系统代理。必须通过 Rust 命令探知系统代理并在播放引擎初始化与加载视频时动态注入 `http-proxy`。
 
 ### 3. 播放进度与状态防冲刷保护

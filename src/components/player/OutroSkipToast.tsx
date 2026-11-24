@@ -26,7 +26,7 @@ export const OutroSkipToast: React.FC<OutroSkipToastProps> = ({
 
   return (
     <div className="fixed bottom-28 left-1/2 -translate-x-1/2 z-40 w-[min(92vw,460px)] pointer-events-auto animate-in fade-in slide-in-from-bottom-3 duration-200">
-      <div className="relative overflow-hidden rounded-2xl border border-white/15 bg-[#0B0E17]/95 backdrop-blur-2xl shadow-2xl px-4 py-3.5">
+      <div className="relative overflow-hidden rounded-2xl border border-white/15 bg-[#0B0E17]/95 backdrop-blur-2xl px-4 py-3.5">
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 flex-shrink-0 rounded-xl bg-primary/15 border border-primary/30 text-primary flex items-center justify-center">
             <SkipForward className="w-4 h-4" />

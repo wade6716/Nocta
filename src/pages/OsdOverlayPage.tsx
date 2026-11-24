@@ -545,7 +545,7 @@ export const OsdOverlayPage: React.FC = () => {
       {/* 屏幕中央播放/暂停瞬时动效徽标 */}
       {sync.centerIcon && (
         <div className="absolute inset-0 pointer-events-none flex items-center justify-center z-30">
-          <div className="p-5 rounded-full bg-black/60 backdrop-blur-md text-white shadow-2xl border border-white/10 animate-in zoom-in-75 fade-in duration-150">
+          <div className="p-5 rounded-full bg-black/60 backdrop-blur-md text-white border border-white/10 animate-in zoom-in-75 fade-in duration-150">
             {sync.centerIcon === 'play' ? (
               <Play className="w-9 h-9 fill-white translate-x-0.5" />
             ) : (
@@ -709,7 +709,7 @@ export const OsdOverlayPage: React.FC = () => {
 
       {/* 弹幕加载或绑定提示 Toast */}
       {sync.danmuToast && (
-        <div className="fixed top-20 right-6 z-40 max-w-md bg-black/85 backdrop-blur-md border border-primary/40 text-white text-xs px-4 py-2.5 rounded-xl shadow-2xl flex items-center space-x-2.5 animate-in fade-in slide-in-from-top-2">
+        <div className="fixed top-20 right-6 z-40 max-w-md bg-black/85 backdrop-blur-md border border-primary/40 text-white text-xs px-4 py-2.5 rounded-xl flex items-center space-x-2.5 animate-in fade-in slide-in-from-top-2">
           <span className="w-2 h-2 rounded-full bg-primary animate-ping flex-shrink-0" />
           <span className="font-medium truncate">{sync.danmuToast}</span>
         </div>
@@ -719,7 +719,7 @@ export const OsdOverlayPage: React.FC = () => {
 
       {/* 时长偏差提示 Banner */}
       {sync.durationAlert && (
-        <div className="fixed top-32 right-6 z-40 max-w-sm bg-black/80 backdrop-blur-md border border-yellow-500/30 text-yellow-300 text-xs p-3 rounded-xl shadow-xl flex items-start space-x-2 animate-in fade-in slide-in-from-top-2">
+        <div className="fixed top-32 right-6 z-40 max-w-sm bg-black/80 backdrop-blur-md border border-yellow-500/30 text-yellow-300 text-xs p-3 rounded-xl flex items-start space-x-2 animate-in fade-in slide-in-from-top-2">
           <AlertCircle className="w-4 h-4 flex-shrink-0 text-yellow-400 mt-0.5" />
           <div className="flex-1 leading-relaxed">{sync.durationAlert}</div>
           <button

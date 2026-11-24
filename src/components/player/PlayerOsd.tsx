@@ -450,7 +450,7 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
         {/* 左侧胶囊：返回、首页、标题与实时硬解/画质徽章 */}
         <div
           onClick={(e) => e.stopPropagation()}
-          className="flex items-center space-x-2.5 px-3.5 py-2 rounded-2xl bg-[#0B0E17]/90 backdrop-blur-2xl border border-white/15 shadow-xl max-w-[55vw]"
+          className="flex items-center space-x-2.5 px-3.5 py-2 rounded-2xl bg-[#0B0E17]/90 backdrop-blur-2xl border border-white/15 max-w-[55vw]"
         >
           <button
             onClick={onBack}
@@ -512,7 +512,7 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
         {/* 右侧胶囊：实时时钟、弹幕状态、置顶、窗口控制 */}
         <div
           onClick={(e) => e.stopPropagation()}
-          className="flex items-center space-x-2 px-3 py-2 rounded-2xl bg-[#0B0E17]/90 backdrop-blur-2xl border border-white/15 shadow-xl text-xs text-gray-300 shrink-0"
+          className="flex items-center space-x-2 px-3 py-2 rounded-2xl bg-[#0B0E17]/90 backdrop-blur-2xl border border-white/15 text-xs text-gray-300 shrink-0"
         >
           {/* 系统时间 */}
           <span className="hidden sm:inline font-mono tabular-nums text-slate-300 px-1.5 font-medium">
@@ -591,7 +591,7 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
       {/* 底部悬浮毛玻璃胶囊控制舱 */}
       <div
         onClick={(e) => e.stopPropagation()}
-        className={`fixed bottom-6 left-1/2 -translate-x-1/2 w-[min(95vw,1060px)] rounded-2xl bg-[#0B0E17]/95 backdrop-blur-2xl border border-white/15 shadow-[0_20px_50px_rgba(0,0,0,0.75)] px-5 py-3.5 z-20 transition-all duration-300 pointer-events-auto flex flex-col space-y-2.5 ${
+        className={`fixed bottom-6 left-1/2 -translate-x-1/2 w-[min(95vw,1060px)] rounded-2xl bg-[#0B0E17]/95 backdrop-blur-2xl border border-white/15 px-5 py-3.5 z-20 transition-all duration-300 pointer-events-auto flex flex-col space-y-2.5 ${
           visible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4 pointer-events-none'
         }`}
       >
@@ -605,7 +605,7 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
           {/* Hover 预览气泡：时间 + 章节名 */}
           {hoverTime !== null && (
             <div
-              className="absolute bottom-7 -translate-x-1/2 px-2.5 py-1 rounded-lg bg-[#0B0E17]/95 backdrop-blur-xl border border-white/20 text-xs font-mono tabular-nums text-white shadow-xl pointer-events-none z-30 whitespace-nowrap flex flex-col items-center"
+              className="absolute bottom-7 -translate-x-1/2 px-2.5 py-1 rounded-lg bg-[#0B0E17]/95 backdrop-blur-xl border border-white/20 text-xs font-mono tabular-nums text-white pointer-events-none z-30 whitespace-nowrap flex flex-col items-center"
               style={{ left: `${hoverPosition}%` }}
             >
               {hoveredChapterName && (
@@ -890,7 +890,7 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
               </button>
 
               {showSkipMenu && (
-                <div className="absolute bottom-full mb-3 right-0 w-72 rounded-xl bg-[#0B0E17]/95 backdrop-blur-2xl border border-white/15 shadow-2xl p-2.5 space-y-2 z-40">
+                <div className="absolute bottom-full mb-3 right-0 w-72 rounded-xl bg-[#0B0E17]/95 backdrop-blur-2xl border border-white/15 p-2.5 space-y-2 z-40">
                   <div className="flex items-center justify-between px-1">
                     <span className="text-xs font-semibold text-white">片头片尾标记</span>
                     <button
@@ -940,7 +940,7 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
                   <span className="hidden lg:inline">版本</span>
                 </button>
                 {showSourceMenu && (
-                  <div className="absolute bottom-full mb-3 right-0 bg-[#0B0E17]/95 backdrop-blur-2xl border border-white/15 rounded-xl shadow-2xl p-2 w-72 space-y-1 max-h-64 overflow-y-auto z-30">
+                  <div className="absolute bottom-full mb-3 right-0 bg-[#0B0E17]/95 backdrop-blur-2xl border border-white/15 rounded-xl p-2 w-72 space-y-1 max-h-64 overflow-y-auto z-30">
                     <span className="text-[11px] font-semibold text-gray-400 px-2 block mb-1">
                       切换原画版本 (0 转码直连)
                     </span>
@@ -1011,7 +1011,7 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
                 {playbackRate}x
               </button>
               {showRateMenu && (
-                <div className="absolute bottom-full mb-3 right-0 bg-[#0B0E17]/95 backdrop-blur-2xl border border-white/15 rounded-xl shadow-2xl p-1.5 w-24 space-y-1 z-30">
+                <div className="absolute bottom-full mb-3 right-0 bg-[#0B0E17]/95 backdrop-blur-2xl border border-white/15 rounded-xl p-1.5 w-24 space-y-1 z-30">
                   {rates.map((r) => (
                     <button
                       key={r}
@@ -1049,7 +1049,7 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
                   <AudioLines className="w-4 h-4" />
                 </button>
                 {showAudioMenu && (
-                  <div className="absolute bottom-full mb-3 right-0 bg-[#0B0E17]/95 backdrop-blur-2xl border border-white/15 rounded-xl shadow-2xl p-2 w-64 space-y-1 max-h-56 overflow-y-auto z-30">
+                  <div className="absolute bottom-full mb-3 right-0 bg-[#0B0E17]/95 backdrop-blur-2xl border border-white/15 rounded-xl p-2 w-64 space-y-1 max-h-56 overflow-y-auto z-30">
                     <span className="text-[11px] font-semibold text-gray-400 px-2 block mb-1">
                       音轨选择
                     </span>
@@ -1100,7 +1100,7 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
                   )}
                 </button>
                 {showSubtitleMenu && (
-                  <div className="absolute bottom-full mb-3 right-0 bg-[#0B0E17]/95 backdrop-blur-2xl border border-white/15 rounded-xl shadow-2xl p-2 w-64 space-y-1 max-h-60 overflow-y-auto z-30">
+                  <div className="absolute bottom-full mb-3 right-0 bg-[#0B0E17]/95 backdrop-blur-2xl border border-white/15 rounded-xl p-2 w-64 space-y-1 max-h-60 overflow-y-auto z-30">
                     <span className="text-[11px] font-semibold text-gray-400 px-2 block mb-1">
                       主字幕选择 (双语次字幕可在调校面板设置)
                     </span>

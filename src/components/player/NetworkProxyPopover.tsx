@@ -114,7 +114,7 @@ export const NetworkProxyPopover: React.FC<NetworkProxyPopoverProps> = ({
   return (
     <>
       <div className="fixed inset-0 z-20 bg-transparent" onClick={onClose} />
-      <div className="fixed top-16 right-6 z-[35] w-80 md:w-96 rounded-2xl bg-[#0B0E17]/95 backdrop-blur-2xl border border-white/15 shadow-[0_24px_60px_rgba(0,0,0,0.8)] text-xs text-slate-200 select-none animate-in fade-in slide-in-from-top-2 duration-150 overflow-hidden">
+      <div className="fixed top-16 right-6 z-[35] w-80 md:w-96 rounded-2xl bg-[#0B0E17]/95 backdrop-blur-2xl border border-white/15 text-xs text-slate-200 select-none animate-in fade-in slide-in-from-top-2 duration-150 overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-white/10 bg-white/[0.02]">
           <div className="flex items-center space-x-2">

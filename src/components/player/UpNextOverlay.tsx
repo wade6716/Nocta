@@ -43,7 +43,7 @@ export const UpNextOverlay: React.FC<UpNextOverlayProps> = ({
               e.stopPropagation();
               onSkipIntro();
             }}
-            className="flex items-center space-x-2 px-4 py-2 rounded-full bg-[#0B0E17]/95 hover:bg-primary text-white border border-white/20 hover:border-primary shadow-2xl backdrop-blur-2xl text-xs font-semibold transition cursor-pointer group"
+            className="flex items-center space-x-2 px-4 py-2 rounded-full bg-[#0B0E17]/95 hover:bg-primary text-white border border-white/20 hover:border-primary backdrop-blur-2xl text-xs font-semibold transition cursor-pointer group"
           >
             <FastForward className="w-3.5 h-3.5 text-sky-400 group-hover:text-white transition" />
             <span>跳过片头</span>
@@ -57,7 +57,7 @@ export const UpNextOverlay: React.FC<UpNextOverlayProps> = ({
       {/* 右下角：下一集自动连播倒计时浮窗 */}
       {nextEpisode && countdownSeconds !== null && (
         <div className="fixed bottom-32 right-6 z-30 w-80 pointer-events-auto select-none animate-in fade-in slide-in-from-right-4 duration-200">
-          <div className="rounded-2xl bg-[#0B0E17]/95 backdrop-blur-2xl border border-white/15 shadow-[0_20px_50px_rgba(0,0,0,0.8)] overflow-hidden">
+          <div className="rounded-2xl bg-[#0B0E17]/95 backdrop-blur-2xl border border-white/15 overflow-hidden">
             <div className="p-3.5 flex items-center space-x-3">
               <div className="w-24 aspect-video rounded-xl overflow-hidden bg-white/5 shrink-0 relative border border-white/10">
                 {thumbUrl ? (

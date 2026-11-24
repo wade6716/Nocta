@@ -709,23 +709,16 @@ jobs:
         run: |
           set -euo pipefail
 
-          # 1. 基于仓库模板生成正文头部与平台指引
-          cp .github/release-template.md release_notes.md
+          # 1. 自动生成中文化更新日志（优先读取 CHANGELOG.md，回退解析 git log 分类提交）
+          node scripts/generate-release-notes.mjs \
+            --tag "$TAG_NAME" \
+            --repo "${{ github.repository }}" \
+            --changelog CHANGELOG.md \
+            --template .github/release-template.md \
+            --out-release release_notes.md \
+            --out-updater updater_notes.md
 
-          # 2. 调用 GitHub API 自动生成带分类的更新日志
-          CHANGELOG=$(gh api "repos/${{ github.repository }}/releases/generate-notes" \
-            -f tag_name="$TAG_NAME" \
-            --jq .body 2>/dev/null || true)
-
-          if [ -n "$CHANGELOG" ]; then
-            echo "" >> release_notes.md
-            echo "$CHANGELOG" >> release_notes.md
-            printf '%s\n' "$CHANGELOG" > updater_notes.md
-          else
-            printf 'Nocta · 夜幕 %s 更新发布\n' "$TAG_NAME" > updater_notes.md
-          fi
-
-          # 3. 强制覆盖更新已有的 Release 正文与标题 (避免因 Release 已存在而漏更)
+          # 2. 强制覆盖更新已有的 Release 正文与标题 (避免因 Release 已存在而漏更)
           gh release edit "$TAG_NAME" -F release_notes.md --title "Nocta · 夜幕 $TAG_NAME"
 
           # 4. 自动清理旧格式遗留资产文件 (保留跨端安装包、.sig 签名、.tar.gz 与 latest.json)

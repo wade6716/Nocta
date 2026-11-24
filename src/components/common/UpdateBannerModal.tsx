@@ -16,6 +16,134 @@ import {
   useUpdaterStore,
 } from '../../stores/useUpdaterStore';
 
+const INLINE_TOKEN_RE = /(\*\*[^*]+\*\*|`[^`]+`|https?:\/\/[^\s)<>]+)/g;
+
+function sanitizeReleaseNotes(raw?: string): string {
+  return (raw || '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function extractToastPreview(raw?: string): string {
+  const cleaned = sanitizeReleaseNotes(raw);
+  if (!cleaned) return '';
+  const lines = cleaned
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const meaningful =
+    lines.find(
+      (line) =>
+        !/^#{1,6}\s+/.test(line) &&
+        !/^---+$/.test(line) &&
+        !/^\*\*Full Changelog\*\*/i.test(line) &&
+        !/^\*\*完整变更对比\*\*/.test(line) &&
+        !/^https?:\/\/\S+$/i.test(line)
+    ) || lines[0];
+
+  if (!meaningful) return '';
+  return meaningful
+    .replace(/^#{1,6}\s+/, '')
+    .replace(/^[-*]\s+/, '')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .trim();
+}
+
+function renderInlineSegments(text: string): React.ReactNode {
+  const parts = text.split(INLINE_TOKEN_RE);
+  return parts.map((part, idx) => {
+    if (!part) return null;
+    if (part.startsWith('**') && part.endsWith('**') && part.length > 4) {
+      return (
+        <strong key={idx} className="font-semibold text-white">
+          {part.slice(2, -2)}
+        </strong>
+      );
+    }
+    if (part.startsWith('`') && part.endsWith('`') && part.length > 2) {
+      return (
+        <code
+          key={idx}
+          className="px-1 py-0.5 rounded bg-white/10 text-sky-300 font-mono text-[11px]"
+        >
+          {part.slice(1, -1)}
+        </code>
+      );
+    }
+    if (/^https?:\/\//i.test(part)) {
+      return (
+        <a
+          key={idx}
+          href={part}
+          target="_blank"
+          rel="noreferrer"
+          className="text-sky-400 hover:text-sky-300 underline break-all"
+        >
+          {part}
+        </a>
+      );
+    }
+    return <React.Fragment key={idx}>{part}</React.Fragment>;
+  });
+}
+
+const ReleaseNotesContent: React.FC<{ body?: string }> = ({ body }) => {
+  const cleaned = sanitizeReleaseNotes(body);
+  if (!cleaned) {
+    return (
+      <p className="text-slate-400">
+        暂无详细更新日志，建议点击下方链接查看 GitHub Release 页面。
+      </p>
+    );
+  }
+
+  const lines = cleaned.split('\n');
+  return (
+    <div className="space-y-1.5">
+      {lines.map((rawLine, idx) => {
+        const line = rawLine.trim();
+        if (!line) {
+          return <div key={idx} className="h-1" />;
+        }
+        if (/^(?:---|\*\*\*|___)$/.test(line)) {
+          return <hr key={idx} className="border-white/10 my-2" />;
+        }
+        const headingMatch = line.match(/^#{1,6}\s+(.+)$/);
+        if (headingMatch) {
+          return (
+            <h4
+              key={idx}
+              className="text-white font-semibold text-xs pt-2 first:pt-0 tracking-wide"
+            >
+              {renderInlineSegments(headingMatch[1].trim())}
+            </h4>
+          );
+        }
+        const bulletMatch = line.match(/^[-*]\s+(.+)$/);
+        if (bulletMatch) {
+          return (
+            <div key={idx} className="flex items-start gap-2 pl-0.5 leading-relaxed">
+              <span className="mt-2 w-1.5 h-1.5 rounded-full bg-sky-400/80 shrink-0" />
+              <span className="flex-1 text-slate-300">
+                {renderInlineSegments(bulletMatch[1].trim())}
+              </span>
+            </div>
+          );
+        }
+        return (
+          <p key={idx} className="text-slate-300 leading-relaxed">
+            {renderInlineSegments(line)}
+          </p>
+        );
+      })}
+    </div>
+  );
+};
+
 export const UpdateBannerModal: React.FC = () => {
   const location = useLocation();
   const isPlayerRoute = location.pathname.startsWith('/player');
@@ -54,6 +182,7 @@ export const UpdateBannerModal: React.FC = () => {
   const releaseNotesUrl = updateInfo?.version
     ? `https://github.com/wade6716/Nocta/releases/tag/v${updateInfo.version.replace(/^v/i, '')}`
     : 'https://github.com/wade6716/Nocta/releases';
+  const toastPreview = extractToastPreview(updateInfo?.body);
 
   if (!showFloatingToast && !(detailsModalOpen && updateInfo)) {
     return null;
@@ -119,9 +248,9 @@ export const UpdateBannerModal: React.FC = () => {
             )}
           </div>
 
-          {!isBusy && !isReady && updateInfo.body && (
+          {!isBusy && !isReady && toastPreview && (
             <p className="mt-2.5 text-[11px] text-slate-300/90 leading-relaxed line-clamp-2 bg-black/25 rounded-lg px-2.5 py-1.5 border border-white/[0.06]">
-              {updateInfo.body}
+              {toastPreview}
             </p>
           )}
 
@@ -252,8 +381,8 @@ export const UpdateBannerModal: React.FC = () => {
             </div>
 
             <div className="p-6 space-y-4">
-              <div className="max-h-64 overflow-y-auto custom-scrollbar rounded-xl bg-black/35 border border-white/[0.07] p-3.5 text-xs text-slate-300 leading-relaxed whitespace-pre-wrap">
-                {updateInfo.body?.trim() || '暂无详细更新日志，建议点击下方链接查看 GitHub Release 页面。'}
+              <div className="max-h-64 overflow-y-auto custom-scrollbar rounded-xl bg-black/35 border border-white/[0.07] p-3.5 text-xs text-slate-300 leading-relaxed">
+                <ReleaseNotesContent body={updateInfo.body} />
               </div>
 
               {isBusy && (

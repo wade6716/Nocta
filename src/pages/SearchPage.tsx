@@ -25,6 +25,7 @@ import {
   EmbyItem,
   SearchFilterType,
   searchFederatedMediaItems,
+  sortFederatedSearchItems,
   FederatedSearchStats,
   FederatedServerTarget,
   getUserViews,
@@ -49,7 +50,7 @@ function saveSearchHistory(history: string[]) {
   } catch {}
 }
 
-export const SearchPage: React.FC = () => {
+export const SearchPage: React.FC<{ isActive?: boolean }> = ({ isActive = true }) => {
   const navigate = useNavigate();
   const servers = useAuthStore((s) => s.servers);
   const currentServer = useAuthStore((s) => s.getCurrentServer());
@@ -81,15 +82,43 @@ export const SearchPage: React.FC = () => {
 
   const inputRef = useRef<HTMLInputElement>(null);
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const searchReqIdRef = useRef(0);
 
-  // 检查登录状态
+  // 进入搜索页时并行预热所有服务器的媒体库 Views 缓存，避免首次搜索串行等待 getUserViews
   useEffect(() => {
+    if (servers.length === 0) return;
+    let cancelled = false;
+    const uncached = servers.filter((s) => !viewsCacheRef.current[s.id]);
+    if (uncached.length === 0) return;
+
+    Promise.allSettled(
+      uncached.map(async (srv) => {
+        try {
+          const res = await getUserViews(srv.url, srv.userId, srv.accessToken);
+          if (cancelled) return;
+          viewsCacheRef.current[srv.id] = (res.Items || []).filter(
+            (v) => v.CollectionType !== 'music' && v.CollectionType !== 'photos'
+          );
+        } catch {
+          // 忽略单台预热失败，实际检索时由单服并发与超时兜底
+        }
+      })
+    );
+
+    return () => {
+      cancelled = true;
+    };
+  }, [servers]);
+
+  // 检查登录状态并仅在当前激活时自动聚焦搜索框
+  useEffect(() => {
+    if (!isActive) return;
     if (!currentServer && servers.length === 0) {
       navigate('/login');
       return;
     }
     inputRef.current?.focus();
-  }, [currentServer, servers, navigate]);
+  }, [isActive, currentServer, servers, navigate]);
 
   // 点击外部自动关闭下拉菜单
   useEffect(() => {
@@ -133,6 +162,7 @@ export const SearchPage: React.FC = () => {
   // 执行联合检索
   const executeSearch = useCallback(
     async (searchTerm: string, type: SearchFilterType, scope: string) => {
+      const reqId = ++searchReqIdRef.current;
       const cleanTerm = searchTerm.trim();
       if (!cleanTerm || servers.length === 0) {
         setResults([]);
@@ -144,6 +174,8 @@ export const SearchPage: React.FC = () => {
 
       setLoading(true);
       setHasSearched(true);
+      setResults([]);
+      setStats([]);
 
       // 确定需要检索的目标服务器集合
       const targetsToSearch =
@@ -164,7 +196,19 @@ export const SearchPage: React.FC = () => {
           keyword: cleanTerm,
           filterType: type,
           limitPerServer: 80,
+          onServerResult: ({ stat, items }) => {
+            if (reqId !== searchReqIdRef.current) return;
+            setStats((prev) => [...prev.filter((s) => s.serverId !== stat.serverId), stat]);
+            if (items.length > 0) {
+              setResults((prev) => {
+                const withoutSameServer = prev.filter((it) => it.ServerId !== stat.serverId);
+                return sortFederatedSearchItems([...withoutSameServer, ...items], cleanTerm);
+              });
+            }
+          },
         });
+
+        if (reqId !== searchReqIdRef.current) return;
 
         setResults(response.items);
         setStats(response.stats);
@@ -179,11 +223,14 @@ export const SearchPage: React.FC = () => {
           return updated;
         });
       } catch (err) {
+        if (reqId !== searchReqIdRef.current) return;
         console.error('[Federated Search Error]', err);
         setResults([]);
         setStats([]);
       } finally {
-        setLoading(false);
+        if (reqId === searchReqIdRef.current) {
+          setLoading(false);
+        }
       }
     },
     [servers]
@@ -196,6 +243,7 @@ export const SearchPage: React.FC = () => {
     }
 
     if (!keyword.trim()) {
+      searchReqIdRef.current += 1;
       setResults([]);
       setStats([]);
       setHasSearched(false);
@@ -215,10 +263,12 @@ export const SearchPage: React.FC = () => {
   }, [keyword, filterType, searchScope, executeSearch]);
 
   const handleClearInput = () => {
+    searchReqIdRef.current += 1;
     setKeyword('');
     setResults([]);
     setStats([]);
     setHasSearched(false);
+    setLoading(false);
     inputRef.current?.focus();
   };
 
@@ -464,6 +514,7 @@ export const SearchPage: React.FC = () => {
             {servers.map((srv) => {
               const stat = stats.find((s) => s.serverId === srv.id);
               const isSelected = filterServerId === srv.id;
+              const isPending = loading && !stat;
               const count = stat ? stat.count : results.filter((r) => r.ServerId === srv.id).length;
               const isError = stat && !stat.ok;
 
@@ -480,14 +531,18 @@ export const SearchPage: React.FC = () => {
                       : 'bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white border-white/5'
                   }`}
                 >
-                  <span
-                    className={`w-1.5 h-1.5 rounded-full ${
-                      isError ? 'bg-red-400' : 'bg-emerald-400'
-                    }`}
-                  />
+                  {isPending ? (
+                    <Loader2 className="w-2.5 h-2.5 text-primary animate-spin" />
+                  ) : (
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full ${
+                        isError ? 'bg-red-400' : 'bg-emerald-400'
+                      }`}
+                    />
+                  )}
                   <span>{srv.name}</span>
                   <span className="font-mono text-[10px] opacity-75">
-                    ({isError ? '离线' : `${count}`})
+                    ({isPending ? '搜索中...' : isError ? '离线' : `${count}`})
                   </span>
                 </button>
               );
@@ -595,6 +650,7 @@ export const SearchPage: React.FC = () => {
                     ? ` · 跨 ${successfulServers.length}/${servers.length} 台服务器`
                     : ` · 来自「${activeScopeServer?.name || ''}」`}
                   {filterServerId !== 'ALL' && ` · 已过滤显示 ${displayedResults.length} 部`}
+                  {loading && results.length > 0 && ' · 其余服务器并行检索中...'}
                   )
                 </span>
               </div>

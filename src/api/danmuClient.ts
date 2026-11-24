@@ -43,6 +43,12 @@ export interface DanmuEpisode {
   episodeNumber?: string | number;
 }
 
+export interface DanmuAutoMatchResult extends DanmuAnimeMatch {
+  matchedBy: 'match_api' | 'keyword_search';
+  animeId?: number | string;
+  episodes?: DanmuEpisode[];
+}
+
 export interface DanmuAnimeSearchResult {
   animeId: number | string;
   animeTitle: string;
@@ -291,6 +297,296 @@ export async function autoMatchEpisode(
   } catch (err) {
     console.warn('[Danmu Match Failed]', err);
   }
+  return null;
+}
+
+const SEASON_CHINESE_NUMERALS: Record<number, string> = {
+  1: '一',
+  2: '二',
+  3: '三',
+  4: '四',
+  5: '五',
+  6: '六',
+  7: '七',
+  8: '八',
+  9: '九',
+  10: '十',
+};
+
+function normalizeCompareText(text: string): string {
+  return text.toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+export function extractEpisodeNumberFromTitle(title?: string): number | undefined {
+  const raw = (title || '').trim();
+  if (!raw) return undefined;
+
+  const patterns = [
+    /S\d+E0*(\d+)/i,
+    /第\s*0*(\d+)\s*(?:集|话|話|期|回)/,
+    /(?:^|[\s._-])(?:EP|E)0*(\d+)(?![a-zA-Z0-9])/i,
+  ];
+
+  for (const re of patterns) {
+    const match = raw.match(re);
+    if (match) {
+      const num = Number(match[1]);
+      if (Number.isFinite(num) && num > 0 && num < 10000) {
+        return num;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+export function cleanDanmuSearchKeyword(raw: string): string {
+  return raw
+    .trim()
+    .replace(/[(（\[]\s*(?:19|20)\d{2}\s*[)）\]]/g, ' ')
+    .replace(/(?<![a-zA-Z0-9])S\d{1,2}E\d{1,4}(?![a-zA-Z0-9])/gi, ' ')
+    .replace(/\s*第\s*\d+\s*(?:集|话|話|期|回)\s*$/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function scoreAnimeCandidate(
+  anime: DanmuAnimeSearchResult,
+  opts: {
+    keyword: string;
+    cleanedKeyword: string;
+    seasonNumber?: number;
+    year?: number;
+    isMovie: boolean;
+    preferredPlatform?: string;
+  }
+): number {
+  const rawTitle = anime.animeTitle || '';
+  const normTitle = normalizeCompareText(rawTitle);
+  const normKeyword = normalizeCompareText(opts.keyword);
+  const normCleaned = normalizeCompareText(opts.cleanedKeyword);
+  const primaryKey = normCleaned || normKeyword;
+
+  let score = 0;
+
+  if (normTitle && ((normKeyword && normTitle === normKeyword) || (normCleaned && normTitle === normCleaned))) {
+    score += 100;
+  } else if (primaryKey && normTitle.startsWith(primaryKey)) {
+    score += 60;
+  } else if (primaryKey && normTitle.includes(primaryKey)) {
+    score += 40;
+  }
+
+  if (opts.seasonNumber && opts.seasonNumber > 1) {
+    const s = opts.seasonNumber;
+    const cnNum = SEASON_CHINESE_NUMERALS[s];
+    const seasonPatterns = [
+      new RegExp(`第\\s*0*${s}\\s*(?:季|部)`, 'i'),
+      new RegExp(`Season\\s*0*${s}(?!\\d)`, 'i'),
+      new RegExp(`(?<![a-zA-Z])S0*${s}(?!\\d)`, 'i'),
+      new RegExp(`\\s+0*${s}$`),
+    ];
+    if (cnNum) {
+      seasonPatterns.push(new RegExp(`第\\s*${cnNum}\\s*(?:季|部)`));
+    }
+    if (seasonPatterns.some((re) => re.test(rawTitle))) {
+      score += 50;
+    }
+  } else if (
+    opts.seasonNumber === 1 &&
+    /(?:第\s*(?:[2-9]|\d{2,})\s*季|第\s*[二三四五六七八九十]+\s*季|Season\s*(?:[2-9]|\d{2,})\b)/i.test(rawTitle)
+  ) {
+    score -= 35;
+  }
+
+  if (opts.year && rawTitle.includes(String(opts.year))) {
+    score += 20;
+  }
+
+  const animeType = anime.type || '';
+  if (opts.isMovie) {
+    if (/(movie|电影|剧场)/i.test(animeType)) {
+      score += 25;
+    }
+  } else if (/(tv|anime|剧|番|动漫|综艺)/i.test(animeType)) {
+    score += 15;
+  }
+
+  const pref = (opts.preferredPlatform || '').trim().toLowerCase();
+  if (pref && (normTitle.includes(pref) || animeType.toLowerCase().includes(pref))) {
+    score += 15;
+  }
+
+  score -= Math.min(20, Math.abs(normTitle.length - primaryKey.length)) * 0.5;
+  return score;
+}
+
+export function pickMatchingEpisode(
+  episodes: DanmuEpisode[],
+  episodeNumber?: number,
+  isMovie?: boolean,
+  preferredPlatform?: string
+): DanmuEpisode | null {
+  if (!episodes || episodes.length === 0) return null;
+
+  const pref = (preferredPlatform || '').trim().toLowerCase();
+
+  if (isMovie && episodeNumber === undefined) {
+    if (pref) {
+      const platMatch = episodes.find(
+        (ep, idx) => parseDanmuEpisodeInfo(ep, idx).platform?.toLowerCase() === pref
+      );
+      if (platMatch) return platMatch;
+    }
+    return episodes[0];
+  }
+
+  if (episodeNumber !== undefined && episodeNumber > 0) {
+    const parsedMatches = episodes
+      .map((ep, idx) => ({ ep, parsed: parseDanmuEpisodeInfo(ep, idx) }))
+      .filter((entry) => entry.parsed.episodeNumber === episodeNumber);
+
+    if (parsedMatches.length > 0) {
+      if (pref) {
+        const platMatch = parsedMatches.find(
+          (entry) => entry.parsed.platform?.toLowerCase() === pref
+        );
+        if (platMatch) return platMatch.ep;
+      }
+      return parsedMatches[0].ep;
+    }
+
+    if (episodes[episodeNumber - 1]) {
+      return episodes[episodeNumber - 1];
+    }
+
+    return null;
+  }
+
+  return episodes[0];
+}
+
+/**
+ * 两阶段弹幕自动匹配：
+ * 1) 优先调用 POST /api/v2/match 快速精准匹配
+ * 2) 未命中时自动回退关键词检索 (/api/v2/search/anime) + 分集列表 (/api/v2/bangumi/:id) + 智能评分选集
+ */
+export async function autoSearchAndMatchEpisode(
+  config: DanmuConfig,
+  params: {
+    seriesName?: string;
+    seasonNumber?: number;
+    episodeNumber?: number;
+    fileName?: string;
+    itemType?: string;
+    productionYear?: number;
+  },
+  options?: {
+    isCancelled?: () => boolean;
+  }
+): Promise<DanmuAutoMatchResult | null> {
+  const isCancelled = options?.isCancelled;
+  const isMovie =
+    params.itemType === 'Movie' || (!params.seriesName && params.episodeNumber === undefined);
+  const resolvedEpisodeNumber =
+    typeof params.episodeNumber === 'number' && params.episodeNumber > 0
+      ? params.episodeNumber
+      : extractEpisodeNumberFromTitle(params.fileName);
+
+  // Stage 1: 标准自动匹配接口
+  const directMatch = await autoMatchEpisode(config, {
+    seriesName: params.seriesName,
+    seasonNumber: params.seasonNumber,
+    episodeNumber: resolvedEpisodeNumber,
+    fileName: params.fileName,
+  });
+  if (isCancelled?.()) return null;
+  if (directMatch) {
+    return {
+      ...directMatch,
+      matchedBy: 'match_api',
+    };
+  }
+
+  // Stage 2: 关键词搜索与候选集数回退匹配（不向搜索关键词附加 @preferredPlatform）
+  const baseRawKeyword = params.seriesName?.trim() || params.fileName?.trim() || '';
+  const cleanedKeyword = baseRawKeyword ? cleanDanmuSearchKeyword(baseRawKeyword) : '';
+  const candidateKeywords = Array.from(new Set([baseRawKeyword, cleanedKeyword].filter(Boolean)));
+  if (candidateKeywords.length === 0) return null;
+
+  let animes: DanmuAnimeSearchResult[] = [];
+  let searchKeywordUsed = baseRawKeyword;
+
+  for (const kw of candidateKeywords) {
+    if (isCancelled?.()) return null;
+    try {
+      const searchRes = await searchDanmuAnime(config, kw);
+      if (isCancelled?.()) return null;
+      if (searchRes?.animes && searchRes.animes.length > 0) {
+        animes = searchRes.animes;
+        searchKeywordUsed = kw;
+        break;
+      }
+    } catch (err) {
+      console.warn('[Danmu Auto Search Failed]', kw, err);
+    }
+  }
+
+  if (animes.length === 0) return null;
+
+  const rankedCandidates = [...animes].sort((a, b) => {
+    const scoreA = scoreAnimeCandidate(a, {
+      keyword: searchKeywordUsed,
+      cleanedKeyword: cleanedKeyword || searchKeywordUsed,
+      seasonNumber: params.seasonNumber,
+      year: params.productionYear,
+      isMovie,
+      preferredPlatform: config.preferredPlatform,
+    });
+    const scoreB = scoreAnimeCandidate(b, {
+      keyword: searchKeywordUsed,
+      cleanedKeyword: cleanedKeyword || searchKeywordUsed,
+      seasonNumber: params.seasonNumber,
+      year: params.productionYear,
+      isMovie,
+      preferredPlatform: config.preferredPlatform,
+    });
+    return scoreB - scoreA;
+  });
+
+  for (const candidate of rankedCandidates.slice(0, 3)) {
+    if (isCancelled?.()) return null;
+
+    let episodes = candidate.episodes || [];
+    if (episodes.length === 0) {
+      try {
+        const bangumiRes = await getDanmuBangumiEpisodes(config, candidate.animeId);
+        if (isCancelled?.()) return null;
+        episodes = bangumiRes?.bangumi?.episodes || [];
+      } catch (err) {
+        console.warn('[Danmu Bangumi Fetch Failed]', candidate.animeId, err);
+        continue;
+      }
+    }
+
+    const matchedEp = pickMatchingEpisode(
+      episodes,
+      resolvedEpisodeNumber,
+      isMovie,
+      config.preferredPlatform
+    );
+    if (matchedEp) {
+      return {
+        episodeId: matchedEp.episodeId,
+        animeTitle: candidate.animeTitle,
+        episodeTitle: matchedEp.episodeTitle,
+        matchedBy: 'keyword_search',
+        animeId: candidate.animeId,
+        episodes,
+      };
+    }
+  }
+
   return null;
 }
 

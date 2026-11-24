@@ -33,6 +33,7 @@ import {
   ticksToSeconds,
 } from '../../api/embyClient';
 import { PlayerTelemetry, ResolvedStreamProxyInfo } from '../../player/types';
+import { formatMediaSourceMeta } from '../../player/playbackSessionService';
 import { SkipSegments } from '../../stores/usePlayerStore';
 
 const IS_MACOS = /Macintosh|Mac OS X/i.test(navigator.userAgent);
@@ -939,27 +940,57 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
                   <span className="hidden lg:inline">版本</span>
                 </button>
                 {showSourceMenu && (
-                  <div className="absolute bottom-full mb-3 right-0 bg-[#0B0E17]/95 backdrop-blur-2xl border border-white/15 rounded-xl shadow-2xl p-2 w-64 space-y-1 max-h-56 overflow-y-auto z-30">
+                  <div className="absolute bottom-full mb-3 right-0 bg-[#0B0E17]/95 backdrop-blur-2xl border border-white/15 rounded-xl shadow-2xl p-2 w-72 space-y-1 max-h-64 overflow-y-auto z-30">
                     <span className="text-[11px] font-semibold text-gray-400 px-2 block mb-1">
                       切换原画版本 (0 转码直连)
                     </span>
-                    {availableMediaSources.map((ms) => (
-                      <button
-                        key={ms.Id}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onSelectMediaSource(ms);
-                          setShowSourceMenu(false);
-                        }}
-                        className={`w-full text-left px-3 py-2 rounded-lg text-xs transition truncate cursor-pointer ${
-                          activeMediaSourceId === ms.Id
-                            ? 'bg-primary text-white font-semibold'
-                            : 'hover:bg-white/10 text-gray-300'
-                        }`}
-                      >
-                        {ms.Name || ms.Container?.toUpperCase() || '默认版本'}
-                      </button>
-                    ))}
+                    {availableMediaSources.map((ms) => {
+                      const isActive = activeMediaSourceId === ms.Id;
+                      const meta = formatMediaSourceMeta(ms);
+                      const specLine = [
+                        meta.resolutionLabel,
+                        meta.hdrLabel,
+                        meta.containerLabel,
+                        meta.sizeLabel,
+                      ]
+                        .filter(Boolean)
+                        .join(' · ');
+                      return (
+                        <button
+                          key={ms.Id}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onSelectMediaSource(ms);
+                            setShowSourceMenu(false);
+                          }}
+                          className={`w-full text-left px-3 py-2 rounded-lg text-xs transition cursor-pointer flex items-center justify-between gap-2 ${
+                            isActive
+                              ? 'bg-primary text-white'
+                              : 'hover:bg-white/10 text-gray-300'
+                          }`}
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="font-semibold truncate">
+                              {ms.Name || meta.resolutionLabel || meta.containerLabel || '默认版本'}
+                            </div>
+                            {specLine && (
+                              <div
+                                className={`text-[10px] font-mono truncate mt-0.5 ${
+                                  isActive ? 'text-white/80' : 'text-gray-400'
+                                }`}
+                              >
+                                {specLine}
+                              </div>
+                            )}
+                          </div>
+                          {isActive && (
+                            <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-white/20 text-white font-bold">
+                              当前
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
               </div>

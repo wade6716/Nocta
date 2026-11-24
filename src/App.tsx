@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Routes, Route, useLocation } from 'react-router-dom';
 import { TitleBar } from './components/layout/TitleBar';
 import { Sidebar } from './components/layout/Sidebar';
@@ -11,14 +11,94 @@ import { SearchPage } from './pages/SearchPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { UpdateBannerModal } from './components/common/UpdateBannerModal';
+import { useAuthStore } from './stores/useAuthStore';
+import { useMediaStore } from './stores/useMediaStore';
 import { useSyncStore } from './stores/useSyncStore';
 import { useUpdaterStore } from './stores/useUpdaterStore';
 import { isTauriEnvironment } from './api/http';
+
+const KeepAliveTabPane: React.FC<{
+  id?: string;
+  active: boolean;
+  children: React.ReactNode;
+}> = ({ id, active, children }) => {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const savedScrollTopRef = useRef(0);
+
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    if (active && savedScrollTopRef.current > 0) {
+      el.scrollTop = savedScrollTopRef.current;
+    }
+  }, [active]);
+
+  return (
+    <div
+      id={id}
+      ref={containerRef}
+      onScroll={(e) => {
+        if (active) {
+          savedScrollTopRef.current = e.currentTarget.scrollTop;
+        }
+      }}
+      className={active ? 'h-full w-full overflow-y-auto overflow-x-hidden' : 'hidden'}
+    >
+      {children}
+    </div>
+  );
+};
 
 export const App: React.FC = () => {
   const location = useLocation();
   const isPlayerPage = location.pathname.startsWith('/player');
   const isLoginPage = location.pathname === '/login';
+  const serversCount = useAuthStore((s) => s.servers.length);
+
+  const isHomeTab = location.pathname === '/';
+  const isContinueTab = location.pathname === '/continue-watching';
+  const isSearchTab = location.pathname === '/search';
+  const isPrimaryTab = isHomeTab || isContinueTab || isSearchTab;
+
+  const [visitedTabs, setVisitedTabs] = useState<{
+    home: boolean;
+    continue: boolean;
+    search: boolean;
+  }>(() => ({
+    home: isHomeTab && serversCount > 0 && !isLoginPage,
+    continue: isContinueTab && serversCount > 0 && !isLoginPage,
+    search: isSearchTab && serversCount > 0 && !isLoginPage,
+  }));
+
+  useEffect(() => {
+    if (isLoginPage || serversCount === 0) {
+      setVisitedTabs({ home: false, continue: false, search: false });
+      return;
+    }
+    setVisitedTabs((prev) => {
+      const nextHome = prev.home || isHomeTab;
+      const nextContinue = prev.continue || isContinueTab;
+      const nextSearch = prev.search || isSearchTab;
+      if (
+        nextHome === prev.home &&
+        nextContinue === prev.continue &&
+        nextSearch === prev.search
+      ) {
+        return prev;
+      }
+      return { home: nextHome, continue: nextContinue, search: nextSearch };
+    });
+  }, [isLoginPage, serversCount, isHomeTab, isContinueTab, isSearchTab]);
+
+  // 离开播放页后标记播放进度脏状态，供首页与继续观看静默刷新最新进度
+  const prevPathRef = useRef(location.pathname);
+  useEffect(() => {
+    const prevPath = prevPathRef.current;
+    if (prevPath.startsWith('/player') && !location.pathname.startsWith('/player')) {
+      useMediaStore.getState().markPlaybackDirty();
+    }
+    prevPathRef.current = location.pathname;
+  }, [location.pathname]);
 
   // 应用启动时自动拉取并合并多端配置
   useEffect(() => {
@@ -73,24 +153,63 @@ export const App: React.FC = () => {
           {/* Desktop Left Sidebar (Non-player & Non-login routes) */}
           {!isPlayerPage && !isLoginPage && <Sidebar />}
 
-          {/* Main view container with vertical scroll */}
+          {/* Main view container with Keep-Alive primary tabs */}
           <main
             id="main-scroll-container"
-            className={`flex-1 min-h-0 w-full ${
-              isPlayerPage
-                ? 'overflow-hidden bg-transparent'
-                : 'overflow-y-auto overflow-x-hidden bg-[#0B0E17]'
+            className={`flex-1 min-h-0 w-full overflow-hidden ${
+              isPlayerPage ? 'bg-transparent' : 'bg-[#0B0E17]'
             }`}
           >
-            <Routes>
-              <Route path="/" element={<HomePage />} />
-              <Route path="/continue-watching" element={<ContinueWatchingPage />} />
-              <Route path="/login" element={<LoginPage />} />
-              <Route path="/search" element={<SearchPage />} />
-              <Route path="/settings" element={<SettingsPage />} />
-              <Route path="/detail/:itemId" element={<DetailPage />} />
-              <Route path="/player/:itemId" element={<PlayerPage />} />
-            </Routes>
+            {!isLoginPage && serversCount > 0 && (
+              <>
+                {visitedTabs.home && (
+                  <KeepAliveTabPane id="home-scroll-container" active={isHomeTab}>
+                    <HomePage isActive={isHomeTab} />
+                  </KeepAliveTabPane>
+                )}
+                {visitedTabs.continue && (
+                  <KeepAliveTabPane id="continue-scroll-container" active={isContinueTab}>
+                    <ContinueWatchingPage isActive={isContinueTab} />
+                  </KeepAliveTabPane>
+                )}
+                {visitedTabs.search && (
+                  <KeepAliveTabPane id="search-scroll-container" active={isSearchTab}>
+                    <SearchPage isActive={isSearchTab} />
+                  </KeepAliveTabPane>
+                )}
+              </>
+            )}
+
+            <div
+              className={
+                isPrimaryTab
+                  ? 'hidden'
+                  : isPlayerPage
+                  ? 'h-full w-full overflow-hidden bg-transparent'
+                  : 'h-full w-full overflow-y-auto overflow-x-hidden'
+              }
+            >
+              <Routes>
+                <Route
+                  path="/"
+                  element={serversCount === 0 ? <HomePage isActive={isHomeTab} /> : null}
+                />
+                <Route
+                  path="/continue-watching"
+                  element={
+                    serversCount === 0 ? <ContinueWatchingPage isActive={isContinueTab} /> : null
+                  }
+                />
+                <Route
+                  path="/search"
+                  element={serversCount === 0 ? <SearchPage isActive={isSearchTab} /> : null}
+                />
+                <Route path="/login" element={<LoginPage />} />
+                <Route path="/settings" element={<SettingsPage />} />
+                <Route path="/detail/:itemId" element={<DetailPage />} />
+                <Route path="/player/:itemId" element={<PlayerPage />} />
+              </Routes>
+            </div>
           </main>
         </div>
 

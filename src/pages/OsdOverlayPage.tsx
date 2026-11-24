@@ -512,7 +512,7 @@ export const OsdOverlayPage: React.FC = () => {
 
   const layoutKey = sync?.layoutKey || '';
   const currentLayout = (layoutKey && videoLayouts[layoutKey]) || {
-    bottomAlign: false,
+    bottomAlign: playerPreferences.defaultBottomAlign,
     verticalOffset: 100,
   };
 

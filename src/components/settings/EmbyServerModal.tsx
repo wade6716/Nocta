@@ -308,6 +308,7 @@ export const EmbyServerModal: React.FC<EmbyServerModalProps> = ({
       const ok = isResultOk(result);
       const testMeta = {
         lastTestOk: ok,
+        lastLatencyMs: result.reachable ? result.latency : undefined,
         lastTestError: ok
           ? undefined
           : result.error || result.authError || '连接失败',
@@ -418,6 +419,7 @@ export const EmbyServerModal: React.FC<EmbyServerModalProps> = ({
       const ok = isResultOk(result);
       updateServer(server.id, {
         lastTestOk: ok,
+        lastLatencyMs: result.reachable ? result.latency : undefined,
         lastTestError: ok ? undefined : result.error || result.authError || '连接失败',
         lastTestAt: Date.now(),
       });
@@ -452,7 +454,15 @@ export const EmbyServerModal: React.FC<EmbyServerModalProps> = ({
   };
 
   const statusOf = (server: SavedServer): { tone: Tone; label: string } => {
-    if (server.lastTestOk === true) return { tone: 'ok', label: '连接正常' };
+    if (server.lastTestOk === true) {
+      return {
+        tone: 'ok',
+        label:
+          server.lastLatencyMs !== undefined
+            ? `正常 · ${server.lastLatencyMs} ms`
+            : '连接正常',
+      };
+    }
     if (server.lastTestOk === false) return { tone: 'warn', label: '连接失败' };
     return { tone: 'idle', label: '未验证' };
   };

@@ -277,7 +277,7 @@ export const PlayerPage: React.FC = () => {
   // Per-series or per-item video layout configuration
   const layoutKey = item?.SeriesId ? `series_${item.SeriesId}` : item ? `item_${item.Id}` : '';
   const currentLayout = (layoutKey && videoLayouts[layoutKey]) || {
-    bottomAlign: false,
+    bottomAlign: playerPreferences.defaultBottomAlign,
     verticalOffset: 100,
   };
   const videoAspectRatio = videoDimensions
@@ -1055,6 +1055,7 @@ export const PlayerPage: React.FC = () => {
   const switchMediaSource = useCallback(
     (ms: EmbyMediaSource) => {
       if (!currentServer || !item || !playSessionId) return;
+      if (mediaSource?.Id === ms.Id) return;
       releaseActivePreload();
       const liveSec = lastValidTimeRef.current || engineRef.current?.currentTime || currentTime;
       const sUrl = buildStreamUrlForEngine(
@@ -1098,6 +1099,7 @@ export const PlayerPage: React.FC = () => {
     [
       currentServer,
       item,
+      mediaSource?.Id,
       playSessionId,
       availableMediaSources,
       currentTime,

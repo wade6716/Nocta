@@ -11,7 +11,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex as AsyncMutex;
 
-const DEFAULT_HTTP_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+const DEFAULT_HTTP_USER_AGENT: &str = concat!("Nocta/", env!("CARGO_PKG_VERSION"), " (Desktop; EmbyClient)");
 const SYSTEM_PROXY_CACHE_TTL: Duration = Duration::from_secs(3);
 const BRIDGE_IO_TIMEOUT: Duration = Duration::from_secs(12);
 

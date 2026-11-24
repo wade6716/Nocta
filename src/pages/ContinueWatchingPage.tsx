@@ -91,17 +91,34 @@ function isItemInProgress(item: EmbyItem): boolean {
   return pos > 0 && !item.UserData?.Played;
 }
 
-export const ContinueWatchingPage: React.FC = () => {
+export const ContinueWatchingPage: React.FC<{ isActive?: boolean }> = ({
+  isActive = true,
+}) => {
   const navigate = useNavigate();
   const servers = useAuthStore((s) => s.servers);
   const currentServer = useAuthStore((s) => s.getCurrentServer());
   const setCurrentServer = useAuthStore((s) => s.setCurrentServer);
   const clearMediaCache = useMediaStore((s) => s.clearMediaCache);
+  const continueWatchingCache = useMediaStore((s) => s.continueWatchingCache);
+  const setContinueWatchingCache = useMediaStore((s) => s.setContinueWatchingCache);
+  const playbackDirtyRevision = useMediaStore((s) => s.playbackDirtyRevision);
   const setPlaybackContext = usePlayerStore((s) => s.setPlaybackContext);
 
-  const [items, setItems] = useState<EmbyItem[]>([]);
-  const [stats, setStats] = useState<FederatedHistoryServerStat[]>([]);
-  const [loading, setLoading] = useState(true);
+  const serverKey = useMemo(
+    () => servers.map((s) => `${s.id}:${s.url}:${s.userId}`).join('|'),
+    [servers]
+  );
+
+  const hasValidInitialCache =
+    continueWatchingCache !== null && continueWatchingCache.serverKey === serverKey;
+
+  const [items, setItems] = useState<EmbyItem[]>(() =>
+    hasValidInitialCache ? continueWatchingCache.items : []
+  );
+  const [stats, setStats] = useState<FederatedHistoryServerStat[]>(() =>
+    hasValidInitialCache ? continueWatchingCache.stats : []
+  );
+  const [loading, setLoading] = useState(() => !hasValidInitialCache && servers.length > 0);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedServerId, setSelectedServerId] = useState<string>('ALL');
   const [statusFilter, setStatusFilter] = useState<HistoryStatusFilter>('all');
@@ -109,12 +126,18 @@ export const ContinueWatchingPage: React.FC = () => {
   const [playingItemKey, setPlayingItemKey] = useState<string | null>(null);
 
   const reqIdRef = useRef(0);
+  const itemsCountRef = useRef(items.length);
+  itemsCountRef.current = items.length;
+  const lastSyncedServerKeyRef = useRef<string | null>(
+    hasValidInitialCache ? serverKey : null
+  );
+  const lastHandledDirtyRef = useRef(playbackDirtyRevision);
 
   useEffect(() => {
-    if (servers.length === 0) {
+    if (isActive && servers.length === 0) {
       navigate('/login');
     }
-  }, [servers.length, navigate]);
+  }, [isActive, servers.length, navigate]);
 
   const fetchHistory = useCallback(
     async (isManual = false) => {
@@ -122,11 +145,12 @@ export const ContinueWatchingPage: React.FC = () => {
         setItems([]);
         setStats([]);
         setLoading(false);
+        setRefreshing(false);
         return;
       }
 
       const reqId = ++reqIdRef.current;
-      if (isManual) {
+      if (isManual || itemsCountRef.current > 0) {
         setRefreshing(true);
       } else {
         setLoading(true);
@@ -144,6 +168,12 @@ export const ContinueWatchingPage: React.FC = () => {
         if (reqId !== reqIdRef.current) return;
         setItems(res.items);
         setStats(res.stats);
+        setContinueWatchingCache({
+          serverKey,
+          items: res.items,
+          stats: res.stats,
+          fetchedAt: Date.now(),
+        });
       } catch (err) {
         if (reqId !== reqIdRef.current) return;
         console.error('[ContinueWatchingPage] 获取多服播放记录失败:', err);
@@ -154,12 +184,20 @@ export const ContinueWatchingPage: React.FC = () => {
         }
       }
     },
-    [servers]
+    [servers, serverKey, setContinueWatchingCache]
   );
 
   useEffect(() => {
+    if (!isActive || servers.length === 0) return;
+
+    const serverChanged = lastSyncedServerKeyRef.current !== serverKey;
+    const dirtyChanged = lastHandledDirtyRef.current !== playbackDirtyRevision;
+    if (!serverChanged && !dirtyChanged) return;
+
+    lastSyncedServerKeyRef.current = serverKey;
+    lastHandledDirtyRef.current = playbackDirtyRevision;
     fetchHistory(false);
-  }, [fetchHistory]);
+  }, [isActive, servers.length, serverKey, playbackDirtyRevision, fetchHistory]);
 
   const syncServerIfNeeded = (item: EmbyItem): SavedServer | null => {
     if (item.ServerId && item.ServerId !== currentServer?.id) {

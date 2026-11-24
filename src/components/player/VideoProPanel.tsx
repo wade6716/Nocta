@@ -99,7 +99,7 @@ export const VideoProPanel: React.FC<VideoProPanelProps> = ({
   if (!isOpen) return null;
 
   const currentLayout = (layoutKey && videoLayouts[layoutKey]) || {
-    bottomAlign: false,
+    bottomAlign: playerPreferences.defaultBottomAlign,
     verticalOffset: 100,
   };
   const isMpv = engineType === 'mpv';

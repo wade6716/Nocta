@@ -22,7 +22,7 @@ const PROXY_READ_SLICE_BYTES: usize = 64 * 1024; // 64 KiB 回环切片读取粒
 const MAX_STREAM_REDIRECTS: usize = 6;
 const REDIRECT_CACHE_TTL: Duration = Duration::from_secs(90);
 const KEEP_ALIVE_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
-const DEFAULT_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+const DEFAULT_USER_AGENT: &str = concat!("Nocta/", env!("CARGO_PKG_VERSION"), " (Desktop; EmbyClient)");
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]

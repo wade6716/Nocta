@@ -17,6 +17,7 @@ import {
   formatFileSize,
   getItemFileSize,
 } from '../../api/embyClient';
+import { formatMediaSourceMeta } from '../../player/playbackSessionService';
 
 interface EpisodeDrawerProps {
   isOpen: boolean;
@@ -120,13 +121,7 @@ export const EpisodeDrawer: React.FC<EpisodeDrawerProps> = ({
               <div className="space-y-1.5">
                 {availableMediaSources.map((ms) => {
                   const isActive = ms.Id === activeMediaSourceId;
-                  const vStream = ms.MediaStreams?.find((s) => s.Type === 'Video');
-                  const resLabel =
-                    vStream?.Width && vStream?.Height
-                      ? vStream.Width >= 3800
-                        ? '4K'
-                        : `${vStream.Height}p`
-                      : '';
+                  const meta = formatMediaSourceMeta(ms);
                   return (
                     <button
                       key={ms.Id}
@@ -138,11 +133,14 @@ export const EpisodeDrawer: React.FC<EpisodeDrawerProps> = ({
                       }`}
                     >
                       <div className="min-w-0 flex-1">
-                        <div className="font-medium truncate">{ms.Name || '默认版本'}</div>
-                        <div className="text-[11px] text-slate-400 font-mono flex items-center space-x-2 mt-0.5">
-                          <span>{(ms.Container || 'MKV').toUpperCase()}</span>
-                          {resLabel && <span>{resLabel}</span>}
-                          {formatFileSize(ms.Size) && <span>{formatFileSize(ms.Size)}</span>}
+                        <div className="font-medium truncate">
+                          {ms.Name || meta.resolutionLabel || '默认版本'}
+                        </div>
+                        <div className="text-[11px] text-slate-400 font-mono flex items-center flex-wrap gap-x-2 gap-y-0.5 mt-0.5">
+                          <span>{meta.containerLabel}</span>
+                          {meta.resolutionLabel && <span>{meta.resolutionLabel}</span>}
+                          {meta.hdrLabel && <span className="text-sky-300">{meta.hdrLabel}</span>}
+                          {meta.sizeLabel && <span>{meta.sizeLabel}</span>}
                         </div>
                       </div>
                       {isActive && (

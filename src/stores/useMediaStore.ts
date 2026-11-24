@@ -1,5 +1,12 @@
 import { create } from 'zustand';
-import { EmbyItem, ViewCounts } from '../api/embyClient';
+import { EmbyItem, FederatedHistoryServerStat, ViewCounts } from '../api/embyClient';
+
+export interface ContinueWatchingCacheData {
+  serverKey: string;
+  items: EmbyItem[];
+  stats: FederatedHistoryServerStat[];
+  fetchedAt: number;
+}
 
 interface MediaStoreState {
   serverId: string | null;
@@ -9,6 +16,9 @@ interface MediaStoreState {
   views: EmbyItem[];
   latestMap: Record<string, EmbyItem[]>;
   viewCounts: Record<string, ViewCounts>;
+  lastViewCountsSyncAt: number;
+  playbackDirtyRevision: number;
+  continueWatchingCache: ContinueWatchingCacheData | null;
   isLoaded: boolean;
   isRefreshing: boolean;
   homeScrollY: number;
@@ -30,6 +40,8 @@ interface MediaStoreState {
   }) => void;
   setViewCounts: (counts: Record<string, ViewCounts>) => void;
   updateViewCount: (viewId: string, count: ViewCounts) => void;
+  setContinueWatchingCache: (cache: ContinueWatchingCacheData | null) => void;
+  markPlaybackDirty: () => void;
   setRefreshing: (isRefreshing: boolean) => void;
   setHomeScrollY: (y: number) => void;
   clearMediaCache: () => void;
@@ -43,29 +55,42 @@ export const useMediaStore = create<MediaStoreState>((set) => ({
   views: [],
   latestMap: {},
   viewCounts: {},
+  lastViewCountsSyncAt: 0,
+  playbackDirtyRevision: 0,
+  continueWatchingCache: null,
   isLoaded: false,
   isRefreshing: false,
   homeScrollY: 0,
   cacheVersion: 0,
 
   setMediaData: ({ serverId, resumeItems, nextUpItems, recentlyPlayedItems, views, latestMap, viewCounts }) =>
-    set((state) => ({
-      serverId,
-      resumeItems,
-      nextUpItems,
-      recentlyPlayedItems,
-      views,
-      latestMap,
-      viewCounts: viewCounts !== undefined ? viewCounts : state.viewCounts,
-      isLoaded: true,
-      isRefreshing: false,
-    })),
+    set((state) => {
+      const serverChanged = state.serverId !== serverId;
+      return {
+        serverId,
+        resumeItems,
+        nextUpItems,
+        recentlyPlayedItems,
+        views,
+        latestMap,
+        viewCounts:
+          viewCounts !== undefined ? viewCounts : serverChanged ? {} : state.viewCounts,
+        lastViewCountsSyncAt:
+          viewCounts !== undefined
+            ? Date.now()
+            : serverChanged
+            ? 0
+            : state.lastViewCountsSyncAt,
+        isLoaded: true,
+        isRefreshing: false,
+      };
+    }),
 
   updateResumeAndRecent: ({ resumeItems, nextUpItems, recentlyPlayedItems }) =>
     set({ resumeItems, nextUpItems, recentlyPlayedItems }),
 
   setViewCounts: (viewCounts) =>
-    set({ viewCounts }),
+    set({ viewCounts, lastViewCountsSyncAt: Date.now() }),
 
   updateViewCount: (viewId, count) =>
     set((state) => ({
@@ -73,6 +98,14 @@ export const useMediaStore = create<MediaStoreState>((set) => ({
         ...state.viewCounts,
         [viewId]: count,
       },
+    })),
+
+  setContinueWatchingCache: (continueWatchingCache) =>
+    set({ continueWatchingCache }),
+
+  markPlaybackDirty: () =>
+    set((state) => ({
+      playbackDirtyRevision: state.playbackDirtyRevision + 1,
     })),
 
   setRefreshing: (isRefreshing) =>
@@ -90,6 +123,7 @@ export const useMediaStore = create<MediaStoreState>((set) => ({
       views: [],
       latestMap: {},
       viewCounts: {},
+      lastViewCountsSyncAt: 0,
       isLoaded: false,
       isRefreshing: false,
       homeScrollY: 0,

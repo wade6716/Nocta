@@ -20,7 +20,7 @@ interface MediaCardProps {
   episodeBadge?: string;
 }
 
-export const MediaCard: React.FC<MediaCardProps> = ({
+const MediaCardComponent: React.FC<MediaCardProps> = ({
   item,
   serverUrl = '',
   onClick,
@@ -191,5 +191,6 @@ export const MediaCard: React.FC<MediaCardProps> = ({
   );
 };
 
+export const MediaCard = React.memo(MediaCardComponent);
 export default MediaCard;
 

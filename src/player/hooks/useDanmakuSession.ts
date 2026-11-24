@@ -1,16 +1,41 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { EmbyItem, ticksToSeconds } from '../../api/embyClient';
 import {
-  autoMatchEpisode,
+  autoSearchAndMatchEpisode,
   computeDanmakuHeatmap,
+  DanmuEpisode,
   fetchCommentsById,
   parseDanmuEpisodeInfo,
   RawDanmuComment,
   transformToDanmakuItems,
 } from '../../api/danmuClient';
 import { MpvDanmakuBridge } from '../../components/player/MpvDanmakuBridge';
-import { DanmuServerEntry } from '../../stores/useDanmuStore';
+import { DanmuServerEntry, useDanmuStore } from '../../stores/useDanmuStore';
 import { usePlayerStore } from '../../stores/usePlayerStore';
+
+function resolveBindingServer(
+  binding: { danmuServerId?: string; danmuServerBaseUrl?: string },
+  fallback: DanmuServerEntry
+): DanmuServerEntry {
+  const servers = useDanmuStore.getState().servers;
+  if (binding.danmuServerId) {
+    const byId = servers.find((s) => s.id === binding.danmuServerId);
+    if (byId) return byId;
+  }
+  if (binding.danmuServerBaseUrl) {
+    const normalized = binding.danmuServerBaseUrl.trim().replace(/\/+$/, '').toLowerCase();
+    const byUrl = servers.find(
+      (s) => s.baseUrl.trim().replace(/\/+$/, '').toLowerCase() === normalized
+    );
+    if (byUrl) return byUrl;
+    return {
+      id: binding.danmuServerId || 'bound-node',
+      name: '绑定节点',
+      baseUrl: binding.danmuServerBaseUrl,
+    };
+  }
+  return fallback;
+}
 
 interface UseDanmakuSessionParams {
   item: EmbyItem | null;
@@ -45,8 +70,21 @@ export function useDanmakuSession({
   const danmakuReqIdRef = useRef(0);
   const activeItemIdRef = useRef<string | undefined>(item?.Id);
   const danmuToastTimerRef = useRef<number | null>(null);
+  const loadedKeyRef = useRef<string | null>(null);
+  const autoSeriesCacheRef = useRef<
+    Record<
+      string,
+      {
+        animeId?: number | string;
+        animeTitle: string;
+        episodes: DanmuEpisode[];
+        serverKey: string;
+      }
+    >
+  >({});
 
   activeItemIdRef.current = item?.Id;
+  const serverKey = `${activeDanmuServer.id}::${activeDanmuServer.baseUrl}`;
 
   const showToast = useCallback((msg: string) => {
     setDanmuToast(msg);
@@ -124,6 +162,7 @@ export function useDanmakuSession({
   // 切换条目时立即清空上一条目的弹幕与偏差提示，防止旧集弹幕短暂残留或错位
   useEffect(() => {
     danmakuReqIdRef.current += 1;
+    loadedKeyRef.current = null;
     setRawComments([]);
     setMatchedTitle('');
     setSourceDuration(undefined);
@@ -133,6 +172,10 @@ export function useDanmakuSession({
   const triggerDanmakuLoad = useCallback(
     async (forceAuto = false) => {
       if (!item) return;
+      if (!forceAuto && !danmakuSettings.visible) return;
+
+      const loadKey = `${item.Id}::${serverKey}`;
+      loadedKeyRef.current = loadKey;
 
       const reqId = ++danmakuReqIdRef.current;
       const targetItemId = item.Id;
@@ -156,7 +199,8 @@ export function useDanmakuSession({
         setMatchedTitle(`《${currentBinding.animeTitle}》${currentBinding.episodeTitle}`);
         setSourceDuration(currentBinding.sourceDuration);
         try {
-          const res = await fetchCommentsById(activeDanmuServer, currentBinding.episodeId);
+          const boundServer = resolveBindingServer(currentBinding, activeDanmuServer);
+          const res = await fetchCommentsById(boundServer, currentBinding.episodeId);
           if (isStale()) return;
           setRawComments(res.comments || []);
           if (res.videoDuration) setSourceDuration(res.videoDuration);
@@ -184,7 +228,8 @@ export function useDanmakuSession({
 
         if (matchedEp) {
           try {
-            const res = await fetchCommentsById(activeDanmuServer, matchedEp.episodeId);
+            const boundSeriesServer = resolveBindingServer(seriesBinding, activeDanmuServer);
+            const res = await fetchCommentsById(boundSeriesServer, matchedEp.episodeId);
             if (isStale()) return;
             setMatchedTitle(`《${seriesBinding.animeTitle}》${matchedEp.episodeTitle}`);
             setSourceDuration(res.videoDuration);
@@ -203,14 +248,57 @@ export function useDanmakuSession({
         }
       }
 
-      // 智能自动匹配
+      // 会话内自动搜索同剧缓存延续（不污染持久化绑定，续集切集免重复搜索）
+      const cachedSeries =
+        !forceAuto && item.SeriesId ? autoSeriesCacheRef.current[item.SeriesId] : undefined;
+      if (
+        cachedSeries &&
+        cachedSeries.serverKey === serverKey &&
+        cachedSeries.episodes.length > 0 &&
+        item.IndexNumber !== undefined
+      ) {
+        const epNum = item.IndexNumber;
+        const matchedEp =
+          cachedSeries.episodes.find((ep, idx) => {
+            const parsed = parseDanmuEpisodeInfo(ep, idx);
+            return parsed.episodeNumber === epNum;
+          }) || cachedSeries.episodes[epNum - 1];
+
+        if (matchedEp) {
+          try {
+            const res = await fetchCommentsById(activeDanmuServer, matchedEp.episodeId);
+            if (isStale()) return;
+            setMatchedTitle(`《${cachedSeries.animeTitle}》${matchedEp.episodeTitle}`);
+            setSourceDuration(res.videoDuration);
+            setRawComments(res.comments || []);
+            if (res.comments && res.comments.length > 0) {
+              showToast(
+                `自动延续弹幕: 《${cachedSeries.animeTitle}》${matchedEp.episodeTitle} (${res.comments.length}条)`
+              );
+            }
+            updateDurationAlert(res.videoDuration);
+            return;
+          } catch (err) {
+            if (isStale()) return;
+            console.warn('会话内自动延续弹幕失败，回退两阶段自动搜索', err);
+          }
+        }
+      }
+
+      // 两阶段智能自动匹配（POST /api/v2/match -> 关键词搜索与分集筛选回退）
       try {
-        const match = await autoMatchEpisode(activeDanmuServer, {
-          seriesName: item.SeriesName,
-          seasonNumber: item.ParentIndexNumber,
-          episodeNumber: item.IndexNumber,
-          fileName: item.Name,
-        });
+        const match = await autoSearchAndMatchEpisode(
+          activeDanmuServer,
+          {
+            seriesName: item.SeriesName,
+            seasonNumber: item.ParentIndexNumber,
+            episodeNumber: item.IndexNumber,
+            fileName: item.Name,
+            itemType: item.Type,
+            productionYear: item.ProductionYear,
+          },
+          { isCancelled: isStale }
+        );
         if (isStale()) return;
 
         if (!match) {
@@ -219,8 +307,20 @@ export function useDanmakuSession({
           return;
         }
 
+        if (match.episodes?.length && item.SeriesId) {
+          autoSeriesCacheRef.current[item.SeriesId] = {
+            animeId: match.animeId,
+            animeTitle: match.animeTitle || item.SeriesName || '',
+            episodes: match.episodes,
+            serverKey,
+          };
+        }
+
         const titleText =
-          `${match.animeTitle || ''} ${match.episodeTitle || ''}`.trim() || `ID: ${match.episodeId}`;
+          match.animeTitle && match.episodeTitle
+            ? `《${match.animeTitle}》${match.episodeTitle}`
+            : `${match.animeTitle || ''} ${match.episodeTitle || ''}`.trim() ||
+              `ID: ${match.episodeId}`;
         setMatchedTitle(titleText);
 
         const res = await fetchCommentsById(activeDanmuServer, match.episodeId);
@@ -230,13 +330,20 @@ export function useDanmakuSession({
         setSourceDuration(res.videoDuration);
 
         if (res.comments && res.comments.length > 0) {
-          showToast(
-            `已自动匹配弹幕: ${match.animeTitle ? `《${match.animeTitle}》` : ''} (${res.comments.length}条)`
-          );
+          if (match.matchedBy === 'keyword_search') {
+            showToast(
+              `已自动搜索并匹配弹幕: 《${match.animeTitle}》${match.episodeTitle || ''} (${res.comments.length}条)`
+            );
+          } else {
+            showToast(
+              `已自动匹配弹幕: ${match.animeTitle ? `《${match.animeTitle}》` : ''} (${res.comments.length}条)`
+            );
+          }
         }
         updateDurationAlert(res.videoDuration);
       } catch (err) {
         if (!isStale()) {
+          loadedKeyRef.current = null;
           console.warn('弹幕自动匹配失败', err);
         }
       }
@@ -248,18 +355,32 @@ export function useDanmakuSession({
       item?.ParentIndexNumber,
       item?.IndexNumber,
       item?.Name,
+      item?.Type,
+      item?.ProductionYear,
       item?.RunTimeTicks,
       itemId,
+      danmakuSettings.visible,
       danmakuBindings,
       seriesDanmakuBindings,
       activeDanmuServer,
+      serverKey,
       showToast,
     ]
   );
 
   useEffect(() => {
-    triggerDanmakuLoad();
-  }, [triggerDanmakuLoad]);
+    if (!item || !danmakuSettings.visible) return;
+    const loadKey = `${item.Id}::${serverKey}`;
+    if (loadedKeyRef.current === loadKey) return;
+    triggerDanmakuLoad(false);
+  }, [
+    item?.Id,
+    danmakuSettings.visible,
+    activeDanmuServer.id,
+    activeDanmuServer.baseUrl,
+    serverKey,
+    triggerDanmakuLoad,
+  ]);
 
   const handleCommentsLoaded = useCallback(
     (
@@ -269,6 +390,7 @@ export function useDanmakuSession({
     ) => {
       // 使之前仍在飞行中的自动匹配请求失效，避免覆盖手动选择的弹幕源
       danmakuReqIdRef.current += 1;
+      loadedKeyRef.current = item ? `${item.Id}::${serverKey}` : null;
       setRawComments(newComments);
       if (sDur) setSourceDuration(sDur);
       if (meta) {
@@ -287,7 +409,7 @@ export function useDanmakuSession({
         }
       }
     },
-    [item?.RunTimeTicks, showToast]
+    [item?.Id, item?.RunTimeTicks, serverKey, showToast]
   );
 
   return {

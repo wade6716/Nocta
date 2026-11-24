@@ -48,8 +48,8 @@
 
 ### 1. 跨媒体库深度聚合检索穿透
 - **服务端全局排除避坑**：Emby / Jellyfin 许多特定库（如动漫、纪录片、4K、短片等）管理员常勾选「从全局搜索中排除」，直接调用无 `ParentId` 的全局搜索接口会导致漏检。
-- **穿透方案**：必须先获取用户可用视图 `getUserViews`（**注意**：其返回结构为 `{ Items: EmbyItem[]; TotalRecordCount: number }`，必须取 `.Items` 并排除 `music`/`photos`），然后并发对每个媒体库带上 `ParentId=${view.Id}` 发起深度检索，与全局检索及 `/emby/Search/Hints` 进行聚合去重。
-- **类型过滤**：`IncludeItemTypes` 必须包含 `Movie,Series,Episode,Video,BoxSet`，再由前端通过 `isVideoMedia` 与 `mergeMediaBySeries` 统一过滤合并。
+- **穿透方案**：必须先获取用户可用视图 `getUserViews`（**注意**：其返回结构为 `{ Items: EmbyItem[]; TotalRecordCount: number }`，必须取 `.Items` 并排除 `music`/`photos`；搜索链路通过 `getCachedSearchViews` 维持 5 分钟 TTL 缓存并在 [`SearchPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/SearchPage.tsx) 挂载时预热），然后并发对每个媒体库带上 `ParentId=${view.Id}`（限 `perViewLimit <= 30`、剔除 `Overview` 字段减负）发起深度检索，与全局检索及 `/emby/Search/Hints` 统一转字符串 `Id` / `SeriesId` 并补全分集字段后聚合去重。
+- **类型过滤与主体优先去重**：`IncludeItemTypes` 必须包含 `Movie,Series,Episode,Video,BoxSet`；搜索结果调用 `mergeMediaBySeries(items, { preferSeries: true })`，优先保留 `Series` 剧集主体卡片并同时按 `String(SeriesId)` 与规范化 `SeriesName` 双键过滤，避免同服同剧因 `/Search/Hints` 缺 `SeriesId` 或类型混杂导致单剧多集重复刷屏（而续播/历史场景保留默认 `preferSeries: false` 以维持最新观看单集排序）。
 - **所属库回填**：必须为搜索结果条目注入 `LibraryName` / `LibraryId`，以便在卡片上明确提示来源媒体库。
 
 ### 2. 原生播放器双层穿透视窗 (Window Layering)
@@ -79,9 +79,9 @@
   - 弹幕屏蔽词：数组去重求并集。
 
 ### 5. 跨多个 Emby 服务器联合聚合搜索 (Federated Multi-Server Search)
-- **多服并发联合检索与容错机制**：
-  - 调用 `searchFederatedMediaItems(targets, params)`，利用 `Promise.allSettled` 并发检索全部已配置的 Emby 服务器（各服务器内部依然自动穿透全部分类库）；
-  - 任何单台服务器超时、凭据失效或离线时，通过独立的 try-catch 容错捕获并记录在 `stats` 中，绝不能让单台故障抛出异常阻断其他健康服务器的搜索结果呈现；
+- **多服并行渐进流式检索与容错机制**：
+  - 调用 `searchFederatedMediaItems(targets, params)`，并行检索全部已配置的 Emby 服务器（各服务器内部依然自动穿透全部分类库），为每台服务器设置 `timeoutMs`（默认 `12000ms`）独立超时保护（`finally` 清理定时器）与 `onServerResult` 单服即时回调——快服无需等待慢服/离线服，结果即时经 `sortFederatedSearchItems` 排序上屏（精确匹配→前缀匹配→剧集/电影主体优先→年份降序）；
+  - 前端 [`SearchPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/SearchPage.tsx) 必须维护 `searchReqIdRef` 竞态锁拦截过期搜索回调，并用「搜索中...」微动效区分仍在并行响应的服务器，绝不让单台慢服/故障阻断其他健康服务器的即时展示；
 - **条目来源标定与多服海报寻址**：
   - 搜索结果条目必须注入所在服务器信息：`ServerId`、`ServerName`、`ServerUrl`；
   - `MediaCard` 海报封面寻址必须优先使用 `effectiveServerUrl = item.ServerUrl || serverUrl`，防止向非当前主服务器请求图片导致 401/404；
@@ -430,3 +430,46 @@
      - **macOS**：通过 [`audio_route_macos.m`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/audio_route_macos.m)（[`build.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/build.rs) 链接 `CoreAudio` 与 `CoreFoundation`）监听 `kAudioHardwarePropertyDefaultOutputDevice`、蓝牙传输类型与 3.5mm 插孔 `kAudioDevicePropertyDataSource`（`'hdpn'`→`'ispk'`）。
      - **Linux / 浏览器兜底**：前端监听 `navigator.mediaDevices` `devicechange` 在 `audiooutput` 设备数减少时触发暂停。
   - **智能路由判定 (`should_pause_on_audio_route_change`)**：原输出设备移除/断开或从耳机切回扬声器时触发自动暂停；外放期间新接入蓝牙耳机（扬声器→耳机）不误暂停；用户可通过 `PlayerPreferences.pauseOnHeadphoneDisconnect`（默认开启，设置页与备份同步全覆盖）自由开关。
+
+### 31. 新剧两阶段自动搜索匹配弹幕与按需触发规范 (`danmuClient.ts` / `useDanmakuSession.ts`)
+- **开启弹幕门控与懒加载机制 ([`useDanmakuSession.ts`](file:///d:/wade/code/emby-tauri-player/src/player/hooks/useDanmakuSession.ts))**：
+  - 自动匹配与弹幕拉取仅在 `danmakuSettings.visible === true` 时触发；若起播时弹幕处于关闭状态，零弹幕网络请求，待用户打开弹幕开关时立即自动触发搜索加载（并通过 `loadedKeyRef` 按 `${item.Id}::${serverKey}` 防重，已加载条目反复开关不重复请求；`triggerDanmakuLoad(true)` 仍支持手动重匹配/解绑穿透）。
+- **四级匹配链路与两阶段自动搜索 ([`danmuClient.ts`](file:///d:/wade/code/emby-tauri-player/src/api/danmuClient.ts))**：
+  1. 单集手动绑定（`danmakuBindings[itemId]`）→ 同剧持久化延续绑定（`seriesDanmakuBindings[SeriesId]`）→ 会话内同剧缓存延续（`autoSeriesCacheRef`，不写入持久化/云同步以免自动猜测污染用户绑定）。
+  2. **`autoSearchAndMatchEpisode` 两阶段回退匹配**：优先调用 `POST /api/v2/match`（`autoMatchEpisode`）；若未命中，**绝不向关键词附加 `@preferredPlatform`**，依次使用原始剧名/文件名及 `cleanDanmuSearchKeyword`（剔除 `(2024)` 年份、季集号后缀）调用 `GET /api/v2/search/anime`，经 `scoreAnimeCandidate`（标题精确/前缀/包含、阿拉伯及中文季数匹配、年份、影/剧类型、首选平台）排序后取前 3 候选，拉取 `GET /api/v2/bangumi/:animeId` 并由 `pickMatchingEpisode` 精准选集并回填会话缓存。
+
+### 32. Emby 多版本片源清晰度自动择优与播放前后切源规范 (`playbackSessionService.ts`)
+- **最高清晰度自动择优排序 ([`playbackSessionService.ts`](file:///d:/wade/code/emby-tauri-player/src/player/playbackSessionService.ts))**：
+  - 所有起播入口统一通过 `fetchAndPreparePlaybackSession` 装配会话；内部禁止直取服务端原生 `pbInfo.MediaSources[0]`，必须先经 `sortMediaSourcesByQuality` 按 `resolutionTier`（含 4K 宽屏 `Width >= 3600` 判定与 `.strm` 文件名关键词兜底解析）→ `pixelArea` → `dynamicRangeRank`（Dolby Vision / HDR / 10-bit）→ `bitrate` → `size` 降序排列，并默认选取第 1 项（同时支持可选 `preferredMediaSourceId` 精确指定版本）。
+- **播放前后多版本切换联动**：
+  - 详情页（[`DetailPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/DetailPage.tsx)）对多版本电影/单集展示起播前版本选择器（默认高亮标注「最高画质」）；播放中通过 [`PlayerOsd.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/PlayerOsd.tsx) 底栏「版本」菜单与 [`EpisodeDrawer.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/EpisodeDrawer.tsx)「原画片源版本」列表经 `formatMediaSourceMeta` 统一展示分辨率/HDR/封装/体积并调用 `switchMediaSource`（内置同 `Id` 防重守卫）保留进度原画热切。
+
+### 33. 一级导航页 Keep-Alive 驻留与按需后台静默刷新规范 (`App.tsx` / `useMediaStore.ts`)
+- **一级页面 Keep-Alive 零重建切换 ([`App.tsx`](file:///d:/wade/code/emby-tauri-player/src/App.tsx))**：
+  - 「首页发现」（`/`）、「继续观看」（`/continue-watching`）与「聚合搜索」（`/search`）通过懒挂载 `KeepAliveTabPane`（独立滚动容器 `#home-scroll-container`、`#continue-scroll-container`、`#search-scroll-container` + `useLayoutEffect` 瞬时恢复滚动偏移）保持 DOM 与海报纹理常驻，切换 Tab 零卸载、零白屏、零图片重解码、零重复请求，完整保留搜索词与筛选状态；退出登录或 `servers.length === 0` 时清空 `visitedTabs` 避免隐藏态拦截跳转；进入 `/player` 时 `<main>` 严格保持 `bg-transparent`，绝不遮挡底层 `libmpv`。
+  - 处于隐藏态的保活页严禁触发全局快捷键劫持（如 [`HomePage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/HomePage.tsx) `/` 搜索热键）或 `inputRef.current.focus()` 抢焦点（如 [`SearchPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/SearchPage.tsx)），须以 `isActive` 门控。
+- **播放进度脏标记按需刷新与批量计数渲染 ([`useMediaStore.ts`](file:///d:/wade/code/emby-tauri-player/src/stores/useMediaStore.ts))**：
+  - 仅当路由从 `/player/*` 离开时由 [`App.tsx`](file:///d:/wade/code/emby-tauri-player/src/App.tsx) 调用 `markPlaybackDirty()` 递增 `playbackDirtyRevision`，[`HomePage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/HomePage.tsx) 与 [`ContinueWatchingPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/ContinueWatchingPage.tsx)（配合 `continueWatchingCache` 持久多服断点列表）仅在自身激活且检测到 `playbackDirtyRevision` 递增或服务器变更时静默后台同步（`items.length > 0` 时禁止回退骨架屏闪烁）。
+  - 首页媒体库条目统计 `fetchCountsForViews` 使用 `Promise.allSettled` 一次性 `setViewCounts` 批量提交（消除逐库多次整页重排）并受 `lastViewCountsSyncAt` 5 分钟 TTL 节流，搭配 `React.memo(MediaCard)` 消除冗余渲染。
+
+### 34. 剧集详情页分集分页、正倒序排列与自动定位当前集规范 (`EpisodeGrid.tsx` / `DetailPage.tsx`)
+- **百集大剧分页与正倒序切换 ([`EpisodeGrid.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/media/EpisodeGrid.tsx))**：
+  - 采用每页 `EPISODES_PER_PAGE = 24`（整除 1/2/3/4 响应式网格列数），生成基于 `IndexNumber`（缺失时按序数兜底）的区间分页胶囊（如 `1-24`、`25-48`，倒序时为 `240-217`），搭配顶部/底部翻页与「正序 / 倒序」切换；切换正倒序主动回到第 0 页，不得被自动定位覆盖。
+- **自动识别与定位当前播放进度所在页 ([`DetailPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/DetailPage.tsx))**：
+  - `DetailPage` 传入 `currentEpisodeId` 时，除单集入口外同时兼容 `cachedPlayerItem?.Type === 'Episode' && cachedPlayerItem.SeriesId === item.Id` 刚播放返回剧集页的场景；
+  - `resolveActiveEpisode` 按「显式 `currentEpisodeId` → 最近断点未完播分集（按 `LastPlayedDate` 取最新）→ 最后已看集下一集（或最后一集）」优先级确定目标集，加载分集或切季时经 `lastAutoLocatedKeyRef` 自动一次跳转至目标集所在页，同时提供「定位当前集」快捷按钮与区间圆点标识。
+
+### 35. 客户端专属默认 User-Agent 标识与服务器管理密码查看/测速规范
+- **全端统一专属默认 UA (`Nocta/${APP_VERSION} (Desktop; EmbyClient)`)**：
+  - 前端 [`embyClient.ts`](file:///d:/wade/code/emby-tauri-player/src/api/embyClient.ts) 将 `DEFAULT_EMBY_USER_AGENT` 设为 ``Nocta/${APP_VERSION} (Desktop; EmbyClient)``（`resolveEmbyClientName` 默认返回 `Nocta`，同时在 `EMBY_USER_AGENT_PRESETS` 保留「默认 (Nocta)」与「Chrome 浏览器」/ Emby / Infuse / VidHub / SenPlayer / Yamby 预设）；
+  - Rust [`preload.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/preload.rs) 与 [`proxy.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/proxy.rs) 使用 `concat!("Nocta/", env!("CARGO_PKG_VERSION"), " (Desktop; EmbyClient)")` 与前端严格对齐，确保 Emby API、流中转、预加载与图片代理默认标识一致。
+- **服务器管理密码可视化与延迟/通断探测 ([`SettingsPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/SettingsPage.tsx) / [`useAuthStore.ts`](file:///d:/wade/code/emby-tauri-player/src/stores/useAuthStore.ts))**：
+  - `SavedServer` 新增 `lastLatencyMs` 记录最近延迟（[`EmbyServerModal.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/settings/EmbyServerModal.tsx) 与设置页同步写入展示）；
+  - 设置页 Emby 服务器列表与新增/编辑表单均支持 `type="button"` 密码明暗切换按钮（列表对未记住密码明确标注「密码: 未保存」），并提供单服测速按钮、顶部「全部测速」并行探测按钮、表单内「测试连接」按钮及分色延迟微标（`<150ms` 绿 / `<400ms` 蓝 / `>=400ms` 琥珀 / `离线`）。
+
+### 36. 全局默认贴底策略与多弹幕节点并发手动搜索规范
+- **宽银幕画面沉浸贴底全局默认开关 (`PlayerPreferences.defaultBottomAlign`)**：
+  - [`usePlayerStore.ts`](file:///d:/wade/code/emby-tauri-player/src/stores/usePlayerStore.ts) 在 `PlayerPreferences` 中新增 `defaultBottomAlign`（默认 `false`，设置页播放设置「宽银幕画面沉浸贴底」提供交互开关）；[`PlayerPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/PlayerPage.tsx)、[`VideoProPanel.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/VideoProPanel.tsx)、[`OsdOverlayPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/OsdOverlayPage.tsx) 与 `setVideoLayout` 初始化均以 `playerPreferences.defaultBottomAlign` 作为未单独覆写剧集/电影的默认回退值，且单剧/单影独立记忆仍优先覆盖全局默认。
+- **多弹幕 API 节点并发搜番与归属节点直连延续 ([`DanmakuDrawer.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/DanmakuDrawer.tsx) / [`useDanmakuSession.ts`](file:///d:/wade/code/emby-tauri-player/src/player/hooks/useDanmakuSession.ts))**：
+  - 配置多个弹幕节点时，手动搜番默认开启「全部节点并发」（可随时一键切回仅当前节点），对各节点并发调用 `searchDanmuAnime`（10s 独立超时 + `searchReqIdRef` 竞态防过期）并流式汇入按 `${server.id}::${animeId}` 隔离的候选列表，支持按节点胶囊实时状态展示与一键筛选；
+  - 拉取分集、拉取弹幕及写入 `DanmakuBinding` / `SeriesDanmakuBinding`（扩展可选 `danmuServerId`、`danmuServerBaseUrl`）时严格路由回番剧所属的源节点 `_server`；后续播放或同剧自动延续由 `resolveBindingServer` 优先按归属节点拉取，即使主切换至其他默认节点也不失效。

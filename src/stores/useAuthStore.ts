@@ -26,12 +26,14 @@ export interface SavedServer {
   accessToken: string;
   /** 明文记住的登录密码（仅保存在本机 localStorage，用于查看与自动重新登录） */
   password?: string;
-  /** 自定义 User-Agent（可选，留空使用默认浏览器 UA） */
+  /** 自定义 User-Agent（可选，留空使用 Nocta 默认客户端 UA） */
   userAgent?: string;
   /** 服务器代理配置（若未设置则跟随全局代理） */
   proxyConfig?: ProxyConfig;
   /** 最近一次连接测试是否通过；undefined 表示尚未验证过 */
   lastTestOk?: boolean;
+  /** 最近一次连接测试的延迟（ms） */
+  lastLatencyMs?: number;
   /** 最近一次连接测试的失败原因 */
   lastTestError?: string;
   /** 最近一次连接测试的时间戳（ms） */

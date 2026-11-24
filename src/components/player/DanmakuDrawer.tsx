@@ -36,8 +36,20 @@ import {
 } from '../../api/danmuClient';
 import { MpvDanmakuBridge } from './MpvDanmakuBridge';
 import { usePlayerStore, DanmakuColorMode } from '../../stores/usePlayerStore';
-import { useDanmuStore } from '../../stores/useDanmuStore';
+import { DanmuServerEntry, useDanmuStore } from '../../stores/useDanmuStore';
 import { DanmuServerModal } from '../danmu/DanmuServerModal';
+
+interface DanmuSearchResultWithServer extends DanmuAnimeSearchResult {
+  _server: DanmuServerEntry;
+}
+
+interface DanmuNodeSearchStat {
+  serverId: string;
+  serverName: string;
+  status: 'searching' | 'ok' | 'error';
+  count: number;
+  error?: string;
+}
 
 interface DanmakuDrawerProps {
   isOpen: boolean;
@@ -96,15 +108,19 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
   const [isServerModalOpen, setIsServerModalOpen] = useState(false);
 
   // Danmu servers store
-  const { getActiveServer } = useDanmuStore();
+  const { servers: danmuServers, getActiveServer } = useDanmuStore();
   const activeServer = getActiveServer();
 
   // Search state
   const defaultKeyword = seriesName || itemTitle.replace(/S\d+E\d+/i, '').trim();
   const [searchKeyword, setSearchKeyword] = useState(defaultKeyword);
   const [searching, setSearching] = useState(false);
-  const [searchResults, setSearchResults] = useState<DanmuAnimeSearchResult[]>([]);
-  const [selectedAnime, setSelectedAnime] = useState<DanmuAnimeSearchResult | null>(null);
+  const [searchAllNodes, setSearchAllNodes] = useState(true);
+  const [searchResults, setSearchResults] = useState<DanmuSearchResultWithServer[]>([]);
+  const [nodeSearchStats, setNodeSearchStats] = useState<DanmuNodeSearchStat[]>([]);
+  const [filterNodeId, setFilterNodeId] = useState<string>('ALL');
+  const [searchError, setSearchError] = useState<string | null>(null);
+  const [selectedAnime, setSelectedAnime] = useState<DanmuSearchResultWithServer | null>(null);
   const [loadingEpisodes, setLoadingEpisodes] = useState(false);
   const [bindingEpisodeId, setBindingEpisodeId] = useState<string | number | null>(null);
   const [episodeFilter, setEpisodeFilter] = useState('');
@@ -118,6 +134,7 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
   const rangeTabsContainerRef = useRef<HTMLDivElement | null>(null);
   const rangeTabRefs = useRef<Record<number, HTMLButtonElement | null>>({});
   const autoScrolledKeyRef = useRef<string | null>(null);
+  const searchReqIdRef = useRef(0);
   const animeLoadReqIdRef = useRef(0);
   const [directUrl, setDirectUrl] = useState('');
   const [loadingUrl, setLoadingUrl] = useState(false);
@@ -395,6 +412,17 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
     return list.slice(0, 200);
   }, [isOpen, activeTab, rawComments, listQuery, nearCurrentOnly, nearTimeBucket]);
 
+  const filteredSearchResults = useMemo(() => {
+    if (filterNodeId === 'ALL') return searchResults;
+    return searchResults.filter((item) => item._server.id === filterNodeId);
+  }, [searchResults, filterNodeId]);
+
+  useEffect(() => {
+    return () => {
+      searchReqIdRef.current += 1;
+    };
+  }, []);
+
   if (!isOpen) return null;
 
   const handleLocateCurrentEpisode = () => {
@@ -409,31 +437,109 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
     setTimeout(() => setBindSuccessToast(null), 3500);
   };
 
-  // Manual search anime
+  // Manual multi-node concurrent search anime
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!searchKeyword.trim()) return;
+    const keyword = searchKeyword.trim();
+    if (!keyword) return;
+
+    const reqId = ++searchReqIdRef.current;
     animeLoadReqIdRef.current += 1;
-    try {
-      setSearching(true);
-      const res = await searchDanmuAnime(activeServer, searchKeyword.trim());
-      setSearchResults(res.animes || []);
-      setSelectedAnime(null);
-      setLoadingEpisodes(false);
-    } catch (err: any) {
-      alert(`搜索失败: ${err.message || '请检查弹幕 API 节点是否连通'}`);
-    } finally {
-      setSearching(false);
+
+    const targetServers =
+      searchAllNodes && danmuServers.length > 1 ? danmuServers : [activeServer];
+
+    setSearching(true);
+    setSearchResults([]);
+    setSelectedAnime(null);
+    setLoadingEpisodes(false);
+    setFilterNodeId('ALL');
+    setSearchError(null);
+    setNodeSearchStats(
+      targetServers.map((srv) => ({
+        serverId: srv.id,
+        serverName: srv.name,
+        status: 'searching',
+        count: 0,
+      }))
+    );
+
+    const tasks = targetServers.map(async (srv) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const res = await Promise.race([
+          searchDanmuAnime(srv, keyword),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error('请求超时')), 10000);
+          }),
+        ]);
+        if (reqId !== searchReqIdRef.current) return { ok: true, count: 0 };
+
+        const tagged: DanmuSearchResultWithServer[] = (res?.animes || []).map((anime) => ({
+          ...anime,
+          _server: srv,
+        }));
+
+        setNodeSearchStats((prev) =>
+          prev.map((st) =>
+            st.serverId === srv.id ? { ...st, status: 'ok', count: tagged.length } : st
+          )
+        );
+
+        if (tagged.length > 0) {
+          setSearchResults((prev) => {
+            const seen = new Set(prev.map((p) => `${p._server.id}::${p.animeId}`));
+            const next = [...prev];
+            for (const entry of tagged) {
+              const key = `${entry._server.id}::${entry.animeId}`;
+              if (!seen.has(key)) {
+                seen.add(key);
+                next.push(entry);
+              }
+            }
+            return next;
+          });
+        }
+
+        return { ok: true, count: tagged.length };
+      } catch (err: any) {
+        if (reqId !== searchReqIdRef.current) return { ok: false, count: 0 };
+        const errMsg = err?.message || '连接失败';
+        setNodeSearchStats((prev) =>
+          prev.map((st) =>
+            st.serverId === srv.id ? { ...st, status: 'error', count: 0, error: errMsg } : st
+          )
+        );
+        return { ok: false, count: 0, error: errMsg };
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
+    });
+
+    const settled = await Promise.allSettled(tasks);
+    if (reqId !== searchReqIdRef.current) return;
+
+    const anySucceeded = settled.some((s) => s.status === 'fulfilled' && s.value.ok);
+    if (!anySucceeded) {
+      const firstErr = settled.find(
+        (s): s is PromiseFulfilledResult<{ ok: false; count: number; error?: string }> =>
+          s.status === 'fulfilled' && !s.value.ok && Boolean(s.value.error)
+      )?.value.error;
+      setSearchError(
+        `搜索失败${firstErr ? `（${firstErr}）` : ''}，请检查弹幕 API 节点是否连通`
+      );
     }
+
+    setSearching(false);
   };
 
-  // Select Anime to fetch episodes
-  const handleSelectAnime = async (anime: DanmuAnimeSearchResult) => {
+  // Select Anime to fetch episodes from its originating node
+  const handleSelectAnime = async (anime: DanmuSearchResultWithServer) => {
     const reqId = ++animeLoadReqIdRef.current;
     try {
       setLoadingEpisodes(true);
       setSelectedAnime(anime);
-      const res = await getDanmuBangumiEpisodes(activeServer, anime.animeId);
+      const res = await getDanmuBangumiEpisodes(anime._server, anime.animeId);
       if (reqId !== animeLoadReqIdRef.current) return;
       if (res?.bangumi?.episodes) {
         setSelectedAnime({ ...anime, episodes: res.bangumi.episodes });
@@ -456,9 +562,10 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
     if (!selectedAnime || bindingEpisodeId !== null) return;
     try {
       setBindingEpisodeId(ep.episodeId);
-      const res = await fetchCommentsById(activeServer, ep.episodeId);
+      const targetServer = selectedAnime._server;
+      const res = await fetchCommentsById(targetServer, ep.episodeId);
 
-      // Persist item binding
+      // Persist item binding with originating danmu node metadata
       bindDanmaku(itemId, {
         itemId,
         seriesId,
@@ -468,15 +575,19 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
         sourcePlatform: selectedAnime.type || 'bangumi',
         commentCount: res.comments?.length || 0,
         sourceDuration: res.videoDuration,
+        danmuServerId: targetServer.id,
+        danmuServerBaseUrl: targetServer.baseUrl,
       });
 
-      // Persist series continuation binding so next episodes auto-match seamlessly
+      // Persist series continuation binding so next episodes auto-match seamlessly from the same node
       if (seriesId && selectedAnime.episodes && selectedAnime.episodes.length > 0) {
         bindSeriesDanmaku(seriesId, {
           seriesId,
           animeId: selectedAnime.animeId,
           animeTitle: selectedAnime.animeTitle,
           episodes: selectedAnime.episodes,
+          danmuServerId: targetServer.id,
+          danmuServerBaseUrl: targetServer.baseUrl,
         });
       }
 
@@ -748,11 +859,31 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
 
               {/* Manual Search & Bind */}
               <div className="space-y-3">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-2">
                   <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
                     手动搜索换源并绑定
                   </span>
-                  <span className="text-[11px] text-gray-500">节点: {activeServer.name}</span>
+                  {danmuServers.length > 1 ? (
+                    <button
+                      type="button"
+                      onClick={() => setSearchAllNodes((v) => !v)}
+                      className={`px-2 py-0.5 rounded-full text-[11px] font-medium border transition cursor-pointer flex items-center space-x-1 ${
+                        searchAllNodes
+                          ? 'bg-primary/15 border-primary/40 text-primary'
+                          : 'bg-white/5 border-white/10 text-gray-400 hover:text-white'
+                      }`}
+                      title="切换全部弹幕节点并发搜索 / 仅当前节点搜索"
+                    >
+                      <Server className="w-3 h-3" />
+                      <span>
+                        {searchAllNodes
+                          ? `全部节点并发 (${danmuServers.length})`
+                          : `仅当前: ${activeServer.name}`}
+                      </span>
+                    </button>
+                  ) : (
+                    <span className="text-[11px] text-gray-500">节点: {activeServer.name}</span>
+                  )}
                 </div>
 
                 <form onSubmit={handleSearch} className="flex space-x-2">
@@ -773,14 +904,76 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
                   </button>
                 </form>
 
-                {searchResults.length > 0 && !selectedAnime && (
+                {nodeSearchStats.length > 1 && !selectedAnime && (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setFilterNodeId('ALL')}
+                      className={`px-2 py-1 rounded-lg text-[11px] border transition cursor-pointer ${
+                        filterNodeId === 'ALL'
+                          ? 'bg-primary/20 border-primary/45 text-primary font-semibold'
+                          : 'bg-white/5 border-white/10 text-gray-400 hover:text-white'
+                      }`}
+                    >
+                      全部 ({searchResults.length})
+                    </button>
+                    {nodeSearchStats.map((st) => {
+                      const isActiveFilter = filterNodeId === st.serverId;
+                      return (
+                        <button
+                          key={st.serverId}
+                          type="button"
+                          onClick={() => setFilterNodeId(st.serverId)}
+                          title={st.error || undefined}
+                          className={`px-2 py-1 rounded-lg text-[11px] border transition cursor-pointer flex items-center space-x-1.5 ${
+                            isActiveFilter
+                              ? 'bg-primary/20 border-primary/45 text-primary font-semibold'
+                              : 'bg-white/5 border-white/10 text-gray-300 hover:bg-white/10'
+                          }`}
+                        >
+                          <span
+                            className={`w-1.5 h-1.5 rounded-full ${
+                              st.status === 'searching'
+                                ? 'bg-sky-400 animate-pulse'
+                                : st.status === 'ok'
+                                ? 'bg-emerald-400'
+                                : 'bg-amber-400'
+                            }`}
+                          />
+                          <span className="truncate max-w-[96px]">{st.serverName}</span>
+                          <span className="font-mono text-[10px] opacity-80">
+                            ({st.status === 'searching' ? '...' : st.status === 'error' ? '离线' : st.count})
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {searchError && !selectedAnime && (
+                  <div className="text-xs px-3 py-2 rounded-xl bg-red-500/10 border border-red-500/20 text-red-300">
+                    {searchError}
+                  </div>
+                )}
+
+                {!searching &&
+                  !searchError &&
+                  nodeSearchStats.length > 0 &&
+                  filteredSearchResults.length === 0 &&
+                  !selectedAnime && (
+                    <div className="text-xs text-center py-4 rounded-xl bg-black/25 border border-white/5 text-gray-500">
+                      当前关键词下暂无匹配番剧结果
+                    </div>
+                  )}
+
+                {filteredSearchResults.length > 0 && !selectedAnime && (
                   <div className="max-h-64 overflow-y-auto space-y-1.5 rounded-xl bg-black/30 p-2.5 border border-white/10 custom-scrollbar">
                     <span className="text-[11px] text-gray-400 px-2 block mb-1">
-                      搜索到 {searchResults.length} 个结果，点击选择番剧：
+                      搜索到 {filteredSearchResults.length} 个结果，点击选择番剧：
                     </span>
-                    {searchResults.map((item) => (
+                    {filteredSearchResults.map((item) => (
                       <button
-                        key={item.animeId}
+                        key={`${item._server.id}::${item.animeId}`}
                         onClick={() => handleSelectAnime(item)}
                         className="w-full text-left px-3 py-2.5 rounded-lg text-sm hover:bg-white/10 transition flex items-start justify-between gap-2 group cursor-pointer"
                         title={item.animeTitle}
@@ -788,9 +981,16 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
                         <span className="text-gray-200 group-hover:text-white font-medium line-clamp-2 leading-snug">
                           {item.animeTitle}
                         </span>
-                        <span className="text-[11px] text-primary/85 bg-primary/10 px-2 py-0.5 rounded-md shrink-0 mt-0.5">
-                          {item.type || '番剧'}
-                        </span>
+                        <div className="flex items-center gap-1 shrink-0 mt-0.5">
+                          {danmuServers.length > 1 && (
+                            <span className="text-[10px] font-mono text-sky-300/90 bg-sky-500/15 border border-sky-400/25 px-1.5 py-0.5 rounded">
+                              {item._server.name}
+                            </span>
+                          )}
+                          <span className="text-[11px] text-primary/85 bg-primary/10 px-2 py-0.5 rounded-md">
+                            {item.type || '番剧'}
+                          </span>
+                        </div>
                       </button>
                     ))}
                   </div>
@@ -804,6 +1004,11 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
                           <span className="text-[11px] text-gray-400">
                             已选番剧{totalEpisodes > 0 ? ` · 共 ${totalEpisodes} 集` : ''}
                           </span>
+                          {danmuServers.length > 1 && (
+                            <span className="px-1.5 py-0.5 rounded bg-white/10 border border-white/15 text-[10px] font-mono text-gray-200">
+                              节点: {selectedAnime._server.name}
+                            </span>
+                          )}
                           {dominantPlatform && (
                             <span className="px-1.5 py-0.5 rounded bg-sky-500/15 border border-sky-400/25 text-[10px] font-mono text-sky-300">
                               来源: {dominantPlatform}

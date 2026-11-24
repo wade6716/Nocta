@@ -154,7 +154,10 @@ export const SettingsPage: React.FC = () => {
   const [embyFormUserAgent, setEmbyFormUserAgent] = useState('');
   const [embyFormError, setEmbyFormError] = useState<string | null>(null);
   const [embyTesting, setEmbyTesting] = useState(false);
-  const [embyTestMsg, setEmbyTestMsg] = useState<string | null>(null);
+  const [showEmbyFormPass, setShowEmbyFormPass] = useState(false);
+  const [testingEmbyServerIds, setTestingEmbyServerIds] = useState<Record<string, boolean>>({});
+  const [testingAllEmby, setTestingAllEmby] = useState(false);
+  const [embyFormTestResult, setEmbyFormTestResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [revealedPasswords, setRevealedPasswords] = useState<Record<string, boolean>>({});
 
   // 弹幕节点 编辑/新增状态
@@ -222,6 +225,7 @@ export const SettingsPage: React.FC = () => {
     }
 
     let authRes;
+    const authStartTime = performance.now();
 
     try {
       authRes = await authenticateByName(cleanUrl, cleanUser, embyFormPass, {
@@ -230,6 +234,7 @@ export const SettingsPage: React.FC = () => {
     } catch (err: any) {
       console.warn('保存服务器时连通验证失败，但仍然记录', err);
     }
+    const saveLatencyMs = authRes ? Math.max(1, Math.round(performance.now() - authStartTime)) : undefined;
 
     if (editingEmbyServer) {
       updateEmbyServer(editingEmbyServer.id, {
@@ -241,6 +246,7 @@ export const SettingsPage: React.FC = () => {
         userId: authRes?.User?.Id || editingEmbyServer.userId,
         accessToken: authRes?.AccessToken || editingEmbyServer.accessToken,
         lastTestOk: !!authRes,
+        lastLatencyMs: saveLatencyMs,
         lastTestError: authRes ? undefined : '连接或登录校验未通过',
         lastTestAt: Date.now(),
       });
@@ -258,6 +264,7 @@ export const SettingsPage: React.FC = () => {
         password: embyFormPass,
         userAgent: cleanUa,
         lastTestOk: !!authRes,
+        lastLatencyMs: saveLatencyMs,
         lastTestError: authRes ? undefined : '连接或登录校验未通过',
         lastTestAt: Date.now(),
       });
@@ -267,6 +274,111 @@ export const SettingsPage: React.FC = () => {
     setEmbyTesting(false);
     setIsAddingEmby(false);
     setEditingEmbyServer(null);
+    setShowEmbyFormPass(false);
+    setEmbyFormTestResult(null);
+  };
+
+  // 单台 Emby 服务器延迟与通断探测
+  const handleTestEmbyServer = async (server: SavedServer) => {
+    setTestingEmbyServerIds((prev) => ({ ...prev, [server.id]: true }));
+    const startTime = performance.now();
+    try {
+      await testServerConnection(normalizeServerUrl(server.url), {
+        userAgent: server.userAgent,
+        proxy: server.proxyConfig,
+      });
+      const latencyMs = Math.max(1, Math.round(performance.now() - startTime));
+      updateEmbyServer(server.id, {
+        lastTestOk: true,
+        lastLatencyMs: latencyMs,
+        lastTestError: undefined,
+        lastTestAt: Date.now(),
+      });
+    } catch (err: any) {
+      updateEmbyServer(server.id, {
+        lastTestOk: false,
+        lastLatencyMs: undefined,
+        lastTestError: err?.message || '连接失败或超时',
+        lastTestAt: Date.now(),
+      });
+    } finally {
+      setTestingEmbyServerIds((prev) => {
+        const next = { ...prev };
+        delete next[server.id];
+        return next;
+      });
+    }
+  };
+
+  // 全部 Emby 服务器并行测速
+  const handleTestAllEmbyServers = async () => {
+    if (testingAllEmby || embyServers.length === 0) return;
+    setTestingAllEmby(true);
+    try {
+      await Promise.allSettled(embyServers.map((srv) => handleTestEmbyServer(srv)));
+    } finally {
+      setTestingAllEmby(false);
+    }
+  };
+
+  // 新增/编辑表单内测试连接（测速 + 可选账号校验）
+  const handleTestEmbyFormConnection = async () => {
+    const rawUrl = embyFormUrl.trim();
+    if (!rawUrl) {
+      setEmbyFormTestResult({ ok: false, text: '请先填写服务器地址' });
+      return;
+    }
+
+    const cleanUrl = normalizeServerUrl(rawUrl);
+    const cleanUser = embyFormUser.trim();
+    const cleanUa = embyFormUserAgent.trim() || undefined;
+    const proxyCfg = editingEmbyServer?.proxyConfig;
+
+    setEmbyTesting(true);
+    setEmbyFormTestResult(null);
+    const startTime = performance.now();
+
+    try {
+      const info = await testServerConnection(cleanUrl, {
+        userAgent: cleanUa,
+        proxy: proxyCfg,
+      });
+      const latencyMs = Math.max(1, Math.round(performance.now() - startTime));
+      const serverLabel = info.ServerName || cleanUrl;
+
+      if (!cleanUser) {
+        setEmbyFormTestResult({
+          ok: true,
+          text: `服务器可达 · ${serverLabel} · ${latencyMs} ms（未填写账号，跳过登录验证）`,
+        });
+        return;
+      }
+
+      try {
+        await authenticateByName(cleanUrl, cleanUser, embyFormPass, {
+          userAgent: cleanUa,
+          proxy: proxyCfg,
+        });
+        setEmbyFormTestResult({
+          ok: true,
+          text: `服务器可达 · ${serverLabel} · ${latencyMs} ms，登录校验通过`,
+        });
+      } catch (authErr: any) {
+        setEmbyFormTestResult({
+          ok: false,
+          text: `服务器可达 · ${serverLabel} · ${latencyMs} ms，但登录校验失败：${
+            authErr?.message || '账号或密码错误'
+          }`,
+        });
+      }
+    } catch (err: any) {
+      setEmbyFormTestResult({
+        ok: false,
+        text: `无法连接到服务器：${err?.message || '请检查地址、端口或网络代理'}`,
+      });
+    } finally {
+      setEmbyTesting(false);
+    }
   };
 
   // 保存 弹幕节点 表单
@@ -601,21 +713,42 @@ export const SettingsPage: React.FC = () => {
                   </p>
                 </div>
                 {!isAddingEmby && !editingEmbyServer && (
-                  <button
-                    onClick={() => {
-                      setEmbyFormName('');
-                      setEmbyFormUrl('');
-                      setEmbyFormUser('');
-                      setEmbyFormPass('');
-                      setEmbyFormUserAgent('');
-                      setEmbyFormError(null);
-                      setIsAddingEmby(true);
-                    }}
-                    className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-primary hover:bg-primary/90 text-white text-xs font-medium transition cursor-pointer"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>添加服务器</span>
-                  </button>
+                  <div className="flex items-center space-x-2">
+                    {embyServers.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleTestAllEmbyServers}
+                        disabled={testingAllEmby}
+                        className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-gray-200 hover:text-white text-xs font-medium transition cursor-pointer disabled:opacity-50"
+                        title="并发测试所有服务器的连通性与延迟"
+                      >
+                        {testingAllEmby ? (
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin text-primary" />
+                        ) : (
+                          <Activity className="w-3.5 h-3.5 text-primary" />
+                        )}
+                        <span>{testingAllEmby ? '测速中...' : '全部测速'}</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEmbyFormName('');
+                        setEmbyFormUrl('');
+                        setEmbyFormUser('');
+                        setEmbyFormPass('');
+                        setEmbyFormUserAgent('');
+                        setEmbyFormError(null);
+                        setShowEmbyFormPass(false);
+                        setEmbyFormTestResult(null);
+                        setIsAddingEmby(true);
+                      }}
+                      className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-primary hover:bg-primary/90 text-white text-xs font-medium transition cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>添加服务器</span>
+                    </button>
+                  </div>
                 )}
               </div>
 
@@ -668,13 +801,27 @@ export const SettingsPage: React.FC = () => {
                     </div>
                     <div>
                       <label className="text-[11px] text-gray-400 block mb-1">密码</label>
-                      <input
-                        type="password"
-                        value={embyFormPass}
-                        onChange={(e) => setEmbyFormPass(e.target.value)}
-                        placeholder="密码（保存在本地方便免密重连）"
-                        className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-xl text-xs text-white placeholder-gray-500 focus:outline-none focus:border-primary"
-                      />
+                      <div className="relative flex items-center">
+                        <input
+                          type={showEmbyFormPass ? 'text' : 'password'}
+                          value={embyFormPass}
+                          onChange={(e) => setEmbyFormPass(e.target.value)}
+                          placeholder="密码（保存在本地方便免密重连）"
+                          className="w-full px-3 pr-9 py-2 bg-white/5 border border-white/10 rounded-xl text-xs text-white placeholder-gray-500 focus:outline-none focus:border-primary"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowEmbyFormPass((v) => !v)}
+                          className="absolute right-2 p-1 rounded-md text-gray-400 hover:text-white hover:bg-white/10 transition cursor-pointer"
+                          title={showEmbyFormPass ? '隐藏密码' : '查看密码'}
+                        >
+                          {showEmbyFormPass ? (
+                            <EyeOff className="w-3.5 h-3.5" />
+                          ) : (
+                            <Eye className="w-3.5 h-3.5" />
+                          )}
+                        </button>
+                      </div>
                     </div>
                   </div>
 
@@ -711,25 +858,60 @@ export const SettingsPage: React.FC = () => {
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-end space-x-2 pt-2">
+                  {embyFormTestResult && (
+                    <div
+                      className={`text-xs p-2.5 rounded-lg border flex items-start space-x-2 ${
+                        embyFormTestResult.ok
+                          ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-300'
+                          : 'bg-amber-500/10 border-amber-500/25 text-amber-300'
+                      }`}
+                    >
+                      {embyFormTestResult.ok ? (
+                        <CheckCircle2 className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                      ) : (
+                        <AlertCircle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                      )}
+                      <span>{embyFormTestResult.text}</span>
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between pt-2">
                     <button
                       type="button"
-                      onClick={() => {
-                        setIsAddingEmby(false);
-                        setEditingEmbyServer(null);
-                      }}
-                      className="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-gray-300 text-xs transition cursor-pointer"
-                    >
-                      取消
-                    </button>
-                    <button
-                      type="submit"
+                      onClick={handleTestEmbyFormConnection}
                       disabled={embyTesting}
-                      className="px-4 py-1.5 rounded-xl bg-primary hover:bg-primary/90 text-white text-xs font-medium transition cursor-pointer flex items-center space-x-1.5"
+                      className="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-gray-200 hover:text-white text-xs font-medium transition cursor-pointer flex items-center space-x-1.5 disabled:opacity-50"
                     >
-                      {embyTesting && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
-                      <span>保存服务器</span>
+                      {embyTesting ? (
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin text-primary" />
+                      ) : (
+                        <Activity className="w-3.5 h-3.5 text-primary" />
+                      )}
+                      <span>{embyTesting ? '正在测试...' : '测试连接'}</span>
                     </button>
+
+                    <div className="flex items-center space-x-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsAddingEmby(false);
+                          setEditingEmbyServer(null);
+                          setShowEmbyFormPass(false);
+                          setEmbyFormTestResult(null);
+                        }}
+                        className="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-gray-300 text-xs transition cursor-pointer"
+                      >
+                        取消
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={embyTesting}
+                        className="px-4 py-1.5 rounded-xl bg-primary hover:bg-primary/90 text-white text-xs font-medium transition cursor-pointer flex items-center space-x-1.5 disabled:opacity-50"
+                      >
+                        {embyTesting && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                        <span>保存服务器</span>
+                      </button>
+                    </div>
                   </div>
                 </form>
               )}
@@ -738,7 +920,8 @@ export const SettingsPage: React.FC = () => {
               <div className="space-y-3">
                 {embyServers.map((server) => {
                   const isCurrent = server.id === currentServerId;
-                  const isPassRevealed = revealedPasswords[server.id];
+                  const isPassRevealed = !!revealedPasswords[server.id];
+                  const isTestingRow = !!testingEmbyServerIds[server.id];
                   return (
                     <div
                       key={server.id}
@@ -748,48 +931,84 @@ export const SettingsPage: React.FC = () => {
                           : 'bg-white/5 border-white/10 hover:border-white/20'
                       }`}
                     >
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center space-x-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center space-x-3 min-w-0">
                           <span
-                            className={`w-2.5 h-2.5 rounded-full ${
-                              server.lastTestOk === false
+                            className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                              isTestingRow
+                                ? 'bg-primary animate-pulse'
+                                : server.lastTestOk === false
                                 ? 'bg-amber-400'
                                 : server.lastTestOk === true
                                 ? 'bg-emerald-400'
                                 : 'bg-gray-500'
                             }`}
                           />
-                          <div>
-                            <div className="flex items-center space-x-2">
+                          <div className="min-w-0">
+                            <div className="flex items-center flex-wrap gap-2">
                               <h3 className="text-sm font-semibold text-white">{server.name}</h3>
                               {isCurrent && (
                                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-primary/30 text-primary font-medium">
                                   当前活跃
                                 </span>
                               )}
+                              {isTestingRow ? (
+                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-sky-500/15 border border-sky-500/30 text-sky-300 font-mono">
+                                  测速中...
+                                </span>
+                              ) : server.lastTestOk === true ? (
+                                server.lastLatencyMs !== undefined ? (
+                                  <span
+                                    className={`text-[10px] px-2 py-0.5 rounded-full border font-mono tabular-nums ${
+                                      server.lastLatencyMs < 150
+                                        ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300'
+                                        : server.lastLatencyMs < 400
+                                        ? 'bg-sky-500/15 border-sky-500/30 text-sky-300'
+                                        : 'bg-amber-500/15 border-amber-500/30 text-amber-300'
+                                    }`}
+                                    title="最近一次连通测速延迟"
+                                  >
+                                    {server.lastLatencyMs} ms
+                                  </span>
+                                ) : (
+                                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300">
+                                    连接正常
+                                  </span>
+                                )
+                              ) : server.lastTestOk === false ? (
+                                <span
+                                  className="text-[10px] px-2 py-0.5 rounded-full bg-red-500/15 border border-red-500/30 text-red-300"
+                                  title={server.lastTestError || '连接失败或超时'}
+                                >
+                                  离线
+                                </span>
+                              ) : null}
                             </div>
-                            <div className="text-xs text-gray-400 mt-0.5 space-x-2 font-mono">
+                            <div className="text-xs text-gray-400 mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono">
                               <span>{server.url}</span>
                               <span className="text-gray-500">·</span>
                               <span>账号: {server.username}</span>
-                              {server.password && (
-                                <>
-                                  <span className="text-gray-500">·</span>
+                              <span className="text-gray-500">·</span>
+                              {server.password ? (
+                                <span className="inline-flex items-center">
                                   <span>
                                     密码: {isPassRevealed ? server.password : '••••••'}
                                   </span>
                                   <button
+                                    type="button"
                                     onClick={() => togglePasswordReveal(server.id)}
-                                    className="text-gray-400 hover:text-white inline-block align-middle ml-1"
-                                    title="查看/隐藏密码"
+                                    className="text-gray-400 hover:text-white inline-flex items-center ml-1.5 p-0.5 rounded hover:bg-white/10 transition cursor-pointer"
+                                    title={isPassRevealed ? '隐藏密码' : '查看密码'}
                                   >
                                     {isPassRevealed ? (
-                                      <EyeOff className="w-3 h-3 inline" />
+                                      <EyeOff className="w-3.5 h-3.5" />
                                     ) : (
-                                      <Eye className="w-3 h-3 inline" />
+                                      <Eye className="w-3.5 h-3.5" />
                                     )}
                                   </button>
-                                </>
+                                </span>
+                              ) : (
+                                <span className="text-gray-500">密码: 未保存</span>
                               )}
                               {server.userAgent && (
                                 <>
@@ -806,7 +1025,7 @@ export const SettingsPage: React.FC = () => {
                           </div>
                         </div>
 
-                        <div className="flex items-center space-x-2">
+                        <div className="flex items-center space-x-2 shrink-0">
                           {!isCurrent && (
                             <span
                               className="px-2 py-1 rounded-md bg-white/[0.04] text-[11px] text-gray-500"
@@ -816,6 +1035,20 @@ export const SettingsPage: React.FC = () => {
                             </span>
                           )}
                           <button
+                            type="button"
+                            onClick={() => handleTestEmbyServer(server)}
+                            disabled={isTestingRow}
+                            className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-gray-400 hover:text-primary transition cursor-pointer disabled:opacity-50"
+                            title="测试服务器延迟与通断"
+                          >
+                            {isTestingRow ? (
+                              <RefreshCw className="w-3.5 h-3.5 animate-spin text-primary" />
+                            ) : (
+                              <Activity className="w-3.5 h-3.5" />
+                            )}
+                          </button>
+                          <button
+                            type="button"
                             onClick={() => {
                               setEditingEmbyServer(server);
                               setEmbyFormName(server.name);
@@ -824,6 +1057,8 @@ export const SettingsPage: React.FC = () => {
                               setEmbyFormPass(server.password || '');
                               setEmbyFormUserAgent(server.userAgent || '');
                               setEmbyFormError(null);
+                              setShowEmbyFormPass(false);
+                              setEmbyFormTestResult(null);
                               setIsAddingEmby(false);
                             }}
                             className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white transition cursor-pointer"
@@ -1781,15 +2016,50 @@ export const SettingsPage: React.FC = () => {
                 </div>
               </div>
 
-              {/* 宽银幕贴底技术说明 */}
-              <div className="p-4 bg-white/5 border border-white/10 rounded-xl space-y-2">
-                <div className="flex items-center space-x-2 text-xs font-semibold text-gray-200">
-                  <PlaySquare className="w-4 h-4 text-primary" />
-                  <span>宽银幕画面沉浸贴底 (Bottom Alignment)</span>
+              {/* 宽银幕画面沉浸贴底 */}
+              <div className="p-4 bg-white/5 border border-white/10 rounded-xl space-y-3">
+                <div className="flex items-start gap-2.5">
+                  <div className="w-8 h-8 flex-shrink-0 rounded-xl bg-primary/15 border border-primary/25 text-primary flex items-center justify-center">
+                    <PlaySquare className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-xs font-semibold text-white">
+                      宽银幕画面沉浸贴底 (Bottom Alignment)
+                    </h3>
+                    <p className="text-[11px] text-gray-400 mt-0.5 leading-relaxed">
+                      针对 2.35:1 / 2.39:1 / 21:9 宽银幕电影，Nocta 会智能将视频画面贴紧显示器底边，将全部多余黑边聚合在屏幕顶部作为专属弹幕滑行区，彻底消除弹幕对人物面部和字幕的遮挡。
+                    </p>
+                  </div>
                 </div>
-                <p className="text-xs text-gray-400 leading-relaxed">
-                  针对 2.35:1 / 2.39:1 / 21:9 宽银幕电影，Nocta 会智能将视频画面贴紧显示器底边，将全部多余黑边聚合在屏幕顶部作为专属弹幕滑行区，彻底消除弹幕对人物面部和字幕的遮挡。
-                </p>
+
+                <div className="flex items-center justify-between gap-4 p-3 rounded-lg bg-black/20 border border-white/5">
+                  <div>
+                    <p className="text-xs font-medium text-gray-200">默认开启画面沉浸贴底</p>
+                    <p className="text-[11px] text-gray-500 mt-0.5">
+                      作为全局默认策略对新影片生效；播放过程中仍可在画面调校或右键菜单为单部剧/电影单独覆盖
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={playerPreferences.defaultBottomAlign}
+                    onClick={() =>
+                      updatePlayerPreferences({
+                        defaultBottomAlign: !playerPreferences.defaultBottomAlign,
+                      })
+                    }
+                    className={`relative w-11 h-6 flex-shrink-0 rounded-full transition cursor-pointer ${
+                      playerPreferences.defaultBottomAlign ? 'bg-primary' : 'bg-white/15'
+                    }`}
+                    title="默认开启画面沉浸贴底"
+                  >
+                    <span
+                      className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
+                        playerPreferences.defaultBottomAlign ? 'translate-x-5' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
               </div>
             </div>
           )}

@@ -1,7 +1,8 @@
 import { httpClient, isTauriEnvironment, ProxyConfig } from './http';
 
-export const DEFAULT_EMBY_USER_AGENT =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '0.1.0';
+
+export const DEFAULT_EMBY_USER_AGENT = `Nocta/${APP_VERSION} (Desktop; EmbyClient)`;
 
 export const EMBY_USER_AGENT_PRESETS: ReadonlyArray<{
   id: string;
@@ -9,7 +10,14 @@ export const EMBY_USER_AGENT_PRESETS: ReadonlyArray<{
   value: string;
   clientName?: string;
 }> = [
-  { id: 'default', label: '默认 (Chrome)', value: '' },
+  { id: 'default', label: '默认 (Nocta)', value: '', clientName: 'Nocta' },
+  {
+    id: 'chrome',
+    label: 'Chrome 浏览器',
+    value:
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    clientName: 'Emby Web',
+  },
   {
     id: 'emby',
     label: 'Emby 官方',
@@ -68,7 +76,7 @@ export function resolveEmbyClientName(
 ): string {
   const customUa =
     explicitUserAgent?.trim() || activeUserAgentGetter?.(serverUrl)?.trim() || '';
-  if (!customUa) return 'EmbyTauriPlayer';
+  if (!customUa) return 'Nocta';
 
   const preset = EMBY_USER_AGENT_PRESETS.find((p) => p.value && p.value === customUa);
   if (preset?.clientName) return preset.clientName;
@@ -78,7 +86,7 @@ export function resolveEmbyClientName(
   const token = customUa
     .split(/[\s/]/)[0]
     .replace(/[^A-Za-z0-9._-]/g, '');
-  return token || 'EmbyTauriPlayer';
+  return token || 'Nocta';
 }
 
 export interface EmbyServerInfo {
@@ -586,23 +594,60 @@ export async function getNextUpEpisodes(
   return [];
 }
 
+function normalizeSeriesTitleKey(name?: string): string {
+  return (name || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
 /**
- * 按照相同媒体合并（按 SeriesId 或 SeriesName 聚合电视剧）：
- * 保证同一部剧集只展示最近进度的一张卡片，避免同一部剧的多集刷屏
+ * 按照相同媒体合并（按 SeriesId 与规范化剧名双键聚合电视剧）：
+ * 保证同一部剧集只展示一张卡片，避免同一部剧的多集刷屏。
+ * 当 preferSeries=true（如跨库聚合搜索）时，优先保留 Series 剧集主体卡片并丢弃其下属分集。
  */
-export function mergeMediaBySeries(items: EmbyItem[]): EmbyItem[] {
-  const seenKeys = new Set<string>();
+export function mergeMediaBySeries(
+  items: EmbyItem[],
+  options?: { preferSeries?: boolean }
+): EmbyItem[] {
+  const orderedItems = options?.preferSeries
+    ? [
+        ...items.filter((it) => it.Type !== 'Episode'),
+        ...items.filter((it) => it.Type === 'Episode'),
+      ]
+    : items;
+
+  const seenItemIds = new Set<string>();
+  const seenSeriesIds = new Set<string>();
+  const seenSeriesNames = new Set<string>();
   const merged: EmbyItem[] = [];
 
-  for (const item of items) {
-    // 电视剧以 SeriesId 或 SeriesName 为聚合 key，电影或其它以 Id 为 key
-    const key =
-      item.Type === 'Episode'
-        ? (item.SeriesId || item.SeriesName || item.Id)
-        : item.Id;
+  for (const item of orderedItems) {
+    const idKey = item.Id !== undefined && item.Id !== null ? String(item.Id) : '';
+    if (idKey && seenItemIds.has(idKey)) continue;
 
-    if (!seenKeys.has(key)) {
-      seenKeys.add(key);
+    if (item.Type === 'Series') {
+      const nameKey = normalizeSeriesTitleKey(item.Name);
+      if ((idKey && seenSeriesIds.has(idKey)) || (nameKey && seenSeriesNames.has(nameKey))) {
+        continue;
+      }
+      if (idKey) seenItemIds.add(idKey);
+      if (idKey) seenSeriesIds.add(idKey);
+      if (nameKey) seenSeriesNames.add(nameKey);
+      merged.push(item);
+    } else if (item.Type === 'Episode') {
+      const seriesIdKey =
+        item.SeriesId !== undefined && item.SeriesId !== null ? String(item.SeriesId) : '';
+      const seriesNameKey = normalizeSeriesTitleKey(item.SeriesName);
+      if (
+        (seriesIdKey && seenSeriesIds.has(seriesIdKey)) ||
+        (seriesNameKey && seenSeriesNames.has(seriesNameKey))
+      ) {
+        continue;
+      }
+      if (idKey) seenItemIds.add(idKey);
+      if (seriesIdKey) seenSeriesIds.add(seriesIdKey);
+      if (seriesNameKey) seenSeriesNames.add(seriesNameKey);
+      merged.push(item);
+    } else {
+      if (idKey) seenItemIds.add(idKey);
       merged.push(item);
     }
   }
@@ -1562,15 +1607,43 @@ export interface SearchMediaParams {
   limit?: number;
 }
 
+const USER_VIEWS_CACHE_TTL_MS = 5 * 60 * 1000;
+const userViewsCache = new Map<string, { views: EmbyItem[]; fetchedAt: number }>();
+
+async function getCachedSearchViews(
+  serverUrl: string,
+  userId: string,
+  accessToken: string
+): Promise<EmbyItem[]> {
+  const base = normalizeServerUrl(serverUrl);
+  const cacheKey = `${base}::${userId}`;
+  const cached = userViewsCache.get(cacheKey);
+  if (cached && Date.now() - cached.fetchedAt < USER_VIEWS_CACHE_TTL_MS) {
+    return cached.views;
+  }
+
+  try {
+    const viewsRes = await getUserViews(serverUrl, userId, accessToken);
+    const valid = (viewsRes.Items || []).filter(
+      (v) => v.CollectionType !== 'music' && v.CollectionType !== 'photos'
+    );
+    userViewsCache.set(cacheKey, { views: valid, fetchedAt: Date.now() });
+    return valid;
+  } catch (e) {
+    console.warn('[searchMediaItems getUserViews failed]', e);
+    return [];
+  }
+}
+
 /**
  * 跨媒体库聚合搜索
  * 彻底解决 Emby / Jellyfin 在未指定 ParentId 或多媒体库情况下仅检索首个库/漏检其他媒体库的底层问题：
- * 1. 自动获取该用户可访问的全部媒体库分类（Views，排除音乐/相册/图书等非视频库）；
+ * 1. 自动获取（带 5 分钟 TTL 缓存）该用户可访问的全部媒体库分类（Views，排除音乐/相册/图书等非视频库）；
  * 2. 对每个具体媒体库并发（Promise.allSettled）发起独立带 ParentId 的深度检索（ParentId=${view.Id}&Recursive=true）；
  * 3. 并发发起全局 /emby/Users/{UserId}/Items 深度检索；
  * 4. 并发发起 /emby/Search/Hints 聚合搜索提示；
- * 5. 全量汇总并去重（保留高保真元数据与确切所属媒体库名称 LibraryName），确保 100% 覆盖所有媒体库；
- * 6. 视听过滤 isVideoMedia 与剧集自动折叠去重 mergeMediaBySeries。
+ * 5. 全量汇总并按字符串 Id 去重（补全剧集关联字段与所属媒体库名称 LibraryName）；
+ * 6. 视听过滤 isVideoMedia 与优先保留剧集主体卡片的剧集折叠去重 mergeMediaBySeries(..., { preferSeries: true })。
  */
 export async function searchMediaItems(
   serverUrl: string,
@@ -1591,19 +1664,27 @@ export async function searchMediaItems(
   }
 
   const limit = params.limit || 100;
+  const perViewLimit = Math.min(limit, 30);
+  const searchFields =
+    'PrimaryImageAspectRatio,ProductionYear,PremiereDate,CommunityRating,UserData,ChildCount,RecursiveItemCount,Status';
   const encodedTerm = encodeURIComponent(cleanTerm);
   const headers = buildEmbyHeaders(userId, accessToken, { serverUrl: base });
 
   // 1. 如果显式指定了某一个具体的媒体库 (parentId)，直接精准深度查询该库
   if (params.parentId && params.parentId !== 'All') {
-    const url = `${base}/emby/Users/${userId}/Items?ParentId=${params.parentId}&SearchTerm=${encodedTerm}&IncludeItemTypes=${includeTypes}&Recursive=true&Limit=${limit}&Fields=PrimaryImageAspectRatio,Overview,ProductionYear,PremiereDate,CommunityRating,UserData,ChildCount,RecursiveItemCount,Status`;
+    const url = `${base}/emby/Users/${userId}/Items?ParentId=${params.parentId}&SearchTerm=${encodedTerm}&IncludeItemTypes=${includeTypes}&Recursive=true&Limit=${limit}&Fields=${searchFields}`;
     try {
       const res = await httpClient(url, { method: 'GET', headers });
       if (res.ok) {
         const data = await res.json();
-        const rawItems: EmbyItem[] = data.Items || [];
+        const rawItems: EmbyItem[] = (data.Items || []).map((it: EmbyItem) => ({
+          ...it,
+          Id: it.Id !== undefined && it.Id !== null ? String(it.Id) : it.Id,
+          SeriesId:
+            it.SeriesId !== undefined && it.SeriesId !== null ? String(it.SeriesId) : undefined,
+        }));
         const valid = rawItems.filter(isVideoMedia);
-        return mergeMediaBySeries(valid);
+        return mergeMediaBySeries(valid, { preferSeries: true });
       }
     } catch (e) {
       console.warn('[searchMediaItems single view failed]', e);
@@ -1611,24 +1692,16 @@ export async function searchMediaItems(
     return [];
   }
 
-  // 2. 跨媒体库全局聚合：获取用户的全部分类（若上层未传入则自动请求）
-  let views = params.views || [];
+  // 2. 跨媒体库全局聚合：获取用户的全部分类（若上层未传入则读取缓存/请求）
+  let views = params.views;
   if (!views || views.length === 0) {
-    try {
-      const viewsRes = await getUserViews(serverUrl, userId, accessToken);
-      views = (viewsRes.Items || []).filter(
-        (v) => v.CollectionType !== 'music' && v.CollectionType !== 'photos'
-      );
-    } catch (e) {
-      console.warn('[searchMediaItems getUserViews failed]', e);
-      views = [];
-    }
+    views = await getCachedSearchViews(serverUrl, userId, accessToken);
   }
 
   const tasks: Promise<{ item: EmbyItem; viewName?: string; viewId?: string }[]>[] = [];
 
   // Task A: 全局用户目录深度递归查询
-  const globalUrl = `${base}/emby/Users/${userId}/Items?SearchTerm=${encodedTerm}&IncludeItemTypes=${includeTypes}&Recursive=true&Limit=${limit}&Fields=PrimaryImageAspectRatio,Overview,ProductionYear,PremiereDate,CommunityRating,UserData,ChildCount,RecursiveItemCount,Status`;
+  const globalUrl = `${base}/emby/Users/${userId}/Items?SearchTerm=${encodedTerm}&IncludeItemTypes=${includeTypes}&Recursive=true&Limit=${limit}&Fields=${searchFields}`;
   tasks.push(
     httpClient(globalUrl, { method: 'GET', headers })
       .then(async (res) => (res.ok ? (await res.json()).Items || [] : []))
@@ -1638,7 +1711,7 @@ export async function searchMediaItems(
 
   // Task B: 对每个具体媒体库并发按 ParentId 检索（穿透 Emby 服务器对部分库排除在全局搜索外的限制）
   for (const view of views) {
-    const viewUrl = `${base}/emby/Users/${userId}/Items?ParentId=${view.Id}&SearchTerm=${encodedTerm}&IncludeItemTypes=${includeTypes}&Recursive=true&Limit=${limit}&Fields=PrimaryImageAspectRatio,Overview,ProductionYear,PremiereDate,CommunityRating,UserData,ChildCount,RecursiveItemCount,Status`;
+    const viewUrl = `${base}/emby/Users/${userId}/Items?ParentId=${view.Id}&SearchTerm=${encodedTerm}&IncludeItemTypes=${includeTypes}&Recursive=true&Limit=${perViewLimit}&Fields=${searchFields}`;
     tasks.push(
       httpClient(viewUrl, { method: 'GET', headers })
         .then(async (res) => (res.ok ? (await res.json()).Items || [] : []))
@@ -1665,9 +1738,10 @@ export async function searchMediaItems(
                   ...(h.ThumbImageTag ? { Thumb: h.ThumbImageTag } : {}),
                 }
               : undefined;
+          const rawHintId = h.Id ?? h.ItemId;
           return {
             item: {
-              Id: h.Id || h.ItemId,
+              Id: rawHintId !== undefined && rawHintId !== null ? String(rawHintId) : '',
               Name: h.Name,
               Type: h.Type,
               MediaType: h.MediaType,
@@ -1677,8 +1751,11 @@ export async function searchMediaItems(
                 h.PrimaryImageAspectRatio || (h.Type === 'Episode' ? 1.77 : 0.67),
               ImageTags: hintImageTags,
               BackdropImageTags: h.BackdropImageTag ? [h.BackdropImageTag] : undefined,
-              SeriesId: h.SeriesId,
+              SeriesId:
+                h.SeriesId !== undefined && h.SeriesId !== null ? String(h.SeriesId) : undefined,
               SeriesName: h.Series,
+              IndexNumber: h.IndexNumber,
+              ParentIndexNumber: h.ParentIndexNumber,
             } as EmbyItem,
           };
         });
@@ -1689,27 +1766,43 @@ export async function searchMediaItems(
   // 并发等待全部来源完成
   const settledResults = await Promise.allSettled(tasks);
 
-  // 合并与按 Id 去重
+  // 合并与按字符串 Id 去重
   const itemMap = new Map<string, EmbyItem>();
 
   for (const r of settledResults) {
     if (r.status === 'fulfilled' && Array.isArray(r.value)) {
       for (const entry of r.value) {
         const it = entry.item;
-        if (!it || !it.Id || !isVideoMedia(it)) continue;
+        if (!it || it.Id === undefined || it.Id === null) continue;
+        const normalizedId = String(it.Id);
+        if (!normalizedId || !isVideoMedia(it)) continue;
 
-        const existing = itemMap.get(it.Id);
+        it.Id = normalizedId;
+        if (it.SeriesId !== undefined && it.SeriesId !== null) {
+          it.SeriesId = String(it.SeriesId);
+        }
+
+        const existing = itemMap.get(normalizedId);
         if (!existing) {
           if (entry.viewName) {
             it.LibraryName = entry.viewName;
             it.LibraryId = entry.viewId;
           }
-          itemMap.set(it.Id, it);
+          itemMap.set(normalizedId, it);
         } else {
           // 如果已有记录，但当前记录有更准确的媒体库归属名称，进行补全
           if (!existing.LibraryName && entry.viewName) {
             existing.LibraryName = entry.viewName;
             existing.LibraryId = entry.viewId;
+          }
+          // 补全剧集关联字段
+          if (!existing.SeriesId && it.SeriesId) existing.SeriesId = it.SeriesId;
+          if (!existing.SeriesName && it.SeriesName) existing.SeriesName = it.SeriesName;
+          if (existing.IndexNumber === undefined && it.IndexNumber !== undefined) {
+            existing.IndexNumber = it.IndexNumber;
+          }
+          if (existing.ParentIndexNumber === undefined && it.ParentIndexNumber !== undefined) {
+            existing.ParentIndexNumber = it.ParentIndexNumber;
           }
           // 如果已有记录是简短的 SearchHint，用完整的 Items 属性补充
           if (!existing.Overview && it.Overview) existing.Overview = it.Overview;
@@ -1741,8 +1834,8 @@ export async function searchMediaItems(
   }
 
   const allItems = Array.from(itemMap.values());
-  // 剧集按 SeriesId 或 SeriesName 自动折叠去重
-  return mergeMediaBySeries(allItems);
+  // 优先保留剧集主体卡片，按 SeriesId 与规范化剧名折叠去重
+  return mergeMediaBySeries(allItems, { preferSeries: true });
 }
 
 export interface FederatedServerTarget {
@@ -1769,91 +1862,15 @@ export interface FederatedSearchResponse {
 }
 
 /**
- * 跨多个 Emby 服务器联合并发聚合检索
- * 1. 并发请求各台已配置并处于活动状态的 Emby 服务器（通过 searchMediaItems 穿透各服务器全部分类库）；
- * 2. 任何单台服务器超时或网络异常均通过 Promise.allSettled 容错捕获，不阻塞其他健康服务器；
- * 3. 为所有返回影视条目自动注入来源 ServerId、ServerName、ServerUrl；
- * 4. 跨服务器智能合并与相关度排序（精准匹配优先、年份最新优先）；
- * 5. 附带返回各服务器的响应状态与匹配条数统计。
+ * 跨服搜索结果统一相关度排序：
+ * 1. 完全匹配片名优先
+ * 2. 前缀匹配优先
+ * 3. 非 Episode（剧集主体/电影/合集）优先于单集条目
+ * 4. 上映年份较新优先
  */
-export async function searchFederatedMediaItems(
-  targets: FederatedServerTarget[],
-  params: {
-    keyword: string;
-    filterType?: SearchFilterType;
-    limitPerServer?: number;
-  }
-): Promise<FederatedSearchResponse> {
-  const cleanTerm = params.keyword.trim();
-  if (!cleanTerm || targets.length === 0) {
-    return { items: [], stats: [] };
-  }
-
-  const stats: FederatedSearchStats[] = [];
-  const allResults: EmbyItem[] = [];
-
-  const tasks = targets.map(async (target) => {
-    const startTime = performance.now();
-    try {
-      const items = await searchMediaItems(
-        target.url,
-        target.userId,
-        target.accessToken,
-        {
-          keyword: cleanTerm,
-          filterType: params.filterType,
-          views: target.views,
-          limit: params.limitPerServer || 60,
-        }
-      );
-      const durationMs = Math.round(performance.now() - startTime);
-
-      const enriched = items.map((it) => ({
-        ...it,
-        ServerId: target.id,
-        ServerName: target.name,
-        ServerUrl: target.url,
-      }));
-
-      return {
-        serverId: target.id,
-        serverName: target.name,
-        ok: true,
-        count: enriched.length,
-        durationMs,
-        items: enriched,
-      };
-    } catch (err: any) {
-      const durationMs = Math.round(performance.now() - startTime);
-      console.warn(`[searchFederatedMediaItems] Server ${target.name} (${target.id}) error:`, err);
-      return {
-        serverId: target.id,
-        serverName: target.name,
-        ok: false,
-        count: 0,
-        durationMs,
-        error: err?.message || '连接失败或超时',
-        items: [] as EmbyItem[],
-      };
-    }
-  });
-
-  const settled = await Promise.allSettled(tasks);
-
-  for (const s of settled) {
-    if (s.status === 'fulfilled') {
-      const { items, ...stat } = s.value;
-      stats.push(stat);
-      allResults.push(...items);
-    }
-  }
-
-  // 跨服结果智能排序：
-  // 1. 完全匹配片名优先
-  // 2. 前缀匹配优先
-  // 3. 上映年份较新优先
-  const lowerTerm = cleanTerm.toLowerCase();
-  allResults.sort((a, b) => {
+export function sortFederatedSearchItems(items: EmbyItem[], keyword: string): EmbyItem[] {
+  const lowerTerm = keyword.trim().toLowerCase();
+  return [...items].sort((a, b) => {
     const aName = (a.Name || '').toLowerCase();
     const bName = (b.Name || '').toLowerCase();
 
@@ -1867,15 +1884,112 @@ export async function searchFederatedMediaItems(
     if (aStart && !bStart) return -1;
     if (!aStart && bStart) return 1;
 
+    const aIsEpisode = a.Type === 'Episode';
+    const bIsEpisode = b.Type === 'Episode';
+    if (!aIsEpisode && bIsEpisode) return -1;
+    if (aIsEpisode && !bIsEpisode) return 1;
+
     const aYear = a.ProductionYear || 0;
     const bYear = b.ProductionYear || 0;
     if (aYear !== bYear) return bYear - aYear;
 
     return 0;
   });
+}
+
+/**
+ * 跨多个 Emby 服务器联合并发聚合检索
+ * 1. 并行请求各台已配置 Emby 服务器（支持渐进式单服回调 onServerResult，快服率先返回展示）；
+ * 2. 内置单服超时保护与 Promise.allSettled 容错捕获，单服超时/离线不阻塞其他健康服务器；
+ * 3. 为所有返回影视条目自动注入来源 ServerId、ServerName、ServerUrl；
+ * 4. 跨服务器智能合并与相关度排序（精准匹配优先、剧集/电影主体优先、年份最新优先）；
+ * 5. 附带返回各服务器的响应状态与匹配条数统计。
+ */
+export async function searchFederatedMediaItems(
+  targets: FederatedServerTarget[],
+  params: {
+    keyword: string;
+    filterType?: SearchFilterType;
+    limitPerServer?: number;
+    timeoutMs?: number;
+    onServerResult?: (payload: { stat: FederatedSearchStats; items: EmbyItem[] }) => void;
+  }
+): Promise<FederatedSearchResponse> {
+  const cleanTerm = params.keyword.trim();
+  if (!cleanTerm || targets.length === 0) {
+    return { items: [], stats: [] };
+  }
+
+  const timeoutMs = params.timeoutMs ?? 12000;
+  const stats: FederatedSearchStats[] = [];
+  const allResults: EmbyItem[] = [];
+
+  const tasks = targets.map(async (target) => {
+    const startTime = performance.now();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const items = await Promise.race([
+        searchMediaItems(target.url, target.userId, target.accessToken, {
+          keyword: cleanTerm,
+          filterType: params.filterType,
+          views: target.views,
+          limit: params.limitPerServer || 60,
+        }),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('请求超时')), timeoutMs);
+        }),
+      ]);
+      const durationMs = Math.round(performance.now() - startTime);
+
+      const enriched = items.map((it) => ({
+        ...it,
+        ServerId: target.id,
+        ServerName: target.name,
+        ServerUrl: target.url,
+      }));
+
+      const stat: FederatedSearchStats = {
+        serverId: target.id,
+        serverName: target.name,
+        ok: true,
+        count: enriched.length,
+        durationMs,
+      };
+      params.onServerResult?.({ stat, items: enriched });
+
+      return { stat, items: enriched };
+    } catch (err: any) {
+      const durationMs = Math.round(performance.now() - startTime);
+      console.warn(`[searchFederatedMediaItems] Server ${target.name} (${target.id}) error:`, err);
+      const stat: FederatedSearchStats = {
+        serverId: target.id,
+        serverName: target.name,
+        ok: false,
+        count: 0,
+        durationMs,
+        error: err?.message || '连接失败或超时',
+      };
+      params.onServerResult?.({ stat, items: [] as EmbyItem[] });
+
+      return { stat, items: [] as EmbyItem[] };
+    } finally {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
+    }
+  });
+
+  const settled = await Promise.allSettled(tasks);
+
+  for (const s of settled) {
+    if (s.status === 'fulfilled') {
+      stats.push(s.value.stat);
+      allResults.push(...s.value.items);
+    }
+  }
 
   return {
-    items: allResults,
+    items: sortFederatedSearchItems(allResults, cleanTerm),
     stats,
   };
 }

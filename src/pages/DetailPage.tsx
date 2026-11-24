@@ -1,6 +1,6 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Play, HardDrive } from 'lucide-react';
+import { ArrowLeft, Play, HardDrive, Layers } from 'lucide-react';
 import { useAuthStore } from '../stores/useAuthStore';
 import { usePlayerStore } from '../stores/usePlayerStore';
 import {
@@ -15,7 +15,11 @@ import {
   formatFileSize,
   getItemFileSize,
 } from '../api/embyClient';
-import { fetchAndPreparePlaybackSession } from '../player/playbackSessionService';
+import {
+  fetchAndPreparePlaybackSession,
+  formatMediaSourceMeta,
+  sortMediaSourcesByQuality,
+} from '../player/playbackSessionService';
 import { EpisodeGrid } from '../components/media/EpisodeGrid';
 
 export const DetailPage: React.FC = () => {
@@ -37,7 +41,29 @@ export const DetailPage: React.FC = () => {
   const [episodesLoading, setEpisodesLoading] = useState(false);
   const [startingPlay, setStartingPlay] = useState(false);
   const [overviewExpanded, setOverviewExpanded] = useState(false);
+  const [selectedMediaSourceId, setSelectedMediaSourceId] = useState<string | undefined>(undefined);
   const loadReqIdRef = useRef(0);
+  const prevVersionItemIdRef = useRef<string | undefined>(undefined);
+
+  const sortedItemMediaSources = useMemo(
+    () => sortMediaSourcesByQuality(item?.MediaSources || []),
+    [item?.MediaSources]
+  );
+
+  useEffect(() => {
+    const itemChanged = prevVersionItemIdRef.current !== item?.Id;
+    prevVersionItemIdRef.current = item?.Id;
+    if (sortedItemMediaSources.length === 0) {
+      setSelectedMediaSourceId(undefined);
+      return;
+    }
+    setSelectedMediaSourceId((prev) => {
+      if (!itemChanged && prev && sortedItemMediaSources.some((ms) => ms.Id === prev)) {
+        return prev;
+      }
+      return sortedItemMediaSources[0].Id;
+    });
+  }, [item?.Id, sortedItemMediaSources]);
 
   useEffect(() => {
     setOverviewExpanded(false);
@@ -157,7 +183,7 @@ export const DetailPage: React.FC = () => {
   };
 
   // Launch Playback for an item (movie or episode)
-  const startPlayback = async (targetItem: EmbyItem) => {
+  const startPlayback = async (targetItem: EmbyItem, preferredMediaSourceId?: string) => {
     if (!currentServer) return;
     try {
       setStartingPlay(true);
@@ -166,7 +192,8 @@ export const DetailPage: React.FC = () => {
         currentServer,
         targetItem.Id,
         engineType,
-        targetItem
+        targetItem,
+        preferredMediaSourceId
       );
 
       setPlaybackContext(session);
@@ -208,10 +235,11 @@ export const DetailPage: React.FC = () => {
 
   const fileSizeSummary: { label: string; tooltip: string } | null = (() => {
     if (!isSeries) {
-      const sourcesWithSize = (item.MediaSources || []).filter(
+      const sourcesWithSize = sortedItemMediaSources.filter(
         (ms) => typeof ms.Size === 'number' && Number.isFinite(ms.Size) && ms.Size > 0
       );
-      const primarySize = getItemFileSize(item);
+      const primarySize =
+        sourcesWithSize[0]?.Size || sortedItemMediaSources[0]?.Size || getItemFileSize(item);
       if (!primarySize) return null;
 
       if (sourcesWithSize.length > 1) {
@@ -227,7 +255,7 @@ export const DetailPage: React.FC = () => {
         };
       }
 
-      const container = sourcesWithSize[0]?.Container || item.MediaSources?.[0]?.Container;
+      const container = sourcesWithSize[0]?.Container || sortedItemMediaSources[0]?.Container;
       const formatted = formatFileSize(primarySize);
       return {
         label: formatted,
@@ -414,17 +442,71 @@ export const DetailPage: React.FC = () => {
               </div>
             )}
 
-            {/* 电影或指定单集直接起播按钮 */}
+            {/* 电影或指定单集版本选择与直接起播按钮 */}
             {!isSeries && (
-              <div className="pt-2">
-                <button
-                  onClick={() => startPlayback(item)}
-                  disabled={startingPlay}
-                  className="px-8 py-3 rounded-full bg-[#38BDF8] hover:bg-[#0ea5e9] text-slate-950 font-bold text-sm shadow-xl shadow-sky-500/25 transition cursor-pointer flex items-center space-x-2 disabled:opacity-50"
-                >
-                  <Play className="w-4 h-4 fill-current" />
-                  <span>{playButtonLabel}</span>
-                </button>
+              <div className="pt-2 space-y-3">
+                {sortedItemMediaSources.length > 1 && (
+                  <div className="space-y-2 max-w-3xl">
+                    <div className="flex items-center space-x-1.5 text-xs font-semibold text-slate-300">
+                      <Layers className="w-3.5 h-3.5 text-[#38BDF8]" />
+                      <span>选择播放版本（默认已选最高清晰度，共 {sortedItemMediaSources.length} 个版本）</span>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {sortedItemMediaSources.map((ms, idx) => {
+                        const isSelected = ms.Id === (selectedMediaSourceId ?? sortedItemMediaSources[0]?.Id);
+                        const meta = formatMediaSourceMeta(ms);
+                        const specLine = [
+                          meta.resolutionLabel,
+                          meta.hdrLabel,
+                          meta.containerLabel,
+                          meta.sizeLabel,
+                        ]
+                          .filter(Boolean)
+                          .join(' · ');
+
+                        return (
+                          <button
+                            key={ms.Id}
+                            type="button"
+                            onClick={() => setSelectedMediaSourceId(ms.Id)}
+                            className={`text-left px-3.5 py-2 rounded-xl border text-xs transition cursor-pointer max-w-xs ${
+                              isSelected
+                                ? 'bg-[#38BDF8]/15 border-[#38BDF8] text-white shadow-md shadow-sky-500/15'
+                                : 'bg-white/[0.04] border-white/[0.08] text-slate-300 hover:bg-white/[0.08] hover:border-white/20'
+                            }`}
+                          >
+                            <div className="flex items-center space-x-1.5 min-w-0">
+                              <span className="font-semibold truncate">
+                                {ms.Name || meta.resolutionLabel || '默认版本'}
+                              </span>
+                              {idx === 0 && (
+                                <span className="shrink-0 px-1.5 py-0.5 rounded bg-[#38BDF8]/20 text-[#38BDF8] text-[10px] font-bold">
+                                  最高画质
+                                </span>
+                              )}
+                            </div>
+                            {specLine && (
+                              <div className="text-[11px] font-mono text-slate-400 mt-0.5 truncate">
+                                {specLine}
+                              </div>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                <div>
+                  <button
+                    onClick={() => startPlayback(item, selectedMediaSourceId)}
+                    disabled={startingPlay}
+                    className="px-8 py-3 rounded-full bg-[#38BDF8] hover:bg-[#0ea5e9] text-slate-950 font-bold text-sm shadow-xl shadow-sky-500/25 transition cursor-pointer flex items-center space-x-2 disabled:opacity-50"
+                  >
+                    <Play className="w-4 h-4 fill-current" />
+                    <span>{playButtonLabel}</span>
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -463,7 +545,13 @@ export const DetailPage: React.FC = () => {
             <EpisodeGrid
               episodes={episodes}
               serverUrl={currentServer!.url}
-              currentEpisodeId={item.Type === 'Episode' ? item.Id : undefined}
+              currentEpisodeId={
+                item.Type === 'Episode'
+                  ? item.Id
+                  : cachedPlayerItem?.Type === 'Episode' && cachedPlayerItem.SeriesId === item.Id
+                  ? cachedPlayerItem.Id
+                  : undefined
+              }
               seriesItem={isSeries ? item : seriesItem}
               onSelectEpisode={(ep) => startPlayback(ep)}
             />

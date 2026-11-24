@@ -33,6 +33,8 @@ export interface DanmakuBinding {
   sourcePlatform?: string;
   commentCount: number;
   sourceDuration?: number;
+  danmuServerId?: string;
+  danmuServerBaseUrl?: string;
   boundAt: number;
 }
 
@@ -45,6 +47,8 @@ export interface SeriesDanmakuBinding {
     episodeTitle: string;
     episodeNumber?: string | number;
   }>;
+  danmuServerId?: string;
+  danmuServerBaseUrl?: string;
   boundAt: number;
 }
 
@@ -75,6 +79,7 @@ export interface PlayerPreferences {
   subPos: number; // 50 ~ 100
   autoPlayNext: boolean; // 自动连播下一集
   pauseOnHeadphoneDisconnect: boolean; // 耳机摘下或断开连接时自动暂停
+  defaultBottomAlign: boolean; // 宽银幕画面沉浸贴底全局默认开关
   longPressSpeed: 2.0 | 2.5 | 3.0; // 长按右方向键倍速
   skipIntroSeconds: number; // 快捷跳过片头秒数
   showRemainingTime: boolean; // 是否显示剩余时间
@@ -250,6 +255,7 @@ export const DEFAULT_PLAYER_PREFERENCES: PlayerPreferences = {
   subPos: 100,
   autoPlayNext: true,
   pauseOnHeadphoneDisconnect: true,
+  defaultBottomAlign: false,
   longPressSpeed: 2.5,
   skipIntroSeconds: 85,
   showRemainingTime: false,
@@ -298,6 +304,10 @@ export function normalizePlayerPreferences(
       typeof merged.pauseOnHeadphoneDisconnect === 'boolean'
         ? merged.pauseOnHeadphoneDisconnect
         : base.pauseOnHeadphoneDisconnect,
+    defaultBottomAlign:
+      typeof merged.defaultBottomAlign === 'boolean'
+        ? merged.defaultBottomAlign
+        : base.defaultBottomAlign,
     bufferDurationSeconds: clampInt(merged.bufferDurationSeconds, 60, 1800, base.bufferDurationSeconds),
     preloadNextEnabled:
       typeof merged.preloadNextEnabled === 'boolean'
@@ -729,7 +739,10 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 
   setVideoLayout: (key, config) => {
     set((state) => {
-      const prev = state.videoLayouts[key] || { bottomAlign: false, verticalOffset: 100 };
+      const prev = state.videoLayouts[key] || {
+        bottomAlign: state.playerPreferences.defaultBottomAlign,
+        verticalOffset: 100,
+      };
       const updated = {
         ...state.videoLayouts,
         [key]: { ...prev, ...config },

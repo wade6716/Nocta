@@ -57,7 +57,16 @@ function renderViewCountBadge(counts?: ViewCounts) {
   );
 }
 
-export const HomePage: React.FC = () => {
+const VIEW_COUNTS_TTL_MS = 5 * 60 * 1000;
+
+function getHomeScrollContainer(): HTMLElement | null {
+  return (
+    document.getElementById('home-scroll-container') ||
+    document.getElementById('main-scroll-container')
+  );
+}
+
+export const HomePage: React.FC<{ isActive?: boolean }> = ({ isActive = true }) => {
   const navigate = useNavigate();
   const currentServer = useAuthStore((s) => s.getCurrentServer());
   // 订阅代理/UA 修订号，确保站内弹层修改代理后首页海报立即按新策略刷新
@@ -71,13 +80,14 @@ export const HomePage: React.FC = () => {
     views,
     latestMap,
     viewCounts,
+    playbackDirtyRevision,
     isLoaded,
     isRefreshing,
     homeScrollY,
     cacheVersion,
     setMediaData,
     updateResumeAndRecent,
-    updateViewCount,
+    setViewCounts,
     setRefreshing,
     setHomeScrollY,
   } = useMediaStore();
@@ -90,32 +100,47 @@ export const HomePage: React.FC = () => {
   const [isProxyModalOpen, setIsProxyModalOpen] = useState(false);
   const setPlaybackContext = usePlayerStore((s) => s.setPlaybackContext);
   const loadReqIdRef = useRef(0);
+  const lastHandledDirtyRef = useRef(playbackDirtyRevision);
 
   const fetchCountsForViews = useCallback(
-    (currentViews: EmbyItem[], targetServer: SavedServer, reqId: number) => {
-      currentViews.forEach((v) => {
-        getViewItemCounts(
-          targetServer.url,
-          targetServer.userId,
-          v.Id,
-          v.CollectionType,
-          targetServer.accessToken
-        )
-          .then((counts) => {
-            if (
-              reqId !== loadReqIdRef.current ||
-              useAuthStore.getState().getCurrentServer()?.id !== targetServer.id
-            ) {
-              return;
-            }
-            updateViewCount(v.Id, counts);
-          })
-          .catch((e) => {
-            console.warn(`[fetchCountsForViews error for ${v.Name}]`, e);
-          });
-      });
+    async (currentViews: EmbyItem[], targetServer: SavedServer, reqId: number) => {
+      if (currentViews.length === 0) return;
+
+      const settled = await Promise.allSettled(
+        currentViews.map(async (v) => ({
+          viewId: v.Id,
+          counts: await getViewItemCounts(
+            targetServer.url,
+            targetServer.userId,
+            v.Id,
+            v.CollectionType,
+            targetServer.accessToken
+          ),
+        }))
+      );
+
+      if (
+        reqId !== loadReqIdRef.current ||
+        useAuthStore.getState().getCurrentServer()?.id !== targetServer.id
+      ) {
+        return;
+      }
+
+      const nextCounts: Record<string, ViewCounts> = {
+        ...useMediaStore.getState().viewCounts,
+      };
+      let hasUpdates = false;
+      for (const r of settled) {
+        if (r.status === 'fulfilled') {
+          nextCounts[r.value.viewId] = r.value.counts;
+          hasUpdates = true;
+        }
+      }
+      if (hasUpdates) {
+        setViewCounts(nextCounts);
+      }
     },
-    [updateViewCount]
+    [setViewCounts]
   );
 
   const loadData = useCallback(
@@ -135,7 +160,7 @@ export const HomePage: React.FC = () => {
         setRefreshing(true);
       } else if (!serverCached) {
         setLoading(true);
-        document.getElementById('main-scroll-container')?.scrollTo({ top: 0 });
+        getHomeScrollContainer()?.scrollTo({ top: 0 });
       }
 
       try {
@@ -155,8 +180,12 @@ export const HomePage: React.FC = () => {
             recentlyPlayedItems: resRecent || [],
           });
 
-          // 缓存模式下也在后台轻量同步各分类统计数
-          if (mediaState.views.length > 0) {
+          // 缓存模式下按 5 分钟 TTL 节流后台同步各分类统计数（批量合并一次渲染）
+          const shouldRefreshCounts =
+            mediaState.views.length > 0 &&
+            (mediaState.lastViewCountsSyncAt <= 0 ||
+              Date.now() - mediaState.lastViewCountsSyncAt >= VIEW_COUNTS_TTL_MS);
+          if (shouldRefreshCounts) {
             fetchCountsForViews(mediaState.views, targetServer, reqId);
           }
           return;
@@ -201,7 +230,7 @@ export const HomePage: React.FC = () => {
           latestMap: latestEntries,
         });
 
-        // 异步并发拉取每个媒体库的剧集和电影数量
+        // 异步并发拉取每个媒体库的剧集和电影数量（Promise.allSettled 一次批量提交）
         fetchCountsForViews(userViews, targetServer, reqId);
       } catch (err: any) {
         if (!isStale()) {
@@ -219,7 +248,9 @@ export const HomePage: React.FC = () => {
 
   useEffect(() => {
     if (!currentServer) {
-      navigate('/login');
+      if (isActive) {
+        navigate('/login');
+      }
       return;
     }
 
@@ -231,15 +262,23 @@ export const HomePage: React.FC = () => {
     // 服务器切换、地址/令牌变更或手动清除缓存时均强制重新拉取媒体库
   }, [currentServer?.id, currentServer?.url, currentServer?.accessToken, cacheVersion]);
 
+  // 仅当离开播放页产生了新播放进度且回到首页激活态时，后台静默同步断点与最近播放（普通切换零请求）
+  useEffect(() => {
+    if (!isActive || !currentServer) return;
+    if (playbackDirtyRevision === lastHandledDirtyRef.current) return;
+    lastHandledDirtyRef.current = playbackDirtyRevision;
+    loadData(false);
+  }, [isActive, playbackDirtyRevision, currentServer, loadData]);
+
   // Restore scroll position when returning from video/detail pages
   useLayoutEffect(() => {
     if (isCached && homeScrollY > 0) {
-      const container = document.getElementById('main-scroll-container');
+      const container = getHomeScrollContainer();
       if (container) {
         container.scrollTop = homeScrollY;
       }
       const frameId = requestAnimationFrame(() => {
-        const el = document.getElementById('main-scroll-container');
+        const el = getHomeScrollContainer();
         if (el && Math.abs(el.scrollTop - homeScrollY) > 5) {
           el.scrollTop = homeScrollY;
         }
@@ -252,7 +291,7 @@ export const HomePage: React.FC = () => {
   useEffect(() => {
     const saveCurrentScroll = () => {
       if (!useMediaStore.getState().isLoaded) return;
-      const container = document.getElementById('main-scroll-container');
+      const container = getHomeScrollContainer();
       if (container) {
         setHomeScrollY(container.scrollTop);
       }
@@ -265,6 +304,7 @@ export const HomePage: React.FC = () => {
 
   // 全局搜索快捷键监听 (Ctrl+K / Cmd+K / 斜杠)
   useEffect(() => {
+    if (!isActive) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
@@ -279,10 +319,10 @@ export const HomePage: React.FC = () => {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [navigate]);
+  }, [isActive, navigate]);
 
   const saveHomeScroll = useCallback(() => {
-    const container = document.getElementById('main-scroll-container');
+    const container = getHomeScrollContainer();
     if (container) {
       setHomeScrollY(container.scrollTop);
     }

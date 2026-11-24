@@ -86,6 +86,7 @@ import {
   EMBY_USER_AGENT_PRESETS,
 } from '../api/embyClient';
 import { ProxyConfig, ProxyType } from '../api/http';
+import { ReleaseNotesContent } from '../components/common/UpdateBannerModal';
 
 type TabKey = 'servers' | 'danmu' | 'danmaku_pref' | 'playback' | 'network' | 'sync' | 'about';
 
@@ -3124,8 +3125,8 @@ export const SettingsPage: React.FC = () => {
                     </div>
 
                     {updater.updateInfo.body && (
-                      <div className="max-h-36 overflow-y-auto custom-scrollbar rounded-xl bg-black/30 border border-white/[0.07] p-3 text-xs text-slate-300 leading-relaxed whitespace-pre-wrap">
-                        {updater.updateInfo.body}
+                      <div className="max-h-40 overflow-y-auto custom-scrollbar rounded-xl bg-black/30 border border-white/[0.07] p-3 text-xs text-slate-300 leading-relaxed">
+                        <ReleaseNotesContent body={updater.updateInfo.body} />
                       </div>
                     )}
 

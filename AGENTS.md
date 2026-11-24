@@ -477,3 +477,13 @@
 - **多弹幕 API 节点并发搜番与归属节点直连延续 ([`DanmakuDrawer.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/DanmakuDrawer.tsx) / [`useDanmakuSession.ts`](file:///d:/wade/code/emby-tauri-player/src/player/hooks/useDanmakuSession.ts))**：
   - 配置多个弹幕节点时，手动搜番默认开启「全部节点并发」（可随时一键切回仅当前节点），对各节点并发调用 `searchDanmuAnime`（10s 独立超时 + `searchReqIdRef` 竞态防过期）并流式汇入按 `${server.id}::${animeId}` 隔离的候选列表，支持按节点胶囊实时状态展示与一键筛选；
   - 拉取分集、拉取弹幕及写入 `DanmakuBinding` / `SeriesDanmakuBinding`（扩展可选 `danmuServerId`、`danmuServerBaseUrl`）时严格路由回番剧所属的源节点 `_server`；后续播放或同剧自动延续由 `resolveBindingServer` 优先按归属节点拉取，即使主切换至其他默认节点也不失效。
+
+### 37. 时长感知两阶段弹幕自动匹配与多节点熔断故障转移规范
+- **纯逻辑时长校验与保底择优策略 ([`danmuMatchPolicy.ts`](file:///d:/wade/code/emby-tauri-player/src/api/danmuMatchPolicy.ts))**：
+  - 混合时长偏差阈值 `getMaxAcceptableDurationDiff = clamp(videoDuration * 12%, 90s, 300s)`；当 Stage 1 (`POST /api/v2/match`) 返回 0 条弹幕或时长偏差超出阈值（`grade === 'mismatch'`）时，`shouldTriggerStage2Fallback` 自动触发 Stage 2 关键词多变体搜索（`buildDanmuSearchKeywords`）与候选分集排序（`rankMatchingEpisodes` 优先正片、降权预告/花絮/加更并对齐副标题）。
+  - 一阶段结果作为保底保留，仅当 Stage 2 或备用节点探测出 `scoreMatchedCandidate` 严格更优（时长契合 + 有效弹幕优先）的结果时才替换，确保绝不越纠偏越差；同时单节点 Stage 1 最多探测 2 个候选、Stage 2 最多有界探测 4 个未探分集，任一候选命中高置信即刻短路。
+- **多弹幕节点硬超时与指数冷却熔断 ([`danmuServerHealth.ts`](file:///d:/wade/code/emby-tauri-player/src/api/danmuServerHealth.ts) / [`danmuClient.ts`](file:///d:/wade/code/emby-tauri-player/src/api/danmuClient.ts))**：
+  - 所有弹幕 HTTP 接口统一接入 `AbortController` 硬超时（`/match` 6s、`/search/anime` 7s、`/bangumi` 6s、`/comment` 10s）；仅传输异常/超时/`401`/`403`/`429`/`5xx` 触发 `recordServerFailure` 指数退避冷却（1 次不熔断 → 2 次 60s → 3 次 180s → 300s），正常 `200 OK` 空结果或 `404` 不惩罚节点健康度；[`useDanmuStore.ts`](file:///d:/wade/code/emby-tauri-player/src/stores/useDanmuStore.ts) 的 `testServerConnection` 与真实响应共用 `recordServerSuccess`/`recordServerFailure` 更新熔断态与 EMA 延迟。
+  - [`autoMatchAndFetchDanmu`](file:///d:/wade/code/emby-tauri-player/src/api/danmuClient.ts) 按 `orderDanmuServersForAutoMatch` 依次最多探测 3 个节点（主节点健康则优先并高置信短路，失效时平滑移交低延迟备用节点），单测见 [`danmu-match-policy.test.mjs`](file:///d:/wade/code/emby-tauri-player/scripts/danmu-match-policy.test.mjs) 与 [`danmu-server-health.test.mjs`](file:///d:/wade/code/emby-tauri-player/scripts/danmu-server-health.test.mjs)。
+- **会话集成避坑 (`effectiveDurationRef`)**：
+  - 在 [`useDanmakuSession.ts`](file:///d:/wade/code/emby-tauri-player/src/player/hooks/useDanmakuSession.ts) 中必须通过 `effectiveDurationRef` 读取运行时片源时长兜底（`ticksToSeconds(item.RunTimeTicks || 0) || effectiveDurationRef.current`），**严禁**将 `effectiveDuration` 直接加入 `triggerDanmakuLoad` 的 `useCallback` 依赖数组，否则底层播放器起播汇报时长更新时会重复触发 `autoMatchAndFetchDanmu` 造成弹幕二次闪刷；同时 `autoSeriesCacheRef` 记录实际获胜节点 `server` 以便同剧续集直接沿用而不改写用户全局主节点。

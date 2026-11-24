@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { httpClient } from '../api/http';
+import { recordServerFailure, recordServerSuccess } from '../api/danmuServerHealth';
 
 export interface DanmuServerEntry {
   id: string;
@@ -200,10 +201,12 @@ export const useDanmuStore = create<DanmuState>((set, get) => {
         const latency = Math.round(performance.now() - startTime);
 
         if (res.ok) {
+          recordServerSuccess(server.baseUrl, latency);
           get().updateServer(id, { status: 'ok', latency, errorMessage: undefined });
           return { ok: true, latency };
         } else if (res.status === 401 || res.status === 403) {
           const errText = `Token 错误或未授权 (HTTP ${res.status})`;
+          recordServerFailure(server.baseUrl, errText);
           get().updateServer(id, { status: 'error', latency, errorMessage: errText });
           return { ok: false, latency, error: errText };
         } else {
@@ -217,10 +220,12 @@ export const useDanmuStore = create<DanmuState>((set, get) => {
             });
             const fbLatency = Math.round(performance.now() - startTime);
             if (fbRes.ok) {
+              recordServerSuccess(server.baseUrl, fbLatency);
               get().updateServer(id, { status: 'ok', latency: fbLatency, errorMessage: undefined });
               return { ok: true, latency: fbLatency };
             } else if (fbRes.status === 401 || fbRes.status === 403) {
               const errText = `Token 错误或未授权 (HTTP ${fbRes.status})`;
+              recordServerFailure(server.baseUrl, errText);
               get().updateServer(id, { status: 'error', latency: fbLatency, errorMessage: errText });
               return { ok: false, latency: fbLatency, error: errText };
             }
@@ -233,6 +238,7 @@ export const useDanmuStore = create<DanmuState>((set, get) => {
             const rootRes = await httpClient(`${baseWithoutApi}/`, { method: 'GET' });
             const rootLatency = Math.round(performance.now() - startTime);
             if (rootRes.ok) {
+              recordServerSuccess(server.baseUrl, rootLatency);
               get().updateServer(id, { status: 'ok', latency: rootLatency, errorMessage: undefined });
               return { ok: true, latency: rootLatency };
             }
@@ -241,12 +247,14 @@ export const useDanmuStore = create<DanmuState>((set, get) => {
           }
 
           const errText = `接口返回 HTTP ${res.status}`;
+          recordServerFailure(server.baseUrl, errText);
           get().updateServer(id, { status: 'error', latency, errorMessage: errText });
           return { ok: false, latency, error: errText };
         }
       } catch (err: any) {
         const latency = Math.round(performance.now() - startTime);
         const errText = err?.message || '无法连接到服务器 (请确认服务已启动或地址可达)';
+        recordServerFailure(server.baseUrl, errText);
         get().updateServer(id, { status: 'error', latency, errorMessage: errText });
         return { ok: false, latency, error: errText };
       }

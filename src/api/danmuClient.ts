@@ -1,4 +1,89 @@
 import { httpClient } from './http';
+import {
+  buildDanmuSearchKeywords,
+  DurationMatchGrade,
+  evaluateDurationMatch,
+  isHighConfidenceMatch,
+  rankMatchingEpisodes,
+  scoreMatchedCandidate,
+  shouldTriggerStage2Fallback,
+  Stage1FallbackReason,
+} from './danmuMatchPolicy';
+import {
+  isRetryableDanmuTransportError,
+  normalizeDanmuServerKey,
+  orderDanmuServersForAutoMatch,
+  recordServerFailure,
+  recordServerSuccess,
+} from './danmuServerHealth';
+
+export class DanmuHttpError extends Error {
+  status?: number;
+  isTimeout: boolean;
+
+  constructor(message: string, opts?: { status?: number; isTimeout?: boolean }) {
+    super(message);
+    this.name = 'DanmuHttpError';
+    this.status = opts?.status;
+    this.isTimeout = Boolean(opts?.isTimeout);
+  }
+}
+
+async function fetchDanmuJson<T>(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number
+): Promise<{ data: T; latencyMs: number }> {
+  const controller = new AbortController();
+  const externalSignal = init.signal;
+  let timedOut = false;
+
+  const onExternalAbort = () => controller.abort();
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      controller.abort();
+    } else {
+      externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+    }
+  }
+
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+
+  const startedAt = Date.now();
+  try {
+    const res = await httpClient(url, {
+      ...init,
+      signal: controller.signal,
+    });
+    const latencyMs = Math.max(0, Date.now() - startedAt);
+    if (!res.ok) {
+      throw new DanmuHttpError(`HTTP ${res.status}`, { status: res.status });
+    }
+    const data = (await res.json()) as T;
+    return { data, latencyMs };
+  } catch (err: any) {
+    if (timedOut) {
+      throw new DanmuHttpError(`Request timeout after ${timeoutMs}ms`, {
+        status: 408,
+        isTimeout: true,
+      });
+    }
+    if (err instanceof DanmuHttpError) {
+      throw err;
+    }
+    throw new DanmuHttpError(err?.message || 'Network request failed', {
+      status: typeof err?.status === 'number' ? err.status : undefined,
+    });
+  } finally {
+    clearTimeout(timer);
+    if (externalSignal) {
+      externalSignal.removeEventListener('abort', onExternalAbort);
+    }
+  }
+}
 
 export interface DanmuConfig {
   baseUrl: string; // 例如 "http://127.0.0.1:9321/87654321" 或远程地址（Token 直接写在地址中）
@@ -254,10 +339,10 @@ function buildEndpoint(config: DanmuConfig, path: string): string {
 }
 
 /**
- * 1. 自动匹配剧集弹幕 ID (POST /api/v2/match)
- * 支持传入剧集名与季集，或原始文件名
+ * 1. 自动匹配剧集弹幕候选列表 (POST /api/v2/match)
+ * 提取前 3 个候选供后续时长校验与回退探测；网络/服务端异常将上抛以便故障转移
  */
-export async function autoMatchEpisode(
+export async function autoMatchEpisodeCandidates(
   config: DanmuConfig,
   params: {
     seriesName?: string;
@@ -265,7 +350,7 @@ export async function autoMatchEpisode(
     episodeNumber?: number;
     fileName?: string;
   }
-): Promise<DanmuAnimeMatch | null> {
+): Promise<DanmuAnimeMatch[]> {
   let queryName = params.fileName || '';
   if (params.seriesName && params.episodeNumber !== undefined) {
     const s = String(params.seasonNumber ?? 1).padStart(2, '0');
@@ -277,27 +362,50 @@ export async function autoMatchEpisode(
   }
 
   const url = buildEndpoint(config, '/api/v2/match');
-  try {
-    const res = await httpClient(url, {
+  const { data, latencyMs } = await fetchDanmuJson<{
+    isMatched?: boolean;
+    matches?: Array<{ episodeId: number | string; animeTitle?: string; episodeTitle?: string }>;
+  }>(
+    url,
+    {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ fileName: queryName.trim() }),
-    });
+    },
+    6000
+  );
 
-    if (!res.ok) return null;
-    const data = await res.json();
-    if (data?.isMatched && data?.matches?.length > 0) {
-      const best = data.matches[0];
-      return {
-        episodeId: best.episodeId,
-        animeTitle: best.animeTitle,
-        episodeTitle: best.episodeTitle,
-      };
-    }
+  recordServerSuccess(config.baseUrl, latencyMs);
+
+  if (data?.isMatched && Array.isArray(data.matches) && data.matches.length > 0) {
+    return data.matches.slice(0, 3).map((m) => ({
+      episodeId: m.episodeId,
+      animeTitle: m.animeTitle,
+      episodeTitle: m.episodeTitle,
+    }));
+  }
+  return [];
+}
+
+/**
+ * 1b. 自动匹配剧集弹幕 ID (POST /api/v2/match) - 单结果兼容封装
+ */
+export async function autoMatchEpisode(
+  config: DanmuConfig,
+  params: {
+    seriesName?: string;
+    seasonNumber?: number;
+    episodeNumber?: number;
+    fileName?: string;
+  }
+): Promise<DanmuAnimeMatch | null> {
+  try {
+    const candidates = await autoMatchEpisodeCandidates(config, params);
+    return candidates[0] ?? null;
   } catch (err) {
     console.warn('[Danmu Match Failed]', err);
+    return null;
   }
-  return null;
 }
 
 const SEASON_CHINESE_NUMERALS: Record<number, string> = {
@@ -590,6 +698,338 @@ export async function autoSearchAndMatchEpisode(
   return null;
 }
 
+export interface DanmuAutoMatchFetchResult<TServer extends DanmuConfig & { id: string; name: string }> {
+  match: DanmuAutoMatchResult;
+  comments: RawDanmuComment[];
+  videoDuration?: number;
+  server: TServer;
+  switchedFromPrimary: boolean;
+  fallbackReason?: Stage1FallbackReason;
+  durationGrade: DurationMatchGrade;
+  score: number;
+}
+
+/**
+ * 统一自动匹配与弹幕拉取编排：
+ * - 两阶段时长校验纠偏：Stage 1 命中若 0 弹幕或时长偏差超阈值，保留保底并自动触发 Stage 2 关键词匹配与有界探测
+ * - 多节点有序故障转移：按健康度熔断策略优先尝试主节点，异常/空结果时无缝切换至健康备用节点，高置信即刻短路
+ */
+export async function autoMatchAndFetchDanmu<
+  TServer extends DanmuConfig & { id: string; name: string; latency?: number; status?: string },
+>(
+  servers: TServer[],
+  activeServer: TServer,
+  params: {
+    seriesName?: string;
+    seasonNumber?: number;
+    episodeNumber?: number;
+    fileName?: string;
+    itemType?: string;
+    productionYear?: number;
+    videoDurationSec?: number;
+  },
+  options?: {
+    isCancelled?: () => boolean;
+    maxServers?: number;
+    maxStage2ProbesPerServer?: number;
+  }
+): Promise<DanmuAutoMatchFetchResult<TServer> | null> {
+  const isCancelled = options?.isCancelled;
+  const maxServers = options?.maxServers ?? 3;
+  const maxStage2ProbesPerServer = options?.maxStage2ProbesPerServer ?? 4;
+  const isMovie =
+    params.itemType === 'Movie' || (!params.seriesName && params.episodeNumber === undefined);
+  const resolvedEpisodeNumber =
+    typeof params.episodeNumber === 'number' && params.episodeNumber > 0
+      ? params.episodeNumber
+      : extractEpisodeNumberFromTitle(params.fileName);
+
+  const orderedServers = orderDanmuServersForAutoMatch(servers, activeServer).slice(0, maxServers);
+  const primaryKey = normalizeDanmuServerKey(activeServer.baseUrl);
+  let bestResult: DanmuAutoMatchFetchResult<TServer> | null = null;
+
+  for (const server of orderedServers) {
+    if (isCancelled?.()) return null;
+
+    const switchedFromPrimary = normalizeDanmuServerKey(server.baseUrl) !== primaryKey;
+    const probedEpisodeIds = new Set<string>();
+    let serverHadTransportFailure = false;
+    let stage1FallbackReason: Stage1FallbackReason | undefined;
+
+    // Stage 1: POST /api/v2/match 提取前 2 个候选并拉取真实弹幕与时长校验
+    let stage1Matches: DanmuAnimeMatch[] = [];
+    try {
+      stage1Matches = await autoMatchEpisodeCandidates(server, {
+        seriesName: params.seriesName,
+        seasonNumber: params.seasonNumber,
+        episodeNumber: resolvedEpisodeNumber,
+        fileName: params.fileName,
+      });
+    } catch (err: any) {
+      if (isCancelled?.()) return null;
+      if (isRetryableDanmuTransportError(err)) {
+        recordServerFailure(server.baseUrl, err?.message || 'Match API failed');
+        continue;
+      }
+      console.warn('[Danmu Stage1 Match Failed]', server.name, err);
+    }
+    if (isCancelled?.()) return null;
+
+    for (const cand of stage1Matches.slice(0, 2)) {
+      const epKey = String(cand.episodeId);
+      if (probedEpisodeIds.has(epKey)) continue;
+      probedEpisodeIds.add(epKey);
+
+      try {
+        const commentRes = await fetchCommentsById(server, cand.episodeId);
+        if (isCancelled?.()) return null;
+
+        const comments = commentRes.comments || [];
+        const fallbackCheck = shouldTriggerStage2Fallback({
+          sourceDuration: commentRes.videoDuration,
+          videoDuration: params.videoDurationSec,
+          commentCount: comments.length,
+        });
+
+        const candidateScore = scoreMatchedCandidate({
+          sourceDuration: commentRes.videoDuration,
+          videoDuration: params.videoDurationSec,
+          commentCount: comments.length,
+          episodeTitle: cand.episodeTitle,
+          itemFileName: params.fileName,
+          animeScore: 100,
+          isStage1: true,
+        });
+
+        const candidateResult: DanmuAutoMatchFetchResult<TServer> = {
+          match: {
+            ...cand,
+            matchedBy: 'match_api',
+          },
+          comments,
+          videoDuration: commentRes.videoDuration,
+          server,
+          switchedFromPrimary,
+          fallbackReason: stage1FallbackReason,
+          durationGrade: fallbackCheck.evaluation.grade,
+          score: candidateScore,
+        };
+
+        if (!bestResult || candidateResult.score > bestResult.score) {
+          bestResult = candidateResult;
+        }
+
+        if (!fallbackCheck.shouldFallback) {
+          return candidateResult;
+        }
+
+        if (!stage1FallbackReason && fallbackCheck.reason) {
+          stage1FallbackReason = fallbackCheck.reason;
+        }
+      } catch (err: any) {
+        if (isCancelled?.()) return null;
+        if (isRetryableDanmuTransportError(err)) {
+          recordServerFailure(server.baseUrl, err?.message || 'Fetch comments failed');
+          serverHadTransportFailure = true;
+          break;
+        }
+        console.warn('[Danmu Stage1 Probe Failed]', server.name, cand.episodeId, err);
+      }
+    }
+
+    if (serverHadTransportFailure) {
+      continue;
+    }
+
+    // Stage 2: 关键词多变体搜索 + 分集候选排序与有界探测
+    const keywords = buildDanmuSearchKeywords({
+      seriesName: params.seriesName,
+      fileName: params.fileName,
+      seasonNumber: params.seasonNumber,
+      isMovie,
+    });
+
+    if (keywords.length > 0) {
+      const cleanedBaseKeyword = cleanDanmuSearchKeyword(
+        params.seriesName?.trim() || params.fileName?.trim() || ''
+      );
+      const animeMap = new Map<string, { anime: DanmuAnimeSearchResult; animeScore: number }>();
+      let nonEmptySearchHits = 0;
+
+      for (const kw of keywords) {
+        if (isCancelled?.()) return null;
+        try {
+          const searchRes = await searchDanmuAnime(server, kw);
+          if (isCancelled?.()) return null;
+
+          const list = searchRes?.animes || [];
+          if (list.length > 0) {
+            nonEmptySearchHits += 1;
+            let hasStrongHit = false;
+            for (const anime of list) {
+              const key = String(anime.animeId);
+              const animeScore = scoreAnimeCandidate(anime, {
+                keyword: kw,
+                cleanedKeyword: cleanedBaseKeyword || kw,
+                seasonNumber: params.seasonNumber,
+                year: params.productionYear,
+                isMovie,
+                preferredPlatform: server.preferredPlatform,
+              });
+              if (animeScore >= 90) hasStrongHit = true;
+              const prev = animeMap.get(key);
+              if (!prev || animeScore > prev.animeScore) {
+                animeMap.set(key, { anime, animeScore });
+              }
+            }
+            if (hasStrongHit || nonEmptySearchHits >= 2) {
+              break;
+            }
+          }
+        } catch (err: any) {
+          if (isCancelled?.()) return null;
+          if (isRetryableDanmuTransportError(err)) {
+            recordServerFailure(server.baseUrl, err?.message || `Search failed: ${kw}`);
+            serverHadTransportFailure = true;
+            break;
+          }
+          console.warn('[Danmu Stage2 Search Failed]', server.name, kw, err);
+        }
+      }
+
+      if (serverHadTransportFailure) {
+        continue;
+      }
+
+      const rankedAnimes = Array.from(animeMap.values())
+        .sort((a, b) => b.animeScore - a.animeScore)
+        .slice(0, 3);
+
+      let stage2Probes = 0;
+      for (const entry of rankedAnimes) {
+        if (isCancelled?.()) return null;
+        if (stage2Probes >= maxStage2ProbesPerServer || serverHadTransportFailure) break;
+
+        const candidate = entry.anime;
+        let episodes = candidate.episodes || [];
+        if (episodes.length === 0) {
+          try {
+            const bangumiRes = await getDanmuBangumiEpisodes(server, candidate.animeId);
+            if (isCancelled?.()) return null;
+            episodes = bangumiRes?.bangumi?.episodes || [];
+          } catch (err: any) {
+            if (isCancelled?.()) return null;
+            if (isRetryableDanmuTransportError(err)) {
+              recordServerFailure(
+                server.baseUrl,
+                err?.message || `Bangumi failed: ${candidate.animeId}`
+              );
+              serverHadTransportFailure = true;
+              break;
+            }
+            console.warn('[Danmu Stage2 Bangumi Failed]', server.name, candidate.animeId, err);
+            continue;
+          }
+        }
+
+        const candidateEpisodes = rankMatchingEpisodes(episodes, parseDanmuEpisodeInfo, {
+          episodeNumber: resolvedEpisodeNumber,
+          isMovie,
+          preferredPlatform: server.preferredPlatform,
+          itemFileName: params.fileName,
+          limit: 3,
+        });
+
+        for (const ep of candidateEpisodes) {
+          if (isCancelled?.()) return null;
+          if (stage2Probes >= maxStage2ProbesPerServer || serverHadTransportFailure) break;
+
+          const epKey = String(ep.episodeId);
+          if (probedEpisodeIds.has(epKey)) continue;
+          probedEpisodeIds.add(epKey);
+          stage2Probes += 1;
+
+          try {
+            const commentRes = await fetchCommentsById(server, ep.episodeId);
+            if (isCancelled?.()) return null;
+
+            const comments = commentRes.comments || [];
+            const evaluation = evaluateDurationMatch(
+              commentRes.videoDuration,
+              params.videoDurationSec
+            );
+            const candidateScore = scoreMatchedCandidate({
+              sourceDuration: commentRes.videoDuration,
+              videoDuration: params.videoDurationSec,
+              commentCount: comments.length,
+              episodeTitle: ep.episodeTitle,
+              itemFileName: params.fileName,
+              animeScore: entry.animeScore,
+              isStage1: false,
+            });
+
+            const candidateResult: DanmuAutoMatchFetchResult<TServer> = {
+              match: {
+                episodeId: ep.episodeId,
+                animeTitle: candidate.animeTitle,
+                episodeTitle: ep.episodeTitle,
+                matchedBy: 'keyword_search',
+                animeId: candidate.animeId,
+                episodes,
+              },
+              comments,
+              videoDuration: commentRes.videoDuration,
+              server,
+              switchedFromPrimary,
+              fallbackReason: stage1FallbackReason,
+              durationGrade: evaluation.grade,
+              score: candidateScore,
+            };
+
+            if (!bestResult || candidateResult.score > bestResult.score) {
+              bestResult = candidateResult;
+            }
+
+            if (
+              isHighConfidenceMatch({
+                sourceDuration: commentRes.videoDuration,
+                videoDuration: params.videoDurationSec,
+                commentCount: comments.length,
+              })
+            ) {
+              return candidateResult;
+            }
+          } catch (err: any) {
+            if (isCancelled?.()) return null;
+            if (isRetryableDanmuTransportError(err)) {
+              recordServerFailure(
+                server.baseUrl,
+                err?.message || `Fetch comments failed: ${ep.episodeId}`
+              );
+              serverHadTransportFailure = true;
+              break;
+            }
+            console.warn('[Danmu Stage2 Probe Failed]', server.name, ep.episodeId, err);
+          }
+        }
+      }
+    }
+
+    if (
+      bestResult &&
+      isHighConfidenceMatch({
+        sourceDuration: bestResult.videoDuration,
+        videoDuration: params.videoDurationSec,
+        commentCount: bestResult.comments.length,
+      })
+    ) {
+      break;
+    }
+  }
+
+  return bestResult;
+}
+
 /**
  * 2. 手动按关键词搜索影视/番剧 (GET /api/v2/search/anime?keyword=...)
  */
@@ -601,9 +1041,13 @@ export async function searchDanmuAnime(
     config,
     `/api/v2/search/anime?keyword=${encodeURIComponent(keyword.trim())}`
   );
-  const res = await httpClient(url, { method: 'GET' });
-  if (!res.ok) throw new Error(`Search failed: ${res.status}`);
-  return res.json();
+  const { data, latencyMs } = await fetchDanmuJson<{ animes: DanmuAnimeSearchResult[] }>(
+    url,
+    { method: 'GET' },
+    7000
+  );
+  recordServerSuccess(config.baseUrl, latencyMs);
+  return data;
 }
 
 /**
@@ -614,9 +1058,13 @@ export async function getDanmuBangumiEpisodes(
   animeId: string | number
 ): Promise<{ bangumi: DanmuAnimeSearchResult }> {
   const url = buildEndpoint(config, `/api/v2/bangumi/${animeId}`);
-  const res = await httpClient(url, { method: 'GET' });
-  if (!res.ok) throw new Error(`Get bangumi failed: ${res.status}`);
-  return res.json();
+  const { data, latencyMs } = await fetchDanmuJson<{ bangumi: DanmuAnimeSearchResult }>(
+    url,
+    { method: 'GET' },
+    6000
+  );
+  recordServerSuccess(config.baseUrl, latencyMs);
+  return data;
 }
 
 /**
@@ -637,9 +1085,13 @@ export async function fetchCommentsById(
     config,
     `/api/v2/comment/${commentId}?format=json&duration=true&withRelated=${withRelated}&chConvert=${chConvert}`
   );
-  const res = await httpClient(url, { method: 'GET' });
-  if (!res.ok) throw new Error(`Fetch comments failed: ${res.status}`);
-  return res.json();
+  const { data, latencyMs } = await fetchDanmuJson<DanmuCommentResponse>(
+    url,
+    { method: 'GET' },
+    10000
+  );
+  recordServerSuccess(config.baseUrl, latencyMs);
+  return data;
 }
 
 /**
@@ -654,9 +1106,13 @@ export async function fetchCommentsByVideoUrl(
     config,
     `/api/v2/comment?url=${encodeURIComponent(videoPageUrl.trim())}&format=json`
   );
-  const res = await httpClient(url, { method: 'GET' });
-  if (!res.ok) throw new Error(`Fetch URL comments failed: ${res.status}`);
-  return res.json();
+  const { data, latencyMs } = await fetchDanmuJson<DanmuCommentResponse>(
+    url,
+    { method: 'GET' },
+    12000
+  );
+  recordServerSuccess(config.baseUrl, latencyMs);
+  return data;
 }
 
 /**

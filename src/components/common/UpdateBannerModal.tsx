@@ -91,7 +91,7 @@ function renderInlineSegments(text: string): React.ReactNode {
   });
 }
 
-const ReleaseNotesContent: React.FC<{ body?: string }> = ({ body }) => {
+export const ReleaseNotesContent: React.FC<{ body?: string }> = ({ body }) => {
   const cleaned = sanitizeReleaseNotes(body);
   if (!cleaned) {
     return (

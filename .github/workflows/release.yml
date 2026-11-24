@@ -685,7 +685,7 @@ jobs:
   finalize-release:
     name: Finalize Release Notes & Updater Manifest
     needs: [build-frontend, release-tauri]
-    if: needs.build-frontend.outputs.should_release == 'true'
+    if: always() && needs.build-frontend.outputs.should_release == 'true' && needs.build-frontend.result == 'success' && needs.release-tauri.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write

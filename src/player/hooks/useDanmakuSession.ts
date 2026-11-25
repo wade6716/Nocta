@@ -113,6 +113,15 @@ export function useDanmakuSession({
     };
   }, []);
 
+  // 时长偏差提示展示后自动消失（保留手动关闭与切集清空能力）
+  useEffect(() => {
+    if (!durationAlert) return;
+    const timer = window.setTimeout(() => {
+      setDurationAlert(null);
+    }, 6000);
+    return () => window.clearTimeout(timer);
+  }, [durationAlert]);
+
   // 单集偏移优先，否则继承整剧偏移
   const savedOffset =
     (itemId && itemOffsets[itemId] !== undefined

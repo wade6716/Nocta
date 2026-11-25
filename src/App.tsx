@@ -15,7 +15,10 @@ import { useAuthStore } from './stores/useAuthStore';
 import { useMediaStore } from './stores/useMediaStore';
 import { useSyncStore } from './stores/useSyncStore';
 import { useUpdaterStore } from './stores/useUpdaterStore';
-import { isTauriEnvironment } from './api/http';
+import { useEmbyHostsStore } from './stores/useEmbyHostsStore';
+import { isTauriEnvironment, registerHttpResponseObserver } from './api/http';
+import { type EmbyHostCategory } from './services/embyHostCollector';
+import { listen } from '@tauri-apps/api/event';
 
 const KeepAliveTabPane: React.FC<{
   id?: string;
@@ -136,6 +139,112 @@ export const App: React.FC = () => {
     }, 3000);
 
     return () => window.clearTimeout(timer);
+  }, []);
+
+  // 初始化 Emby 域名收集器：预置已有服务器地址，并挂载 HTTP 响应与 Rust 网络事件监听
+  useEffect(() => {
+    const findServerIdForOriginUrl = (rawUrl: string): string | null => {
+      if (!rawUrl || !/^https?:\/\//i.test(rawUrl)) return null;
+      const lowerUrl = rawUrl.trim().toLowerCase();
+      const { servers, currentServerId } = useAuthStore.getState();
+      for (const srv of servers) {
+        const prefix = srv.url.trim().replace(/\/+$/, '').toLowerCase();
+        if (prefix && lowerUrl.startsWith(prefix)) {
+          return srv.id;
+        }
+      }
+      try {
+        const originHost = new URL(rawUrl).hostname.replace(/^\[|\]$/g, '').toLowerCase();
+        for (const srv of servers) {
+          try {
+            const srvHost = new URL(srv.url).hostname.replace(/^\[|\]$/g, '').toLowerCase();
+            if (srvHost && srvHost === originHost) {
+              return srv.id;
+            }
+          } catch {
+            // ignore invalid server url
+          }
+        }
+        if (currentServerId) {
+          const collected = useEmbyHostsStore.getState().hostsByServerId[currentServerId] || [];
+          if (collected.some((entry) => entry.host === originHost)) {
+            return currentServerId;
+          }
+        }
+      } catch {
+        // ignore invalid origin url
+      }
+      return null;
+    };
+
+    const initialServers = useAuthStore.getState().servers;
+    const hostsStore = useEmbyHostsStore.getState();
+    for (const srv of initialServers) {
+      if (srv.id && srv.url) {
+        hostsStore.recordUrl(srv.id, srv.url, 'api');
+      }
+    }
+
+    registerHttpResponseObserver((requestUrl, _status, finalUrl) => {
+      const serverId = findServerIdForOriginUrl(requestUrl);
+      if (!serverId) return;
+      const store = useEmbyHostsStore.getState();
+      store.recordUrl(serverId, requestUrl, 'api');
+      if (finalUrl && finalUrl !== requestUrl) {
+        try {
+          const reqHost = new URL(requestUrl).hostname.toLowerCase();
+          const finHost = new URL(finalUrl).hostname.toLowerCase();
+          if (reqHost !== finHost) {
+            store.recordUrl(serverId, finalUrl, 'redirect');
+          }
+        } catch {
+          // ignore
+        }
+      }
+    });
+
+    let unlisten: (() => void) | null = null;
+    let disposed = false;
+
+    if (isTauriEnvironment()) {
+      listen<{ originUrl: string; observedUrl: string; category: string }>(
+        'emby-hosts-observed',
+        (event) => {
+          const payload = event.payload;
+          if (!payload?.observedUrl) return;
+          const serverId =
+            findServerIdForOriginUrl(payload.originUrl) ||
+            useAuthStore.getState().currentServerId;
+          if (!serverId) return;
+          const validCats: EmbyHostCategory[] = [
+            'api',
+            'stream',
+            'redirect',
+            'image',
+            'subtitle',
+            'other',
+          ];
+          const cat: EmbyHostCategory = validCats.includes(payload.category as EmbyHostCategory)
+            ? (payload.category as EmbyHostCategory)
+            : 'other';
+          useEmbyHostsStore.getState().recordUrl(serverId, payload.observedUrl, cat);
+        }
+      )
+        .then((fn) => {
+          if (disposed) {
+            fn();
+          } else {
+            unlisten = fn;
+          }
+        })
+        .catch(() => {});
+    }
+
+    return () => {
+      disposed = true;
+      registerHttpResponseObserver(null);
+      if (unlisten) unlisten();
+    };
   }, []);
 
   return (

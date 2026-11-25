@@ -15,6 +15,13 @@ import {
   normalizePlayerPreferences,
 } from '../stores/usePlayerStore';
 import { useMediaStore } from '../stores/useMediaStore';
+import { useEmbyHostsStore } from '../stores/useEmbyHostsStore';
+import {
+  type CollectedHostEntry,
+  type EmbyHostCollectorSettings,
+  DEFAULT_EMBY_HOST_COLLECTOR_SETTINGS,
+  mergeCollectedHostLists,
+} from './embyHostCollector';
 import { ProxyConfig, isTauriEnvironment } from '../api/http';
 import { invoke } from '@tauri-apps/api/core';
 import { encryptData, decryptData } from '../utils/crypto';
@@ -33,6 +40,8 @@ export interface NoctaConfigData {
   skipSegments: Record<string, SkipSegments>;
   skipSettings: SkipSettings;
   playerPreferences?: Partial<PlayerPreferences>;
+  embyCollectedHosts?: Record<string, CollectedHostEntry[]>;
+  embyHostCollectorSettings?: EmbyHostCollectorSettings;
 }
 
 export interface NoctaBackupPayload {
@@ -93,6 +102,8 @@ export function getLocalConfigSnapshot(options?: { includeSecrets?: boolean }): 
   // 处理弹幕节点脱敏 (按规则 Token 在 baseUrl 路径中，若脱敏可选择保留或清空)
   const danmuServers = danmuState.servers.map((s) => ({ ...s }));
 
+  const embyHostsState = useEmbyHostsStore.getState();
+
   return {
     servers,
     currentServerId: authState.currentServerId,
@@ -107,6 +118,8 @@ export function getLocalConfigSnapshot(options?: { includeSecrets?: boolean }): 
     skipSegments: { ...playerState.skipSegments },
     skipSettings: { ...playerState.skipSettings },
     playerPreferences: { ...playerState.playerPreferences },
+    embyCollectedHosts: embyHostsState.exportHostsByServerKey(servers),
+    embyHostCollectorSettings: { ...embyHostsState.settings },
   };
 }
 
@@ -298,6 +311,25 @@ export function mergeConfigData(local: NoctaConfigData, remote: NoctaConfigData)
       remote.playerPreferences,
       normalizePlayerPreferences(local.playerPreferences, DEFAULT_PLAYER_PREFERENCES)
     ),
+    embyCollectedHosts: (() => {
+      const merged: Record<string, CollectedHostEntry[]> = {};
+      const keys = new Set([
+        ...Object.keys(local.embyCollectedHosts || {}),
+        ...Object.keys(remote.embyCollectedHosts || {}),
+      ]);
+      for (const k of keys) {
+        merged[k] = mergeCollectedHostLists(
+          local.embyCollectedHosts?.[k] || [],
+          remote.embyCollectedHosts?.[k] || []
+        );
+      }
+      return merged;
+    })(),
+    embyHostCollectorSettings: {
+      ...DEFAULT_EMBY_HOST_COLLECTOR_SETTINGS,
+      ...(local.embyHostCollectorSettings || {}),
+      ...(remote.embyHostCollectorSettings || {}),
+    },
   };
 }
 
@@ -312,6 +344,17 @@ export function applyConfigToStores(data: NoctaConfigData, mode: 'merge' | 'repl
   // 1. 恢复 Emby 服务器
   if (data.servers && data.servers.length > 0) {
     authStore.importServers(data.servers, mode);
+  }
+
+  // 1.5 恢复 Emby 域名收集器设置与已收集域名列表
+  if (data.embyHostCollectorSettings) {
+    useEmbyHostsStore.getState().setSettings(data.embyHostCollectorSettings);
+  }
+  if (data.embyCollectedHosts) {
+    const latestServers = useAuthStore.getState().servers;
+    useEmbyHostsStore
+      .getState()
+      .importHostsByServerKey(data.embyCollectedHosts, latestServers, mode);
   }
 
   // 2. 恢复代理

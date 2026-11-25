@@ -157,6 +157,9 @@ pub fn handle_image_protocol_request(
             }
         };
 
+        let final_url = upstream.url().to_string();
+        crate::proxy::emit_observed_emby_host(&target_url, &final_url, "image");
+
         let status_code = upstream.status().as_u16();
         let content_type = upstream
             .headers()

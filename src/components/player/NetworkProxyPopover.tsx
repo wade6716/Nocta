@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   X,
   Globe,
@@ -8,6 +8,8 @@ import {
   AlertTriangle,
   Wifi,
   ShieldCheck,
+  Copy,
+  Check,
 } from 'lucide-react';
 import {
   PlayerTelemetry,
@@ -24,6 +26,7 @@ interface NetworkProxyPopoverProps {
   telemetry: PlayerTelemetry;
   proxyInfo: ResolvedStreamProxyInfo | null;
   proxyOverride: StreamProxyOverride;
+  redirectHosts?: string[];
   onChangeProxyOverride: (mode: StreamProxyOverride) => void;
   onReloadStream: () => void;
   onOpenProxySettings: () => void;
@@ -33,6 +36,52 @@ function formatMb(bytes?: number): string {
   if (!bytes || bytes <= 0) return '0.0 MB';
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
+
+const RedirectHostChips: React.FC<{ hosts: string[] }> = ({ hosts }) => {
+  const [copiedHost, setCopiedHost] = useState<string | null>(null);
+
+  const handleCopy = async (host: string) => {
+    try {
+      await navigator.clipboard.writeText(host);
+      setCopiedHost(host);
+      window.setTimeout(() => {
+        setCopiedHost((prev) => (prev === host ? null : prev));
+      }, 1500);
+    } catch {
+      // ignore clipboard errors
+    }
+  };
+
+  return (
+    <div className="p-2.5 rounded-lg bg-white/[0.04] border border-white/10 space-y-1.5">
+      <div className="text-[10px] text-slate-400 flex items-center justify-between">
+        <span>本次播放 302 / CDN 目标主机</span>
+        <span className="text-slate-500">点击复制</span>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {hosts.map((host) => {
+          const isCopied = copiedHost === host;
+          return (
+            <button
+              key={host}
+              type="button"
+              onClick={() => handleCopy(host)}
+              className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-black/40 hover:bg-white/10 border border-white/10 text-[10px] font-mono text-sky-300 transition cursor-pointer"
+              title={`复制主机 ${host}`}
+            >
+              <span>{host}</span>
+              {isCopied ? (
+                <Check className="w-2.5 h-2.5 text-emerald-400" />
+              ) : (
+                <Copy className="w-2.5 h-2.5 text-slate-400" />
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
 
 function getProxyModeBadge(info: ResolvedStreamProxyInfo | null): {
   label: string;
@@ -84,6 +133,7 @@ export const NetworkProxyPopover: React.FC<NetworkProxyPopoverProps> = ({
   telemetry,
   proxyInfo,
   proxyOverride,
+  redirectHosts,
   onChangeProxyOverride,
   onReloadStream,
   onOpenProxySettings,
@@ -162,6 +212,10 @@ export const NetworkProxyPopover: React.FC<NetworkProxyPopoverProps> = ({
                 <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
                 <span>{proxyInfo.notice}</span>
               </div>
+            )}
+
+            {redirectHosts && redirectHosts.length > 0 && (
+              <RedirectHostChips hosts={redirectHosts} />
             )}
           </div>
 

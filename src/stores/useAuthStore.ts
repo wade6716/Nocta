@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { DanmuConfig } from '../api/danmuClient';
+import { useEmbyHostsStore } from './useEmbyHostsStore';
 import {
   DEFAULT_EMBY_USER_AGENT,
   bumpImageProxyRevision,
@@ -210,6 +211,7 @@ export const useAuthStore = create<AuthState>((set, get) => {
           currentServerId: nextCurrentId,
         };
       });
+      useEmbyHostsStore.getState().recordUrl(serverData.id, serverData.url, 'api');
       syncWithOptionalRevision(true);
     },
 
@@ -263,6 +265,7 @@ export const useAuthStore = create<AuthState>((set, get) => {
           currentServerId: nextId,
         };
       });
+      useEmbyHostsStore.getState().removeServer(id);
       syncWithOptionalRevision(true);
     },
 
@@ -401,6 +404,12 @@ export const useAuthStore = create<AuthState>((set, get) => {
           currentServerId: nextCurrentId,
         };
       });
+      const embyHostsStore = useEmbyHostsStore.getState();
+      for (const srv of importedServers) {
+        if (srv.id && srv.url) {
+          embyHostsStore.recordUrl(srv.id, srv.url, 'api');
+        }
+      }
       syncWithOptionalRevision(true);
     },
   };

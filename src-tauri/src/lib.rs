@@ -286,6 +286,7 @@ pub fn run() {
 
             media_session::init_media_session(app.handle());
             media_session::init_audio_output_monitor(app.handle());
+            proxy::init_app_handle(app.handle());
 
             Ok(())
         })

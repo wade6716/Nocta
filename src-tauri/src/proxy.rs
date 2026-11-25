@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex as AsyncMutex;
@@ -63,6 +64,33 @@ impl Default for RuntimeProxyState {
 
 static RUNTIME_PROXY_STATE: OnceLock<RwLock<RuntimeProxyState>> = OnceLock::new();
 static SYSTEM_PROXY_CACHE: OnceLock<RwLock<Option<(Instant, SystemProxyInfo)>>> = OnceLock::new();
+static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ObservedEmbyHostPayload {
+    pub origin_url: String,
+    pub observed_url: String,
+    pub category: String,
+}
+
+pub fn init_app_handle(app_handle: &AppHandle) {
+    let _ = APP_HANDLE.set(app_handle.clone());
+}
+
+pub fn emit_observed_emby_host(origin_url: &str, observed_url: &str, category: &str) {
+    if !observed_url.starts_with("http://") && !observed_url.starts_with("https://") {
+        return;
+    }
+    if let Some(app) = APP_HANDLE.get() {
+        let payload = ObservedEmbyHostPayload {
+            origin_url: origin_url.to_string(),
+            observed_url: observed_url.to_string(),
+            category: category.to_string(),
+        };
+        let _ = app.emit("emby-hosts-observed", payload);
+    }
+}
 
 fn runtime_state() -> &'static RwLock<RuntimeProxyState> {
     RUNTIME_PROXY_STATE.get_or_init(|| RwLock::new(RuntimeProxyState::default()))

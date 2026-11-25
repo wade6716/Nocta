@@ -415,6 +415,16 @@ export async function resolveEffectiveProxy(config?: ProxyConfig): Promise<strin
   return detail.url;
 }
 
+export type HttpResponseObserver = (url: string, status: number, finalUrl?: string) => void;
+let httpResponseObserver: HttpResponseObserver | null = null;
+
+/**
+ * 注册全局 HTTP 响应观察者（用于收集 Emby API / 直链等真实访问域名与重定向目标）
+ */
+export function registerHttpResponseObserver(observer: HttpResponseObserver | null) {
+  httpResponseObserver = observer;
+}
+
 /**
  * 统一网络请求函数
  * 在 Tauri 环境下强制使用 @tauri-apps/plugin-http 规避跨域限制（CORS）并自动注入代理
@@ -471,13 +481,15 @@ export async function httpClient(
     }
 
     try {
-      return await tauriFetch(input as any, requestOptions);
+      const res = await tauriFetch(input as any, requestOptions);
+      httpResponseObserver?.(targetUrlStr, res.status, res.url || targetUrlStr);
+      return res;
     } catch (err) {
       // 代理不可用或局域网请求被代理中断时，按需回退无代理直连兜底一次
       if (effectiveProxy && allowFallbackToDirect && !init?.signal?.aborted) {
         try {
           console.warn('[Tauri HTTP Proxy Fallback -> Direct]', input, err);
-          return await tauriFetch(input as any, {
+          const fallbackRes = await tauriFetch(input as any, {
             ...baseRequestOptions,
             proxy: {
               all: {
@@ -486,6 +498,8 @@ export async function httpClient(
               },
             },
           });
+          httpResponseObserver?.(targetUrlStr, fallbackRes.status, fallbackRes.url || targetUrlStr);
+          return fallbackRes;
         } catch (directErr) {
           console.error('[Tauri HTTP Error (after proxy fallback)]', directErr);
           throw err;
@@ -497,7 +511,11 @@ export async function httpClient(
   }
 
   // 纯浏览器 Dev 模式降级
-  return window.fetch(input, init);
+  const browserUrl =
+    typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+  const res = await window.fetch(input, init);
+  httpResponseObserver?.(browserUrl, res.status, res.url || browserUrl);
+  return res;
 }
 
 export default httpClient;

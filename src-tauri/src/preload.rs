@@ -1113,6 +1113,7 @@ async fn send_with_safe_redirects(
 ) -> Result<(reqwest::Response, String), String> {
     let origin_url = Url::parse(start_url).map_err(|e| format!("流地址格式无效: {e}"))?;
     let mut current_url = origin_url.clone();
+    crate::proxy::emit_observed_emby_host(start_url, start_url, "stream");
 
     for step in 0..=MAX_STREAM_REDIRECTS {
         let mut req = if is_head {
@@ -1145,6 +1146,7 @@ async fn send_with_safe_redirects(
                 current_url = current_url
                     .join(loc)
                     .map_err(|e| format!("解析重定向地址失败: {e}"))?;
+                crate::proxy::emit_observed_emby_host(start_url, current_url.as_str(), "redirect");
                 continue;
             }
         }
@@ -1970,6 +1972,11 @@ pub async fn diagnose_stream_url(
         let cf_mitigated = read_header_name_str(&resp_headers, "cf-mitigated");
 
         if matches!(status_code, 301 | 302 | 303 | 307 | 308) {
+            crate::proxy::emit_observed_emby_host(
+                request.url.as_str(),
+                current_url.as_str(),
+                if hop_idx == 1 { "stream" } else { "redirect" },
+            );
             if let Some(ref loc) = raw_location {
                 let redacted_loc = match current_url.join(loc) {
                     Ok(joined) => redact_url_secrets(joined.as_str()),
@@ -1997,6 +2004,11 @@ pub async fn diagnose_stream_url(
                 }
                 match current_url.join(loc) {
                     Ok(next_url) => {
+                        crate::proxy::emit_observed_emby_host(
+                            request.url.as_str(),
+                            next_url.as_str(),
+                            "redirect",
+                        );
                         current_url = next_url;
                         continue;
                     }
@@ -2031,6 +2043,14 @@ pub async fn diagnose_stream_url(
         } else {
             None
         };
+
+        if matches!(status_code, 200 | 206) {
+            crate::proxy::emit_observed_emby_host(
+                request.url.as_str(),
+                current_url.as_str(),
+                if hop_idx == 1 { "stream" } else { "redirect" },
+            );
+        }
 
         hops.push(DiagnosticHopDto {
             hop: hop_idx,

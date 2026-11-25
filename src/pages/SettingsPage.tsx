@@ -48,6 +48,8 @@ import {
 import { useAuthStore, SavedServer } from '../stores/useAuthStore';
 import { useDanmuStore, DanmuServerEntry } from '../stores/useDanmuStore';
 import { usePlayerStore, DanmakuColorMode } from '../stores/usePlayerStore';
+import { useEmbyHostsStore } from '../stores/useEmbyHostsStore';
+import { EmbyHostsModal } from '../components/settings/EmbyHostsModal';
 import {
   BUFFER_DURATION_PRESETS_SEC,
   MEMORY_CAP_PRESETS_MB,
@@ -121,6 +123,8 @@ export const SettingsPage: React.FC = () => {
   } = useAuthStore();
 
   const clearMediaCache = useMediaStore((s) => s.clearMediaCache);
+  const hostsByServerId = useEmbyHostsStore((s) => s.hostsByServerId);
+  const [hostsModalServer, setHostsModalServer] = useState<SavedServer | null>(null);
   const updater = useUpdaterStore();
   const hasPendingUpdateBadge = useUpdaterStore(hasUnignoredUpdate);
 
@@ -1035,6 +1039,16 @@ export const SettingsPage: React.FC = () => {
                               请于首页切换
                             </span>
                           )}
+                          <button
+                            type="button"
+                            onClick={() => setHostsModalServer(server)}
+                            className="px-2 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-gray-300 hover:text-primary transition cursor-pointer flex items-center space-x-1 text-[11px]"
+                            title="查看已收集域名与生成代理分流规则"
+                          >
+                            <Globe className="w-3.5 h-3.5" />
+                            <span>{(hostsByServerId[server.id] || []).length}</span>
+                          </button>
+
                           <button
                             type="button"
                             onClick={() => handleTestEmbyServer(server)}
@@ -3343,6 +3357,12 @@ export const SettingsPage: React.FC = () => {
           </div>
         </div>
       )}
+
+      <EmbyHostsModal
+        isOpen={Boolean(hostsModalServer)}
+        onClose={() => setHostsModalServer(null)}
+        server={hostsModalServer}
+      />
     </div>
   );
 };

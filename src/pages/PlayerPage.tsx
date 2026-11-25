@@ -17,6 +17,8 @@ import {
 import { useAuthStore } from '../stores/useAuthStore';
 import { usePlayerStore } from '../stores/usePlayerStore';
 import { useDanmuStore } from '../stores/useDanmuStore';
+import { useEmbyHostsStore } from '../stores/useEmbyHostsStore';
+import { extractHostFromUrl } from '../services/embyHostCollector';
 import {
   EmbyChapter,
   EmbyItem,
@@ -207,6 +209,8 @@ export const PlayerPage: React.FC = () => {
   const [telemetry, setTelemetry] = useState<PlayerTelemetry>({});
   const [proxyOverride, setProxyOverride] = useState<StreamProxyOverride>('follow');
   const [proxyInfo, setProxyInfo] = useState<ResolvedStreamProxyInfo | null>(null);
+  const [currentRedirectHosts, setCurrentRedirectHosts] = useState<string[]>([]);
+  const probedRedirectKeysRef = useRef<Set<string>>(new Set());
   const [abLoopA, setAbLoopA] = useState<number | null>(null);
   const [abLoopB, setAbLoopB] = useState<number | null>(null);
 
@@ -738,6 +742,113 @@ export const PlayerPage: React.FC = () => {
         });
     }
   }, [currentStreamUrl, reloadToken, resolveInitialPlaybackTime]);
+
+  // 收集当前播放涉及的视频直链、.strm 路径、外挂字幕，并在后台静默探测 302 重定向链
+  useEffect(() => {
+    const liveServer = useAuthStore.getState().getCurrentServer();
+    if (!liveServer?.id) return;
+
+    const hostsState = useEmbyHostsStore.getState();
+    if (!hostsState.settings.enabled) return;
+
+    const targetStreamUrl = upstreamStreamUrlRef.current || currentStreamUrl;
+    const toRecord: Array<{ url: string; category: 'stream' | 'redirect' | 'subtitle' }> = [];
+
+    if (targetStreamUrl && /^https?:\/\//i.test(targetStreamUrl)) {
+      toRecord.push({ url: targetStreamUrl, category: 'stream' });
+    }
+    if (mediaSource?.DirectStreamUrl && /^https?:\/\//i.test(mediaSource.DirectStreamUrl)) {
+      toRecord.push({ url: mediaSource.DirectStreamUrl, category: 'stream' });
+    }
+    if (mediaSource?.Path && /^https?:\/\//i.test(mediaSource.Path)) {
+      toRecord.push({ url: mediaSource.Path, category: 'redirect' });
+    }
+    if (mediaSource?.MediaStreams) {
+      for (const ms of mediaSource.MediaStreams) {
+        if (ms.Type === 'Subtitle' && ms.IsExternal && ms.DeliveryUrl) {
+          const fullSubUrl = /^https?:\/\//i.test(ms.DeliveryUrl)
+            ? ms.DeliveryUrl
+            : `${liveServer.url.replace(/\/+$/, '')}/${ms.DeliveryUrl.replace(/^\/+/, '')}`;
+          toRecord.push({ url: fullSubUrl, category: 'subtitle' });
+        }
+      }
+    }
+
+    if (toRecord.length > 0) {
+      hostsState.recordUrls(liveServer.id, toRecord);
+    }
+
+    setCurrentRedirectHosts([]);
+
+    if (
+      !isTauriEnvironment() ||
+      !hostsState.settings.probePlaybackRedirects ||
+      !targetStreamUrl ||
+      !/^https?:\/\//i.test(targetStreamUrl)
+    ) {
+      return;
+    }
+
+    const dedupeKey = `${liveServer.id}::${item?.Id || ''}::${mediaSource?.Id || targetStreamUrl}`;
+    if (probedRedirectKeysRef.current.has(dedupeKey)) {
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      if (cancelled) return;
+      probedRedirectKeysRef.current.add(dedupeKey);
+      try {
+        const ua = resolveEmbyUserAgent(liveServer.userAgent, liveServer.url);
+        const streamHeaders = buildEmbyStreamHeaders(liveServer.userId, liveServer.accessToken, {
+          userAgent: liveServer.userAgent,
+          serverUrl: liveServer.url,
+        });
+        const resolvedProxy = await resolveMpvProxyDetailed(
+          targetStreamUrl,
+          proxyOverrideRef.current
+        );
+        const report = await invoke<StreamDiagnosticReport>('diagnose_stream_url', {
+          request: {
+            url: targetStreamUrl,
+            proxyUrl: (resolvedProxy.rustProxy ?? resolvedProxy.effectiveProxy) || null,
+            headers: {
+              'User-Agent': ua,
+              ...streamHeaders,
+            },
+          },
+        });
+        if (cancelled || !report?.hops) return;
+
+        const serverHost = extractHostFromUrl(liveServer.url)?.host;
+        const foundRedirectHosts: string[] = [];
+        for (const hop of report.hops) {
+          for (const candidate of [hop.url, hop.location]) {
+            if (!candidate) continue;
+            const parsed = extractHostFromUrl(candidate);
+            if (
+              parsed &&
+              parsed.host &&
+              parsed.host !== serverHost &&
+              !foundRedirectHosts.includes(parsed.host)
+            ) {
+              foundRedirectHosts.push(parsed.host);
+            }
+          }
+        }
+        if (foundRedirectHosts.length > 0) {
+          setCurrentRedirectHosts(foundRedirectHosts);
+        }
+      } catch {
+        // 静默探测失败不影响正常播放
+      }
+    }, 1500);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [currentStreamUrl, mediaSource?.Id, item?.Id]);
 
   // 响应缓冲时长与内存上限实时变化
   useEffect(() => {
@@ -3391,6 +3502,7 @@ export const PlayerPage: React.FC = () => {
           telemetry={telemetry}
           proxyInfo={proxyInfo}
           proxyOverride={proxyOverride}
+          redirectHosts={currentRedirectHosts}
           onChangeProxyOverride={handleHotReloadStreamWithProxy}
           onReloadStream={() => handleHotReloadStreamWithProxy(proxyOverride)}
           onOpenProxySettings={() => setIsProxyModalOpen(true)}

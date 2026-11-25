@@ -508,3 +508,11 @@
 - **视频互斥与系统媒体键接管**：
   - 进入 `/player/:itemId` 时自动暂停后台音乐；非视频播放路由下由音乐控制器接管 Rust `souvlaki` 媒体会话与耳机断连自动暂停。
   - 音乐封面寻址 `resolveMusicCoverUrl` 严格校验 `ImageTags.Primary` / `AlbumPrimaryImageTag` 存在性后再拼 URL，避免无图条目触发 Emby 500；歌词加载兼容 `/emby/Audio/{Id}/Lyrics` JSON 与纯 LRC 文本。
+
+### 40. macOS 无边框窗口全屏切换与 WKWebView 键盘焦点恢复 (`mpv_embed_macos.m` / `osd_overlay.rs`)
+- **底层原因 (`tao::set_style_mask` 劫持 `firstResponder`)**：
+  - 主窗口在 [`tauri.conf.json`](file:///d:/wade/code/emby-tauri/tauri.conf.json) 配置了 `"decorations": false`。在 macOS 上 `tao` 执行 `set_fullscreen(true/false)` 及 `windowDidExitFullscreen:` 恢复窗口样式时，会在主队列异步调用 `set_style_mask` 并显式执行 `ns_window.makeFirstResponder(Some(ns_view))`（即 `TaoView`，而非内部的 `WKWebView`）。
+  - 全屏态下 `osd-overlay` 独立浮层窗口（[`OsdOverlayPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/OsdOverlayPage.tsx)）持有自己的 `WKWebView` 焦点，因此按 `F` / `Cmd+F` 可正常退出全屏；但退回窗口态后 `main` 窗口的 `firstResponder` 被 `tao` 重置为 `TaoView`（且 `WebviewWindow::set_focus()` 仅调用 `Window::set_focus` 而非 `Webview::set_focus`），导致主窗口 [`PlayerPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/PlayerPage.tsx) 在用户再次点击页面前无法收到 `F` / `Cmd+F` 等键盘事件。
+- **修复规范**：
+  - 在 [`mpv_embed_macos.m`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/mpv_embed_macos.m) 新增 `nocta_configure_main_window`（由 [`lib.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/lib.rs) `setup` 在 macOS 上调用），为主窗口补齐 `NSWindowCollectionBehaviorFullScreenPrimary` 并监听 `NSWindowDidEnterFullScreenNotification`、`NSWindowDidExitFullScreenNotification` 与 `NSWindowDidBecomeKeyNotification`，在 `dispatch_async(dispatch_get_main_queue(), ...)` 中检查 `[window isKeyWindow]` 后将 `firstResponder` 恢复至 `WKWebView`（若当前 `firstResponder` 已是 `WKWebView` 或其子视图则跳过，避免打断输入框）；
+  - 同时在 `nocta_attach_mpv_window` 与 [`osd_overlay.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/osd_overlay.rs) 的 `close_osd_overlay` 中同步调用 `nocta_focus_webview`，并在 `PlayerPage.tsx` / `OsdOverlayPage.tsx` 的 `KeyF` 分支增加 `if (e.repeat) break;` 防止长按连发。

@@ -308,25 +308,6 @@ export const HomePage: React.FC<{ isActive?: boolean }> = ({ isActive = true }) 
     };
   }, [setHomeScrollY]);
 
-  // 全局搜索快捷键监听 (Ctrl+K / Cmd+K / 斜杠)
-  useEffect(() => {
-    if (!isActive) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault();
-        navigate('/search');
-      } else if (
-        e.key === '/' &&
-        !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)
-      ) {
-        e.preventDefault();
-        navigate('/search');
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isActive, navigate]);
-
   const saveHomeScroll = useCallback(() => {
     const container = getHomeScrollContainer();
     if (container) {

@@ -282,6 +282,14 @@ pub fn run() {
             {
                 use tauri::Manager;
                 init_macos_mpv_environment(app.path().resource_dir().ok());
+                if let Some(main_win) = app.get_webview_window("main") {
+                    if let Ok(ns_win) = main_win.ns_window() {
+                        let ns_win_addr = ns_win as usize;
+                        let _ = main_win.run_on_main_thread(move || {
+                            mpv_embed::configure_main_window(ns_win_addr as *mut std::ffi::c_void);
+                        });
+                    }
+                }
             }
 
             media_session::init_media_session(app.handle());

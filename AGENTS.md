@@ -498,7 +498,26 @@
 - **片尾跨集偏移适配与即时落盘 (`usePlayerStore.ts` / `skipSegmentsUtils.ts`)**：
   - `SkipSegments` 扩展 `outroOffsetFromEnd`（`computeOutroSegmentPatch` 与 `resolveEffectiveOutroStart`），对剧集按「当前总片长 - 距结尾秒数」自动适配每集片长波动；`setSkipSegment`、`clearSkipSegment` 与 `applyRemoteStoreSnapshot` 改用 `saveStorageImmediate` 即时写入 `localStorage` 并覆盖新旧 `instantSyncKey`，避免切集/退播时 200ms 防抖或键值差异导致标记丢失。单测见 [`skip-segments-utils.test.mjs`](file:///d:/wade/code/emby-tauri-player/scripts/skip-segments-utils.test.mjs)。
 
-### 39. Emby 服务器访问域名/IP 收集与分流规则导出规范
+### 39. 独立 Emby 音乐空间与双空间隔离架构 (`embyMusicClient.ts` / `useMusicPlayerStore.ts` / `MusicAudioController.tsx`)
+- **影视与音乐双空间完全独立**：
+  - 顶部标题栏（[`TitleBar.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/layout/TitleBar.tsx)）中央提供全圆角 `[ 影视 | 音乐 ]` 滑动胶囊切换器；[`HomePage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/HomePage.tsx) 拉取 `getUserViews` 后按 `isMusicLibraryView` 拆分为 `views`（仅影视）与 `musicViews`（音乐），彻底杜绝音乐库被当成剧集/电影渲染；影视搜索（`/search`）与音乐搜索（`/music/search`）完全独立分流。
+- **Emby 音乐库 `ParentId` 强隔离与防混入电影/剧集**：
+  - Emby `/Users/{UserId}/Items/Latest` 在未传 `ParentId` 时可能忽略 `IncludeItemTypes` 导致返回全服最新剧集/电影。[`embyMusicClient.ts`](file:///d:/wade/code/emby-tauri-player/src/api/embyMusicClient.ts) 统一通过 `resolveScopedMusicParentIds` 强制限定在 `CollectionType === 'music'` 视图 `ParentId` 范围内查询（`getLatestMusicAlbums` 改用 `/Items` + `ParentId` + `SortBy=DateCreated`），歌单/歌曲接口显式携带 `MediaTypes=Audio`，并在客户端使用 `isStrictMusicAlbum` / `isStrictAudioTrack` / `isStrictMusicArtist` / `isStrictMusicPlaylist` 严格白名单过滤。
+- **全局 HTML5 音频引擎与多服隔离**：
+  - [`MusicAudioController.tsx`](file:///d:/wade/code/emby-tauri-player/src/music/MusicAudioController.tsx) 挂载于 [`App.tsx`](file:///d:/wade/code/emby-tauri-player/src/App.tsx) 顶层实现跨页不断流后台播放，不干扰 `libmpv` 透明穿透视窗；音频流按「原文件 `static=true` 直出 → Emby `universal` → MP3 320k」三级自动兜底，并在剩余 `< 20s` 时静默预加载下一首；`useMusicPlayerStore` 记录起播时的 `sourceServer` 上下文防止多服切换串台。
+- **视频互斥与系统媒体键接管**：
+  - 进入 `/player/:itemId` 时自动暂停后台音乐；非视频播放路由下由音乐控制器接管 Rust `souvlaki` 媒体会话与耳机断连自动暂停。
+  - 音乐封面寻址 `resolveMusicCoverUrl` 严格校验 `ImageTags.Primary` / `AlbumPrimaryImageTag` 存在性后再拼 URL，避免无图条目触发 Emby 500；歌词加载兼容 `/emby/Audio/{Id}/Lyrics` JSON 与纯 LRC 文本。
+
+### 40. macOS 无边框窗口全屏切换与 WKWebView 键盘焦点恢复 (`mpv_embed_macos.m` / `osd_overlay.rs`)
+- **底层原因 (`tao::set_style_mask` 劫持 `firstResponder`)**：
+  - 主窗口在 [`tauri.conf.json`](file:///d:/wade/code/emby-tauri/tauri.conf.json) 配置了 `"decorations": false`。在 macOS 上 `tao` 执行 `set_fullscreen(true/false)` 及 `windowDidExitFullscreen:` 恢复窗口样式时，会在主队列异步调用 `set_style_mask` 并显式执行 `ns_window.makeFirstResponder(Some(ns_view))`（即 `TaoView`，而非内部的 `WKWebView`）。
+  - 全屏态下 `osd-overlay` 独立浮层窗口（[`OsdOverlayPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/OsdOverlayPage.tsx)）持有自己的 `WKWebView` 焦点，因此按 `F` / `Cmd+F` 可正常退出全屏；但退回窗口态后 `main` 窗口的 `firstResponder` 被 `tao` 重置为 `TaoView`（且 `WebviewWindow::set_focus()` 仅调用 `Window::set_focus` 而非 `Webview::set_focus`），导致主窗口 [`PlayerPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/PlayerPage.tsx) 在用户再次点击页面前无法收到 `F` / `Cmd+F` 等键盘事件。
+- **修复规范**：
+  - 在 [`mpv_embed_macos.m`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/mpv_embed_macos.m) 新增 `nocta_configure_main_window`（由 [`lib.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/lib.rs) `setup` 在 macOS 上调用），为主窗口补齐 `NSWindowCollectionBehaviorFullScreenPrimary` 并监听 `NSWindowDidEnterFullScreenNotification`、`NSWindowDidExitFullScreenNotification` 与 `NSWindowDidBecomeKeyNotification`，在 `dispatch_async(dispatch_get_main_queue(), ...)` 中检查 `[window isKeyWindow]` 后将 `firstResponder` 恢复至 `WKWebView`（若当前 `firstResponder` 已是 `WKWebView` 或其子视图则跳过，避免打断输入框）；
+  - 同时在 `nocta_attach_mpv_window` 与 [`osd_overlay.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/osd_overlay.rs) 的 `close_osd_overlay` 中同步调用 `nocta_focus_webview`，并在 `PlayerPage.tsx` / `OsdOverlayPage.tsx` 的 `KeyF` 分支增加 `if (e.repeat) break;` 防止长按连发。
+
+### 41. Emby 服务器访问域名/IP 收集与分流规则导出规范
 - **纯逻辑归一化、脱敏与规则生成 ([`embyHostCollector.ts`](file:///d:/wade/code/emby-tauri-player/src/services/embyHostCollector.ts) / [`useEmbyHostsStore.ts`](file:///d:/wade/code/emby-tauri-player/src/stores/useEmbyHostsStore.ts))**：
   - 仅采集 `http:`/`https:` URL（自动忽略 `tauri:`、`blob:`、`file:`），区分 `domain`/`ipv4`/`ipv6` 并通过 `extractRootDomain` 识别常见双段公共后缀（`co.uk`、`com.cn` 等）；`redactUrlForSample` 自动剥离 URL userinfo 与 `api_key`/`X-Emby-Token`/`sig`/`X-Amz-Signature` 等敏感 query 参数后再存样本；单服上限 200 条、`recordUrl` 500ms 防抖落盘并监听 `beforeunload` 刷盘，增删改与同步导入即时落盘；
   - `useEmbyHostsStore` 仅通过结构化 `ServerIdentityLike` 与 `embyHostCollector` 交互（禁止直接导入 `useAuthStore` 以免循环依赖）；多端同步通过 `normalizeEmbyServerSyncKey(url, username)`（`url___username`）跨设备映射并通过 [`configBackupService.ts`](file:///d:/wade/code/emby-tauri-player/src/services/configBackupService.ts) 合并 `embyCollectedHosts` 与 `embyHostCollectorSettings`。

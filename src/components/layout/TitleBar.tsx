@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Minus, Square, Copy, X, Search, Settings } from 'lucide-react';
+import { Minus, Square, Copy, X, Search, Settings, Film, Headphones } from 'lucide-react';
 import { isTauriEnvironment } from '../../api/http';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { ServerSwitcherDropdown } from './ServerSwitcherDropdown';
 import { useAuthStore } from '../../stores/useAuthStore';
 import { hasUnignoredUpdate, useUpdaterStore } from '../../stores/useUpdaterStore';
+import { useMusicPlayerStore } from '../../stores/useMusicPlayerStore';
 
 interface TitleBarProps {
   title?: string;
@@ -18,7 +19,27 @@ export const TitleBar: React.FC<TitleBarProps> = ({
 }) => {
   const navigate = useNavigate();
   const location = useLocation();
-  const isHomePage = location.pathname === '/';
+  const activeSpace = useMusicPlayerStore((s) => s.activeSpace);
+  const setActiveSpace = useMusicPlayerStore((s) => s.setActiveSpace);
+  const isMusicPlaying = useMusicPlayerStore((s) => s.isPlaying);
+  const isMusicSpace =
+    location.pathname.startsWith('/music') ||
+    (activeSpace === 'music' && location.pathname === '/settings');
+  const isHomePage = location.pathname === '/' || location.pathname === '/music';
+  const isLoginPage = location.pathname === '/login';
+
+  const handleSwitchSpace = (space: 'video' | 'music') => {
+    setActiveSpace(space);
+    if (space === 'music') {
+      if (!location.pathname.startsWith('/music')) {
+        navigate('/music');
+      }
+    } else {
+      if (location.pathname.startsWith('/music')) {
+        navigate('/');
+      }
+    }
+  };
   const currentServer = useAuthStore((s) => s.getCurrentServer());
   const hasUpdate = useUpdaterStore(hasUnignoredUpdate);
   const [isMaximized, setIsMaximized] = useState(false);
@@ -88,15 +109,67 @@ export const TitleBar: React.FC<TitleBarProps> = ({
         </span>
       </div>
 
-      {/* 中部：聚合搜索快捷胶囊与服务器快速切换器 (确保非拖拽区域可交互) */}
-      <div className="flex items-center space-x-3 pointer-events-auto">
+      {/* 中部：空间切换胶囊 + 聚合搜索快捷胶囊 + 服务器快速切换器 (确保非拖拽区域可交互) */}
+      <div className="flex items-center space-x-2.5 pointer-events-auto">
+        {!isLoginPage && (
+          <div
+            className="relative p-0.5 rounded-full bg-white/[0.04] border border-white/[0.08] inline-grid grid-cols-2 items-center"
+            role="tablist"
+            aria-label="空间切换"
+          >
+            <div
+              className={`absolute top-0.5 bottom-0.5 left-0.5 w-[calc(50%-2px)] rounded-full transition-all duration-300 ease-out ${
+                isMusicSpace
+                  ? 'translate-x-full bg-gradient-to-r from-purple-500/30 to-sky-500/25 border border-purple-400/40 shadow-sm shadow-purple-500/20'
+                  : 'translate-x-0 bg-[#38BDF8]/20 border border-[#38BDF8]/40 shadow-sm shadow-sky-500/20'
+              }`}
+            />
+            <button
+              type="button"
+              role="tab"
+              aria-selected={!isMusicSpace}
+              onClick={() => handleSwitchSpace('video')}
+              className={`relative z-10 h-7 px-3 rounded-full inline-flex items-center justify-center gap-1.5 text-xs font-semibold transition-colors cursor-pointer ${
+                !isMusicSpace ? 'text-[#38BDF8]' : 'text-slate-400 hover:text-slate-200'
+              }`}
+              title="切换至影视空间"
+            >
+              <Film className="w-3.5 h-3.5" />
+              <span>影视</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={isMusicSpace}
+              onClick={() => handleSwitchSpace('music')}
+              className={`relative z-10 h-7 px-3 rounded-full inline-flex items-center justify-center gap-1.5 text-xs font-semibold transition-colors cursor-pointer ${
+                isMusicSpace ? 'text-purple-200' : 'text-slate-400 hover:text-slate-200'
+              }`}
+              title="切换至音乐空间"
+            >
+              <Headphones
+                className={`w-3.5 h-3.5 ${
+                  isMusicPlaying ? 'animate-pulse text-purple-300' : ''
+                }`}
+              />
+              <span>音乐</span>
+            </button>
+          </div>
+        )}
+
         <button
-          onClick={() => navigate('/search')}
+          onClick={() => navigate(isMusicSpace ? '/music/search' : '/search')}
           className="flex items-center space-x-2 px-3 py-1.5 rounded-full bg-white/[0.04] hover:bg-white/[0.08] text-slate-400 hover:text-slate-100 border border-white/[0.08] hover:border-white/[0.15] transition cursor-pointer text-xs group"
-          title="全局搜索 (Ctrl+K)"
+          title={isMusicSpace ? '搜索音乐 (Ctrl+K)' : '全局搜索 (Ctrl+K)'}
         >
-          <Search className="w-3.5 h-3.5 text-primary group-hover:scale-110 transition-transform" />
-          <span className="hidden sm:inline">搜索片名、剧集、演员...</span>
+          <Search
+            className={`w-3.5 h-3.5 group-hover:scale-110 transition-transform ${
+              isMusicSpace ? 'text-purple-400' : 'text-primary'
+            }`}
+          />
+          <span className="hidden sm:inline">
+            {isMusicSpace ? '搜索歌曲、专辑、歌手...' : '搜索片名、剧集、演员...'}
+          </span>
           <kbd className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-white/[0.08] text-slate-400 border border-white/[0.08]">
             {isMac ? '⌘K' : 'Ctrl K'}
           </kbd>

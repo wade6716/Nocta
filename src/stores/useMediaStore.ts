@@ -14,6 +14,7 @@ interface MediaStoreState {
   nextUpItems: EmbyItem[];
   recentlyPlayedItems: EmbyItem[];
   views: EmbyItem[];
+  musicViews: EmbyItem[];
   latestMap: Record<string, EmbyItem[]>;
   viewCounts: Record<string, ViewCounts>;
   lastViewCountsSyncAt: number;
@@ -30,6 +31,7 @@ interface MediaStoreState {
     nextUpItems: EmbyItem[];
     recentlyPlayedItems: EmbyItem[];
     views: EmbyItem[];
+    musicViews?: EmbyItem[];
     latestMap: Record<string, EmbyItem[]>;
     viewCounts?: Record<string, ViewCounts>;
   }) => void;
@@ -53,6 +55,7 @@ export const useMediaStore = create<MediaStoreState>((set) => ({
   nextUpItems: [],
   recentlyPlayedItems: [],
   views: [],
+  musicViews: [],
   latestMap: {},
   viewCounts: {},
   lastViewCountsSyncAt: 0,
@@ -63,7 +66,7 @@ export const useMediaStore = create<MediaStoreState>((set) => ({
   homeScrollY: 0,
   cacheVersion: 0,
 
-  setMediaData: ({ serverId, resumeItems, nextUpItems, recentlyPlayedItems, views, latestMap, viewCounts }) =>
+  setMediaData: ({ serverId, resumeItems, nextUpItems, recentlyPlayedItems, views, musicViews, latestMap, viewCounts }) =>
     set((state) => {
       const serverChanged = state.serverId !== serverId;
       return {
@@ -72,6 +75,8 @@ export const useMediaStore = create<MediaStoreState>((set) => ({
         nextUpItems,
         recentlyPlayedItems,
         views,
+        musicViews:
+          musicViews !== undefined ? musicViews : serverChanged ? [] : state.musicViews,
         latestMap,
         viewCounts:
           viewCounts !== undefined ? viewCounts : serverChanged ? {} : state.viewCounts,
@@ -121,6 +126,7 @@ export const useMediaStore = create<MediaStoreState>((set) => ({
       nextUpItems: [],
       recentlyPlayedItems: [],
       views: [],
+      musicViews: [],
       latestMap: {},
       viewCounts: {},
       lastViewCountsSyncAt: 0,

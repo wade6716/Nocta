@@ -6,6 +6,44 @@ static NSTimer *g_sync_timer = nil;
 static id g_enter_fullscreen_observer = nil;
 static id g_exit_fullscreen_observer = nil;
 static id g_change_screen_observer = nil;
+static id g_main_enter_fs_observer = nil;
+static id g_main_exit_fs_observer = nil;
+static id g_main_become_key_observer = nil;
+
+static NSView *find_wkwebview_in_view(NSView *view) {
+    if (!view) {
+        return nil;
+    }
+    Class wkClass = NSClassFromString(@"WKWebView");
+    if (wkClass && [view isKindOfClass:wkClass]) {
+        return view;
+    }
+    for (NSView *subview in [view subviews]) {
+        NSView *found = find_wkwebview_in_view(subview);
+        if (found) {
+            return found;
+        }
+    }
+    return nil;
+}
+
+static void ensure_webview_first_responder(NSWindow *window) {
+    if (!window) {
+        return;
+    }
+    NSView *webview = find_wkwebview_in_view([window contentView]);
+    if (!webview) {
+        return;
+    }
+    NSResponder *current = [window firstResponder];
+    if (current == webview) {
+        return;
+    }
+    if ([current isKindOfClass:[NSView class]] && [(NSView *)current isDescendantOf:webview]) {
+        return;
+    }
+    [window makeFirstResponder:webview];
+}
 
 static void reorder_mpv_window_below(void) {
     if (!g_parent_window || !g_mpv_window) {
@@ -129,6 +167,7 @@ int nocta_attach_mpv_window(void *parent_ptr, const char *title_ptr) {
 
     reorder_mpv_window_below();
     [parent makeKeyAndOrderFront:nil];
+    ensure_webview_first_responder(parent);
 
     if (!g_sync_timer) {
         g_sync_timer = [NSTimer scheduledTimerWithTimeInterval:0.2
@@ -174,4 +213,70 @@ void nocta_configure_osd_overlay(void *window_ptr) {
     [window setMovable:NO];
     [window setReleasedWhenClosed:NO];
     [window orderFrontRegardless];
+}
+
+void nocta_focus_webview(void *window_ptr) {
+    if (!window_ptr) {
+        return;
+    }
+    NSWindow *window = (__bridge NSWindow *)window_ptr;
+    ensure_webview_first_responder(window);
+}
+
+// 修复 macOS 无边框主窗口在进入/退出全屏后 tao::set_style_mask 将 firstResponder 重置为 TaoView
+// 导致 WKWebView 丢失键盘快捷键（如 F / Cmd+F）响应的问题，并确保支持原生全屏。
+void nocta_configure_main_window(void *window_ptr) {
+    if (!window_ptr) {
+        return;
+    }
+
+    NSWindow *window = (__bridge NSWindow *)window_ptr;
+    NSWindowCollectionBehavior behavior = [window collectionBehavior];
+    if ((behavior & NSWindowCollectionBehaviorFullScreenPrimary) == 0) {
+        [window setCollectionBehavior:(behavior | NSWindowCollectionBehaviorFullScreenPrimary)];
+    }
+
+    NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
+    NSOperationQueue *queue = [NSOperationQueue mainQueue];
+
+    if (g_main_enter_fs_observer) {
+        [center removeObserver:g_main_enter_fs_observer];
+        g_main_enter_fs_observer = nil;
+    }
+    if (g_main_exit_fs_observer) {
+        [center removeObserver:g_main_exit_fs_observer];
+        g_main_exit_fs_observer = nil;
+    }
+    if (g_main_become_key_observer) {
+        [center removeObserver:g_main_become_key_observer];
+        g_main_become_key_observer = nil;
+    }
+
+    __weak NSWindow *weakWindow = window;
+    void (^restoreFocusBlock)(NSNotification *) = ^(__unused NSNotification *note) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            NSWindow *strongWindow = weakWindow;
+            if (strongWindow && [strongWindow isKeyWindow]) {
+                ensure_webview_first_responder(strongWindow);
+            }
+        });
+    };
+
+    g_main_enter_fs_observer =
+        [center addObserverForName:NSWindowDidEnterFullScreenNotification
+                            object:window
+                             queue:queue
+                        usingBlock:restoreFocusBlock];
+    g_main_exit_fs_observer =
+        [center addObserverForName:NSWindowDidExitFullScreenNotification
+                            object:window
+                             queue:queue
+                        usingBlock:restoreFocusBlock];
+    g_main_become_key_observer =
+        [center addObserverForName:NSWindowDidBecomeKeyNotification
+                            object:window
+                             queue:queue
+                        usingBlock:restoreFocusBlock];
+
+    restoreFocusBlock(nil);
 }

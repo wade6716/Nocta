@@ -210,6 +210,51 @@ export interface EmbyItem {
   RecursiveItemCount?: number;
   Status?: string;
   Chapters?: EmbyChapter[];
+  // Music-related fields
+  Album?: string;
+  AlbumId?: string;
+  AlbumArtist?: string;
+  AlbumArtists?: Array<{ Name: string; Id: string }>;
+  Artists?: string[];
+  ArtistItems?: Array<{ Name: string; Id: string }>;
+  AlbumPrimaryImageTag?: string;
+  ParentId?: string;
+  DiscNumber?: number;
+  Genres?: string[];
+  Container?: string;
+  Bitrate?: number;
+  MediaStreams?: EmbyMediaStream[];
+}
+
+/**
+ * 校验条目是否属于音乐库分类视图
+ */
+export function isMusicLibraryView(view?: EmbyItem | null): boolean {
+  if (!view) return false;
+  return (view.CollectionType || '').toLowerCase() === 'music';
+}
+
+/**
+ * 校验条目是否属于音乐生态媒体（歌曲、专辑、艺术家、歌单）
+ */
+export function isMusicMedia(item?: EmbyItem | null): boolean {
+  if (!item || !item.Type) return false;
+  if (
+    item.MediaType === 'Video' ||
+    ['Movie', 'Series', 'Episode', 'Season', 'BoxSet', 'Video', 'MusicVideo'].includes(item.Type)
+  ) {
+    return false;
+  }
+  if (
+    item.Type === 'Audio' ||
+    item.Type === 'MusicAlbum' ||
+    item.Type === 'MusicArtist' ||
+    item.Type === 'Artist' ||
+    item.Type === 'Playlist'
+  ) {
+    return true;
+  }
+  return item.MediaType === 'Audio';
 }
 
 /**
@@ -1543,6 +1588,8 @@ export interface ViewCounts {
   movieCount?: number;
   seriesCount?: number;
   episodeCount?: number;
+  albumCount?: number;
+  songCount?: number;
 }
 
 /**
@@ -1584,6 +1631,13 @@ export async function getViewItemCounts(
     ]);
     counts.seriesCount = series;
     counts.episodeCount = episodes;
+  } else if (collectionType === 'music') {
+    const [albums, songs] = await Promise.all([
+      fetchCount('MusicAlbum'),
+      fetchCount('Audio'),
+    ]);
+    counts.albumCount = albums;
+    counts.songCount = songs;
   } else {
     // 混合库或自定义库
     const [movies, series] = await Promise.all([

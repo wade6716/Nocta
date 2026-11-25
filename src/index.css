@@ -53,3 +53,104 @@ input[type="range"] {
   font-variant-numeric: tabular-nums;
 }
 
+/* Music Player GPU-accelerated animations */
+@keyframes music-eq-bar {
+  0%, 100% {
+    transform: scaleY(0.28);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+.music-eq-bar-1 {
+  transform-origin: bottom;
+  animation: music-eq-bar 0.78s ease-in-out infinite;
+}
+
+.music-eq-bar-2 {
+  transform-origin: bottom;
+  animation: music-eq-bar 0.62s ease-in-out 0.18s infinite;
+}
+
+.music-eq-bar-3 {
+  transform-origin: bottom;
+  animation: music-eq-bar 0.85s ease-in-out 0.34s infinite;
+}
+
+@keyframes vinyl-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.animate-vinyl-spin {
+  animation: vinyl-spin 22s linear infinite;
+}
+
+@keyframes ambient-drift {
+  0%, 100% {
+    transform: scale(1.18) translate3d(0, 0, 0);
+  }
+  33% {
+    transform: scale(1.24) translate3d(2%, -1.5%, 0);
+  }
+  66% {
+    transform: scale(1.2) translate3d(-1.5%, 2%, 0);
+  }
+}
+
+.animate-ambient-drift {
+  animation: ambient-drift 20s ease-in-out infinite;
+}
+
+@keyframes heart-pop {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.32);
+  }
+  70% {
+    transform: scale(0.9);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.animate-heart-pop {
+  animation: heart-pop 0.36s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes music-overlay-in {
+  from {
+    opacity: 0;
+    transform: translateY(22px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-music-overlay-in {
+  animation: music-overlay-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .music-eq-bar-1,
+  .music-eq-bar-2,
+  .music-eq-bar-3,
+  .animate-vinyl-spin,
+  .animate-ambient-drift,
+  .animate-heart-pop,
+  .animate-music-overlay-in {
+    animation: none !important;
+  }
+}
+
+

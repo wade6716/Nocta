@@ -423,6 +423,7 @@ export const OsdOverlayPage: React.FC = () => {
           break;
         case 'KeyF':
           e.preventDefault();
+          if (e.repeat) break;
           send({ type: 'toggle-fullscreen' });
           shouldResetOsdTimer = true;
           break;

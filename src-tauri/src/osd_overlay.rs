@@ -74,6 +74,15 @@ pub async fn close_osd_overlay(app: tauri::AppHandle) -> Result<(), String> {
 
     if let Some(main) = app.get_webview_window("main") {
         let _ = main.set_focus();
+        #[cfg(target_os = "macos")]
+        {
+            if let Ok(ns_win) = main.ns_window() {
+                let ns_win_addr = ns_win as usize;
+                let _ = main.run_on_main_thread(move || {
+                    crate::mpv_embed::focus_webview(ns_win_addr as *mut std::ffi::c_void);
+                });
+            }
+        }
     }
 
     Ok(())

@@ -28,6 +28,7 @@ import {
   ViewCounts,
   mergeMediaBySeries,
   isVideoMedia,
+  isMusicLibraryView,
   resolveItemBackdropUrl,
   resolveItemPosterUrl,
   stripImageFormatWebp,
@@ -200,11 +201,15 @@ export const HomePage: React.FC<{ isActive?: boolean }> = ({ isActive = true }) 
         ]);
         if (isStale()) return;
 
-        const userViews = resViews.Items || [];
+        const allViews = resViews.Items || [];
+        const videoViews = allViews.filter(
+          (v) => !isMusicLibraryView(v) && (v.CollectionType || '').toLowerCase() !== 'photos'
+        );
+        const musicViews = allViews.filter(isMusicLibraryView);
         const latestEntries: Record<string, EmbyItem[]> = {};
 
         await Promise.all(
-          userViews.map(async (v) => {
+          videoViews.map(async (v) => {
             try {
               const items = await getLatestItems(
                 targetServer.url,
@@ -213,7 +218,7 @@ export const HomePage: React.FC<{ isActive?: boolean }> = ({ isActive = true }) 
                 targetServer.accessToken,
                 12
               );
-              latestEntries[v.Id] = items;
+              latestEntries[v.Id] = items.filter(isVideoMedia);
             } catch (e) {
               console.warn(`Fetch latest for ${v.Name} failed`, e);
             }
@@ -226,12 +231,13 @@ export const HomePage: React.FC<{ isActive?: boolean }> = ({ isActive = true }) 
           resumeItems: resResume.Items || [],
           nextUpItems: resNextUp || [],
           recentlyPlayedItems: resRecent || [],
-          views: userViews,
+          views: videoViews,
+          musicViews,
           latestMap: latestEntries,
         });
 
         // 异步并发拉取每个媒体库的剧集和电影数量（Promise.allSettled 一次批量提交）
-        fetchCountsForViews(userViews, targetServer, reqId);
+        fetchCountsForViews(videoViews, targetServer, reqId);
       } catch (err: any) {
         if (!isStale()) {
           console.error('加载媒体库失败', err);
@@ -301,25 +307,6 @@ export const HomePage: React.FC<{ isActive?: boolean }> = ({ isActive = true }) 
       saveCurrentScroll();
     };
   }, [setHomeScrollY]);
-
-  // 全局搜索快捷键监听 (Ctrl+K / Cmd+K / 斜杠)
-  useEffect(() => {
-    if (!isActive) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault();
-        navigate('/search');
-      } else if (
-        e.key === '/' &&
-        !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)
-      ) {
-        e.preventDefault();
-        navigate('/search');
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isActive, navigate]);
 
   const saveHomeScroll = useCallback(() => {
     const container = getHomeScrollContainer();

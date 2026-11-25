@@ -37,12 +37,64 @@ test('extractHostFromUrl extracts domain, IPv4, IPv6 and rejects non-http scheme
   assert.equal(extractHostFromUrl('file:///D:/video.mp4'), null);
 });
 
-test('extractRootDomain handles multi-part suffixes', () => {
+test('extractRootDomain handles multi-part suffixes and Mozilla PSL shared domains', () => {
   assert.equal(extractRootDomain('cdn.115.example.co.uk'), 'example.co.uk');
   assert.equal(extractRootDomain('vod.emby.com.cn'), 'emby.com.cn');
   assert.equal(extractRootDomain('sub.a.b.example.org'), 'example.org');
+  // Free domain PSL suffixes (eu.org etc.) must keep the tenant label
+  assert.equal(extractRootDomain('vipdc.covh.eu.org'), 'covh.eu.org');
+  assert.equal(extractRootDomain('de.ftp2.eu.org'), 'ftp2.eu.org');
+  assert.equal(extractRootDomain('nl.ftp2.eu.org'), 'ftp2.eu.org');
+  // NAS / DDNS / Cloud PSL suffixes
+  assert.equal(extractRootDomain('myemby.synology.me'), 'myemby.synology.me');
+  assert.equal(extractRootDomain('nas.duckdns.org'), 'nas.duckdns.org');
+  assert.equal(extractRootDomain('stream.app.workers.dev'), 'app.workers.dev');
   assert.equal(classifyHostKind('1.2.3.4'), 'ipv4');
   assert.equal(classifyHostKind('240e::1'), 'ipv6');
+});
+
+test('generateRoutingRules heals stale rootDomain on eu.org hosts and deduplicates per tenant', () => {
+  const staleEntries = [
+    {
+      host: 'vipdc.covh.eu.org',
+      kind: 'domain',
+      rootDomain: 'eu.org', // stale cached rootDomain from older version
+      categories: ['api'],
+      ports: [443],
+      firstSeenAt: 1000,
+      lastSeenAt: 1000,
+      hitCount: 1,
+    },
+    {
+      host: 'de.ftp2.eu.org',
+      kind: 'domain',
+      rootDomain: 'eu.org',
+      categories: ['redirect'],
+      ports: [443],
+      firstSeenAt: 1100,
+      lastSeenAt: 1100,
+      hitCount: 1,
+    },
+    {
+      host: 'nl.ftp2.eu.org',
+      kind: 'domain',
+      rootDomain: 'eu.org',
+      categories: ['redirect'],
+      ports: [443],
+      firstSeenAt: 1200,
+      lastSeenAt: 1200,
+      hitCount: 1,
+    },
+  ];
+
+  const rules = generateRoutingRules(staleEntries, 'clash', 'suffix', { policyName: 'PROXY' });
+  assert.equal(
+    rules,
+    ['rules:', '  - DOMAIN-SUFFIX,covh.eu.org,PROXY', '  - DOMAIN-SUFFIX,ftp2.eu.org,PROXY'].join(
+      '\n'
+    )
+  );
+  assert.ok(!rules.includes('DOMAIN-SUFFIX,eu.org'));
 });
 
 test('redactUrlForSample strips userinfo and sensitive query params', () => {

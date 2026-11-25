@@ -519,7 +519,7 @@
 
 ### 41. Emby 服务器访问域名/IP 收集与分流规则导出规范
 - **纯逻辑归一化、脱敏与规则生成 ([`embyHostCollector.ts`](file:///d:/wade/code/emby-tauri-player/src/services/embyHostCollector.ts) / [`useEmbyHostsStore.ts`](file:///d:/wade/code/emby-tauri-player/src/stores/useEmbyHostsStore.ts))**：
-  - 仅采集 `http:`/`https:` URL（自动忽略 `tauri:`、`blob:`、`file:`），区分 `domain`/`ipv4`/`ipv6` 并通过 `extractRootDomain` 识别常见双段公共后缀（`co.uk`、`com.cn` 等）；`redactUrlForSample` 自动剥离 URL userinfo 与 `api_key`/`X-Emby-Token`/`sig`/`X-Amz-Signature` 等敏感 query 参数后再存样本；单服上限 200 条、`recordUrl` 500ms 防抖落盘并监听 `beforeunload` 刷盘，增删改与同步导入即时落盘；
+  - 仅采集 `http:`/`https:` URL（自动忽略 `tauri:`、`blob:`、`file:`），区分 `domain`/`ipv4`/`ipv6` 并通过 `extractRootDomain` 识别常见双段公共后缀（`co.uk`、`com.cn` 等）以及 Mozilla PSL 共享后缀（如 `eu.org`、`us.kg`、`synology.me`、`duckdns.org`、`workers.dev` 等，确保 `vipdc.covh.eu.org` 提取为 `covh.eu.org` 而非公共后缀 `eu.org`）；规则导出、合并与 Store 加载时始终动态重算 `extractRootDomain(host)`，自动自愈旧版持久化缓存；`redactUrlForSample` 自动剥离 URL userinfo 与 `api_key`/`X-Emby-Token`/`sig`/`X-Amz-Signature` 等敏感 query 参数后再存样本；单服上限 200 条、`recordUrl` 500ms 防抖落盘并监听 `beforeunload` 刷盘，增删改与同步导入即时落盘；
   - `useEmbyHostsStore` 仅通过结构化 `ServerIdentityLike` 与 `embyHostCollector` 交互（禁止直接导入 `useAuthStore` 以免循环依赖）；多端同步通过 `normalizeEmbyServerSyncKey(url, username)`（`url___username`）跨设备映射并通过 [`configBackupService.ts`](file:///d:/wade/code/emby-tauri-player/src/services/configBackupService.ts) 合并 `embyCollectedHosts` 与 `embyHostCollectorSettings`。
 - **全链路 5 处观测点与静默 302 探测**：
   - **前端 HTTP (`http.ts` / `App.tsx`)**：`registerHttpResponseObserver` 严格按已配置服务器 URL 前缀/主机名匹配归属（避免弹幕、WebDAV/S3、更新检查请求污染 Emby 主机列表），并额外记录跨域 `res.url` 为 `'redirect'`；

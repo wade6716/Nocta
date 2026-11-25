@@ -4,6 +4,7 @@ import {
   DEFAULT_EMBY_HOST_COLLECTOR_SETTINGS,
   type EmbyHostCategory,
   type EmbyHostCollectorSettings,
+  extractRootDomain,
   mergeCollectedHostLists,
   normalizeEmbyServerSyncKey,
   upsertCollectedHost,
@@ -54,15 +55,22 @@ function loadPersistedState(): PersistedEmbyHostsPayload {
       };
     }
     const parsed = JSON.parse(raw) as Partial<PersistedEmbyHostsPayload>;
+    const normalizedMap: Record<string, CollectedHostEntry[]> = {};
+    if (parsed.hostsByServerId && typeof parsed.hostsByServerId === 'object') {
+      for (const [serverId, list] of Object.entries(parsed.hostsByServerId)) {
+        if (!Array.isArray(list)) continue;
+        normalizedMap[serverId] = list.map((entry) => ({
+          ...entry,
+          rootDomain: entry?.host ? extractRootDomain(entry.host) : entry?.rootDomain || '',
+        }));
+      }
+    }
     return {
       settings: {
         ...DEFAULT_EMBY_HOST_COLLECTOR_SETTINGS,
         ...(parsed.settings || {}),
       },
-      hostsByServerId:
-        parsed.hostsByServerId && typeof parsed.hostsByServerId === 'object'
-          ? parsed.hostsByServerId
-          : {},
+      hostsByServerId: normalizedMap,
     };
   } catch {
     return {

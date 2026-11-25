@@ -45,10 +45,15 @@ export interface ExtractedHostInfo {
 const MAX_HOSTS_PER_SERVER = 200;
 
 const MULTI_PART_SUFFIXES = new Set([
+  // 常见国家/地区二级公共后缀
   'co.uk',
   'org.uk',
   'ac.uk',
   'gov.uk',
+  'me.uk',
+  'ltd.uk',
+  'plc.uk',
+  'sch.uk',
   'com.cn',
   'net.cn',
   'org.cn',
@@ -66,9 +71,14 @@ const MULTI_PART_SUFFIXES = new Set([
   'com.tw',
   'org.tw',
   'net.tw',
+  'edu.tw',
+  'gov.tw',
+  'idv.tw',
   'com.au',
   'net.au',
   'org.au',
+  'co.nz',
+  'org.nz',
   'co.kr',
   'or.kr',
   'com.sg',
@@ -81,6 +91,88 @@ const MULTI_PART_SUFFIXES = new Set([
   'com.vn',
   'com.tr',
   'com.ru',
+  'co.za',
+  'co.il',
+  'com.ar',
+  'com.co',
+  'com.pe',
+  'com.ph',
+  'com.ua',
+  'or.at',
+  'co.at',
+  'com.pl',
+  'net.pl',
+  'org.pl',
+  'com.es',
+  'nom.es',
+  'org.es',
+  'com.pt',
+  'com.sa',
+  'com.eg',
+  'com.pk',
+  'com.bd',
+  'com.ng',
+  'co.ke',
+  // 免费二级域名项目 (Mozilla PSL)
+  'eu.org',
+  'us.kg',
+  'dpdns.org',
+  'pp.ua',
+  'js.org',
+  'is-a.dev',
+  'uk.to',
+  'us.to',
+  'ggff.net',
+  'qzz.io',
+  'co.cc',
+  'de.vu',
+  'eu.tc',
+  // NAS 与动态域名 DDNS 公共后缀 (PSL)
+  'synology.me',
+  'diskstation.me',
+  'myds.me',
+  'dsmynas.com',
+  'familyds.com',
+  'i234.me',
+  'quickconnect.to',
+  'myqnapcloud.com',
+  'asuscomm.com',
+  'tplinkdns.com',
+  'myfritz.net',
+  'duckdns.org',
+  'ddns.net',
+  'ddnsking.com',
+  'dynv6.net',
+  'hopto.org',
+  'zapto.org',
+  'sytes.net',
+  'no-ip.org',
+  'no-ip.biz',
+  'no-ip.info',
+  'servehttp.com',
+  'servegame.com',
+  'mooo.com',
+  'nip.io',
+  'sslip.io',
+  'ts.net',
+  // 云服务 / PaaS / Tunnel 公共后缀 (PSL)
+  'workers.dev',
+  'pages.dev',
+  'r2.dev',
+  'trycloudflare.com',
+  'cfargotunnel.com',
+  'github.io',
+  'gitlab.io',
+  'vercel.app',
+  'netlify.app',
+  'fly.dev',
+  'onrender.com',
+  'herokuapp.com',
+  'azurewebsites.net',
+  'cloudfront.net',
+  'amazonaws.com',
+  'ngrok.io',
+  'ngrok-free.app',
 ]);
 
 const SENSITIVE_QUERY_KEYS = new Set([
@@ -170,6 +262,12 @@ export function extractRootDomain(host: string): string {
   const labels = normalized.split('.').filter(Boolean);
   if (labels.length <= 2) {
     return labels.join('.');
+  }
+  if (labels.length >= 4) {
+    const lastThree = `${labels[labels.length - 3]}.${labels[labels.length - 2]}.${labels[labels.length - 1]}`;
+    if (MULTI_PART_SUFFIXES.has(lastThree)) {
+      return labels.slice(-4).join('.');
+    }
   }
   const lastTwo = `${labels[labels.length - 2]}.${labels[labels.length - 1]}`;
   if (MULTI_PART_SUFFIXES.has(lastTwo) && labels.length >= 3) {
@@ -296,7 +394,7 @@ export function mergeCollectedHostLists(
         ...entry,
         host,
         kind: entry.kind || classifyHostKind(host),
-        rootDomain: entry.rootDomain || extractRootDomain(host),
+        rootDomain: extractRootDomain(host),
         categories: Array.from(new Set(entry.categories || [])),
         ports: Array.from(new Set(entry.ports || [])).sort((a, b) => a - b),
       });
@@ -307,7 +405,7 @@ export function mergeCollectedHostLists(
     byHost.set(host, {
       host,
       kind: existing.kind,
-      rootDomain: existing.rootDomain || entry.rootDomain || extractRootDomain(host),
+      rootDomain: extractRootDomain(host),
       categories: Array.from(new Set([...existing.categories, ...(entry.categories || [])])),
       ports: Array.from(new Set([...existing.ports, ...(entry.ports || [])])).sort((a, b) => a - b),
       sampleUrl: useRemoteSample ? entry.sampleUrl || existing.sampleUrl : existing.sampleUrl || entry.sampleUrl,
@@ -348,7 +446,7 @@ export function generateRoutingRules(
 
   for (const entry of filtered) {
     if (entry.kind === 'domain') {
-      const target = mode === 'suffix' ? entry.rootDomain || extractRootDomain(entry.host) : entry.host;
+      const target = mode === 'suffix' ? extractRootDomain(entry.host) : entry.host;
       if (!target || seenDomains.has(target)) continue;
       seenDomains.add(target);
       if (mode === 'suffix') {

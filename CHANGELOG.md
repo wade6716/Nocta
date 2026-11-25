@@ -2,6 +2,13 @@
 
 本文件记录 **Nocta · 夜幕** 各正式版本与里程碑的主要功能变更，并在发版时由 [generate-release-notes.mjs](scripts/generate-release-notes.mjs) 自动同步至 GitHub Release 说明与客户端内「检查更新」弹窗。
 
+## [v0.3.2] - 2026-11-25
+
+### 🐛 问题修复
+- **修正公共后缀域名（PSL）分流规则提取**：补充识别 `eu.org`、`us.kg`、`synology.me`、`duckdns.org`、`workers.dev` 等 Mozilla 公共后缀列表（PSL）共享后缀，避免生成过宽的 `DOMAIN-SUFFIX,eu.org` 规则；规则导出、展示与跨端同步改为动态重算根域名，自动自愈旧版缓存记录（如 `vipdc.covh.eu.org` 准确输出 `covh.eu.org`）。
+
+---
+
 ## [v0.3.1] - 2026-11-25
 
 ### 🚀 新功能

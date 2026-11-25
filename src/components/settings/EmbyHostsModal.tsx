@@ -16,6 +16,7 @@ import {
   type EmbyHostCategory,
   type RuleDomainMode,
   type RuleExportFormat,
+  extractRootDomain,
   generateRoutingRules,
   isLocalOrPrivateHost,
 } from '../../services/embyHostCollector';
@@ -108,7 +109,7 @@ export const EmbyHostsModal: React.FC<EmbyHostsModalProps> = ({
       }
       if (q) {
         const hitHost = entry.host.toLowerCase().includes(q);
-        const hitRoot = entry.rootDomain.toLowerCase().includes(q);
+        const hitRoot = extractRootDomain(entry.host).toLowerCase().includes(q);
         const hitSample = (entry.sampleUrl || '').toLowerCase().includes(q);
         if (!hitHost && !hitRoot && !hitSample) return false;
       }
@@ -301,6 +302,7 @@ export const EmbyHostsModal: React.FC<EmbyHostsModalProps> = ({
               <div className="divide-y divide-white/5 max-h-60 overflow-y-auto">
                 {filteredEntries.map((entry) => {
                   const isLocal = isLocalOrPrivateHost(entry.host);
+                  const rootDomain = extractRootDomain(entry.host);
                   return (
                     <div
                       key={entry.host}
@@ -324,10 +326,10 @@ export const EmbyHostsModal: React.FC<EmbyHostsModalProps> = ({
                             </span>
                           )}
                           {entry.kind === 'domain' &&
-                            entry.rootDomain &&
-                            entry.rootDomain !== entry.host && (
+                            rootDomain &&
+                            rootDomain !== entry.host && (
                               <span className="text-[10px] text-gray-400 font-mono">
-                                根域: {entry.rootDomain}
+                                根域: {rootDomain}
                               </span>
                             )}
                           {entry.categories.map((cat) => (

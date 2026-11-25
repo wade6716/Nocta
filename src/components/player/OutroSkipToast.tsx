@@ -6,6 +6,7 @@ interface OutroSkipToastProps {
   remainingMs: number;
   totalMs?: number;
   defaultAction?: 'ask' | 'auto';
+  hasNextEpisode?: boolean;
   onSkip: () => void;
   onCancel: () => void;
 }
@@ -15,6 +16,7 @@ export const OutroSkipToast: React.FC<OutroSkipToastProps> = ({
   remainingMs,
   totalMs = 8000,
   defaultAction = 'ask',
+  hasNextEpisode = false,
   onSkip,
   onCancel,
 }) => {
@@ -36,7 +38,9 @@ export const OutroSkipToast: React.FC<OutroSkipToastProps> = ({
             <p className="text-sm font-semibold text-white">已到片尾</p>
             <p className="text-xs text-gray-400 mt-0.5">
               {defaultAction === 'auto'
-                ? `${remainingSeconds} 秒后自动跳到结尾`
+                ? hasNextEpisode
+                  ? `${remainingSeconds} 秒后自动跳过片尾进入下一集`
+                  : `${remainingSeconds} 秒后自动跳到结尾`
                 : `${remainingSeconds} 秒内可选择是否跳过`}
             </p>
           </div>

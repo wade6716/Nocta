@@ -105,7 +105,7 @@ export class Html5PlayerEngine implements IPlayerEngine {
     };
 
     this.video.ontimeupdate = () => {
-      if (!this.video) return;
+      if (!this.video || (this._state === 'loading' && this.video.readyState < 1)) return;
       this._currentTime = this.video.currentTime;
       this.timeUpdateListeners.forEach((cb) => cb(this._currentTime, this.duration));
     };
@@ -138,6 +138,8 @@ export class Html5PlayerEngine implements IPlayerEngine {
         ? options.bufferConfig.mediaBitrateBps
         : 8_000_000;
     this.lastBufferedEnd = 0;
+    this._currentTime = 0;
+    this._duration = 0;
     this.startSpeedPolling();
     this.setState('loading');
     this.video.src = options.url;

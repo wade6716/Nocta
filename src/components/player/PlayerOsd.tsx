@@ -163,6 +163,7 @@ function getProxyShortBadge(info?: ResolvedStreamProxyInfo | null): {
 interface SkipSegmentRowProps {
   label: string;
   value?: number;
+  hint?: string;
   onMark?: () => void;
   onClear?: () => void;
   onSeek: (seconds: number) => void;
@@ -171,13 +172,21 @@ interface SkipSegmentRowProps {
 const SkipSegmentRow: React.FC<SkipSegmentRowProps> = ({
   label,
   value,
+  hint,
   onMark,
   onClear,
   onSeek,
 }) => (
   <div className="rounded-xl bg-white/[0.04] border border-white/10 p-2.5">
-    <div className="flex items-center justify-between">
-      <span className="text-[11px] font-medium text-gray-400">{label}</span>
+    <div className="flex items-center justify-between gap-2">
+      <div className="flex items-center gap-1.5 min-w-0">
+        <span className="text-[11px] font-medium text-gray-400 shrink-0">{label}</span>
+        {hint && (
+          <span className="text-[10px] font-mono tabular-nums text-sky-300/80 bg-sky-500/10 border border-sky-400/20 px-1.5 py-0.2 rounded truncate">
+            {hint}
+          </span>
+        )}
+      </div>
       {value !== undefined ? (
         <button
           onClick={(e) => {
@@ -370,7 +379,9 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
   const displayTime = isScrubbing ? scrubTime : currentTime;
   const progressPercent =
     duration > 0 ? Math.min(100, Math.max(0, (displayTime / duration) * 100)) : 0;
-  const hasSkipSegments = Boolean(skipSegments?.introEnd || skipSegments?.outroStart);
+  const hasSkipSegments = Boolean(
+    skipSegments?.introEnd || skipSegments?.outroStart || skipSegments?.outroOffsetFromEnd
+  );
 
   const bufferedPercent =
     duration > 0 && telemetry?.bufferedEnd && telemetry.bufferedEnd > displayTime
@@ -915,6 +926,11 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
                   <SkipSegmentRow
                     label="片尾开始"
                     value={skipSegments?.outroStart}
+                    hint={
+                      skipSegments?.outroOffsetFromEnd
+                        ? `距结尾 ${formatTime(skipSegments.outroOffsetFromEnd)}`
+                        : undefined
+                    }
                     onMark={onMarkOutroStart}
                     onClear={() => onClearSkipSegment?.('outroStart')}
                     onSeek={onSeek}

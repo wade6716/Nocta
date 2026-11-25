@@ -101,6 +101,8 @@ export interface SkipSegments {
   itemId: string;
   introEnd?: number;
   outroStart?: number;
+  /** 距离片尾的秒数，用于跨集不同片长自适应片尾提示点 */
+  outroOffsetFromEnd?: number;
   updatedAt: number;
 }
 
@@ -129,8 +131,12 @@ export const DEFAULT_SKIP_SETTINGS: SkipSettings = {
   skipOutroAction: 'ask',
 };
 
-export function getSkipKey(item: { Id: string; SeriesId?: string }): string {
-  return item.SeriesId ? `series_${item.SeriesId}` : `item_${item.Id}`;
+export function getSkipKey(item: { Id: string; SeriesId?: string | number; Type?: string }): string {
+  const sid = item.Type === 'Series' ? item.Id : item.SeriesId;
+  if (sid !== undefined && sid !== null && String(sid).trim() !== '') {
+    return `series_${String(sid).trim()}`;
+  }
+  return `item_${String(item.Id)}`;
 }
 
 interface PlayerState {
@@ -201,7 +207,7 @@ interface PlayerState {
   resetVideoEnhancements: () => void;
   setSkipSegment: (
     key: string,
-    patch: { itemId?: string; introEnd?: number; outroStart?: number }
+    patch: { itemId?: string; introEnd?: number; outroStart?: number; outroOffsetFromEnd?: number }
   ) => void;
   clearSkipSegment: (key: string, field: 'introEnd' | 'outroStart') => void;
   updateSkipSettings: (settings: Partial<SkipSettings>) => void;
@@ -792,7 +798,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
         updatedAt: Date.now(),
       };
       const updated = { ...state.skipSegments, [key]: next };
-      saveStorageDebounced(SKIP_SEGMENTS_KEY, updated);
+      saveStorageImmediate(SKIP_SEGMENTS_KEY, updated);
       return { skipSegments: updated };
     });
   },
@@ -804,15 +810,22 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 
       const next: SkipSegments = { ...prev, updatedAt: Date.now() };
       delete next[field];
+      if (field === 'outroStart') {
+        delete next.outroOffsetFromEnd;
+      }
 
       const updated = { ...state.skipSegments };
-      if (next.introEnd === undefined && next.outroStart === undefined) {
+      if (
+        next.introEnd === undefined &&
+        next.outroStart === undefined &&
+        next.outroOffsetFromEnd === undefined
+      ) {
         delete updated[key];
       } else {
         updated[key] = next;
       }
 
-      saveStorageDebounced(SKIP_SEGMENTS_KEY, updated);
+      saveStorageImmediate(SKIP_SEGMENTS_KEY, updated);
       return { skipSegments: updated };
     });
   },
@@ -995,7 +1008,7 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
       }
       if (patch.skipSegments !== undefined) {
         next.skipSegments = patch.skipSegments;
-        if (shouldPersist) saveStorageDebounced(SKIP_SEGMENTS_KEY, patch.skipSegments);
+        if (shouldPersist) saveStorageImmediate(SKIP_SEGMENTS_KEY, patch.skipSegments);
       }
       if (patch.skipSettings !== undefined) {
         next.skipSettings = patch.skipSettings;

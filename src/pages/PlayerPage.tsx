@@ -74,6 +74,7 @@ import {
   OUTRO_TOAST_MS,
   useSkipSegmentsController,
 } from '../player/hooks/useSkipSegmentsController';
+import { shouldTriggerAutoNext } from '../player/skipSegmentsUtils';
 import { useDanmakuSession } from '../player/hooks/useDanmakuSession';
 import { useMacOsdOverlaySync } from '../player/hooks/useMacOsdOverlaySync';
 import { useNextEpisodePreloader } from '../player/hooks/useNextEpisodePreloader';
@@ -245,6 +246,13 @@ export const PlayerPage: React.FC = () => {
   );
   const seekRef = useRef<(targetSeconds: number) => void>(() => {});
   const seekDeltaRef = useRef<(delta: number) => void>(() => {});
+  const isSwitchingEpisodeRef = useRef(false);
+  const switchingTargetIdRef = useRef<string | null>(null);
+  const nextEpisodeRef = useRef<EmbyItem | null>(null);
+  const cancelAutoNextRef = useRef(false);
+  const switchToEpisodeRef = useRef<(targetEp: EmbyItem) => Promise<void>>(async () => {});
+
+  cancelAutoNextRef.current = cancelAutoNext;
 
   useEffect(() => {
     proxyOverrideRef.current = proxyOverride;
@@ -431,6 +439,12 @@ export const PlayerPage: React.FC = () => {
     engineRef,
     onSeek: (target) => seekRef.current(target),
     onSeekDelta: (delta) => seekDeltaRef.current(delta),
+    onPlayNextEpisode: () => {
+      const ep = nextEpisodeRef.current;
+      if (!ep) return false;
+      void switchToEpisodeRef.current(ep);
+      return true;
+    },
     showMiniHud,
   });
 
@@ -533,7 +547,7 @@ export const PlayerPage: React.FC = () => {
       });
 
     const unlistenTime = engine.onTimeUpdate((cur, dur) => {
-      if (!active) return;
+      if (!active || isSwitchingEpisodeRef.current) return;
       const targetInitSec = initialTimeRef.current;
       // 记忆进度起播防护：首跳未完成且当前仍处于起播 0 秒时拦截，防止 0 秒冲刷全局进度并保持加载层
       if (!hasInitialSeekedRef.current && targetInitSec > 0 && cur < 1) {
@@ -563,7 +577,7 @@ export const PlayerPage: React.FC = () => {
     });
 
     const unlistenState = engine.onStateChange((st) => {
-      if (!active) return;
+      if (!active || isSwitchingEpisodeRef.current) return;
       switch (st) {
         case 'loading':
           setIsLoadingVideo(true);
@@ -602,6 +616,15 @@ export const PlayerPage: React.FC = () => {
           setPaused(true);
           clearOutroOnEnded();
           bridge.onMpvPauseChange(true);
+          if (
+            nextEpisodeRef.current &&
+            usePlayerStore.getState().playerPreferences.autoPlayNext &&
+            !cancelAutoNextRef.current &&
+            autoSwitchedItemIdRef.current !== nextEpisodeRef.current.Id
+          ) {
+            autoSwitchedItemIdRef.current = nextEpisodeRef.current.Id;
+            void switchToEpisodeRef.current(nextEpisodeRef.current);
+          }
           break;
       }
     });
@@ -693,6 +716,8 @@ export const PlayerPage: React.FC = () => {
             serverUrl: liveServer.url,
           })
         : undefined;
+      isSwitchingEpisodeRef.current = false;
+      switchingTargetIdRef.current = null;
       engineRef.current
         .load({
           url: currentStreamUrl,
@@ -956,6 +981,7 @@ export const PlayerPage: React.FC = () => {
     currentEpisodeIndex >= 0 && currentEpisodeIndex + 1 < episodes.length
       ? episodes[currentEpisodeIndex + 1]
       : null;
+  nextEpisodeRef.current = nextEpisode;
 
   // 领域 Hook 4：下一集纯内存预加载与片头跳过缓存调度
   const { nextPreloadStatus, consumePreloadedSession, releaseActivePreload } =
@@ -976,10 +1002,18 @@ export const PlayerPage: React.FC = () => {
       skipSettings,
     });
 
-  // 原地无缝切换到其它分集（带 ReqId 竞态防护，不销毁底层 mpv 实例）
+  // 原地无缝切换到其它分集（带 ReqId 竞态防护、防并发双击切集锁，不销毁底层 mpv 实例）
   const switchToEpisode = useCallback(
     async (targetEp: EmbyItem) => {
       if (!currentServer || !targetEp) return;
+      if (isSwitchingEpisodeRef.current && switchingTargetIdRef.current === targetEp.Id) {
+        return;
+      }
+
+      isSwitchingEpisodeRef.current = true;
+      switchingTargetIdRef.current = targetEp.Id;
+      autoSwitchedItemIdRef.current = targetEp.Id;
+
       const reqId = ++episodeSwitchReqIdRef.current;
       try {
         setIsLoadingVideo(true);
@@ -987,6 +1021,9 @@ export const PlayerPage: React.FC = () => {
         setVideoError(null);
         setActivePanel('none');
         setAutoNextCountdown(null);
+
+        // 立刻暂停旧流，防止在拉取 Emby 会话期间继续触发旧流进度或 EOF 事件
+        engineRef.current?.pause().catch(() => {});
 
         // 先使用准确现场进度上报上一集停止
         await reportStoppedNow(lastValidTimeRef.current || currentTime);
@@ -1004,12 +1041,17 @@ export const PlayerPage: React.FC = () => {
           hasInitialSeekedRef.current = targetStart <= 0;
           initialTimeRef.current = targetStart;
           lastValidTimeRef.current = targetStart;
+          lastStoreTimeUpdateRef.current = { at: 0, time: targetStart, dur: 0 };
           setChapters(preloaded.session.item.Chapters || []);
+          updateTime(targetStart, 0);
           setPlaybackContext({
             ...preloaded.session,
             streamUrl: preloaded.localStreamUrl,
             initialTime: targetStart,
           });
+          if (preloaded.localStreamUrl === currentStreamUrl) {
+            setReloadToken((t) => t + 1);
+          }
           navigate(`/player/${preloaded.session.item.Id}`, { replace: true });
           showMiniHud({
             icon: 'info',
@@ -1029,17 +1071,28 @@ export const PlayerPage: React.FC = () => {
         if (reqId !== episodeSwitchReqIdRef.current) return;
 
         upstreamStreamUrlRef.current = session.streamUrl;
+        hasInitialSeekedRef.current = session.initialTime <= 0;
+        initialTimeRef.current = session.initialTime;
+        lastValidTimeRef.current = session.initialTime;
+        lastStoreTimeUpdateRef.current = { at: 0, time: session.initialTime, dur: 0 };
         setChapters(session.item.Chapters || []);
+        updateTime(session.initialTime, 0);
         setPlaybackContext(session);
+        if (session.streamUrl === currentStreamUrl) {
+          setReloadToken((t) => t + 1);
+        }
         navigate(`/player/${session.item.Id}`, { replace: true });
       } catch (err: any) {
         if (reqId !== episodeSwitchReqIdRef.current) return;
+        isSwitchingEpisodeRef.current = false;
+        switchingTargetIdRef.current = null;
         setVideoError(err?.message || '切换剧集失败');
         setIsLoadingVideo(false);
       }
     },
     [
       currentServer,
+      currentStreamUrl,
       currentTime,
       engineType,
       navigate,
@@ -1048,8 +1101,10 @@ export const PlayerPage: React.FC = () => {
       setPlaybackContext,
       showMiniHud,
       updateBuffering,
+      updateTime,
     ]
   );
+  switchToEpisodeRef.current = switchToEpisode;
 
   // 原地切换多版本片源 (4K / 1080p 原画直连热切，保留播放进度)
   const switchMediaSource = useCallback(
@@ -1117,6 +1172,7 @@ export const PlayerPage: React.FC = () => {
       !nextEpisode ||
       !playerPreferences.autoPlayNext ||
       cancelAutoNext ||
+      isSwitchingEpisodeRef.current ||
       isLoadingVideo ||
       isBuffering ||
       videoError ||
@@ -1128,9 +1184,10 @@ export const PlayerPage: React.FC = () => {
 
     const remaining = effectiveDuration - currentTime;
     if (remaining <= 15 && currentTime > 10) {
-      const secs = Math.max(0, Math.ceil(remaining));
+      const triggerNow = shouldTriggerAutoNext(remaining, currentTime);
+      const secs = triggerNow ? 0 : Math.max(1, Math.ceil(remaining));
       setAutoNextCountdown(secs);
-      if (secs === 0 && autoSwitchedItemIdRef.current !== nextEpisode.Id) {
+      if (triggerNow && autoSwitchedItemIdRef.current !== nextEpisode.Id) {
         autoSwitchedItemIdRef.current = nextEpisode.Id;
         switchToEpisode(nextEpisode);
       }
@@ -2477,6 +2534,9 @@ export const PlayerPage: React.FC = () => {
     centerIcon ?? '',
     outroToast?.deadline ?? 0,
     skipNotice ?? '',
+    currentSkipSegments?.introEnd ?? '',
+    currentSkipSegments?.outroStart ?? '',
+    currentSkipSegments?.outroOffsetFromEnd ?? '',
     danmuToast ?? '',
     durationAlert ?? '',
     autoNextCountdown ?? '',
@@ -3221,6 +3281,7 @@ export const PlayerPage: React.FC = () => {
         remainingMs={outroRemainingMs}
         totalMs={OUTRO_TOAST_MS}
         defaultAction={skipSettings.skipOutroAction}
+        hasNextEpisode={Boolean(nextEpisode)}
         onSkip={handleSkipOutro}
         onCancel={handleCancelOutro}
       />

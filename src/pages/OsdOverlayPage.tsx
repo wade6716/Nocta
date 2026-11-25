@@ -703,6 +703,7 @@ export const OsdOverlayPage: React.FC = () => {
         remainingMs={sync.outroToast?.remainingMs ?? 0}
         totalMs={sync.outroToast?.totalMs ?? 8000}
         defaultAction={sync.skipOutroAction ?? 'ask'}
+        hasNextEpisode={Boolean(sync.hasNextEpisode)}
         onSkip={() => send({ type: 'skip-outro' })}
         onCancel={() => send({ type: 'cancel-outro' })}
       />

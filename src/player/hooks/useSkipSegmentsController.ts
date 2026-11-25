@@ -3,6 +3,7 @@ import { EmbyChapter, EmbyItem, extractIntroRange, ticksToSeconds } from '../../
 import { formatTime } from '../../components/player/PlayerOsd';
 import { MiniHudState } from '../../components/player/MiniActionHud';
 import { getSkipKey, usePlayerStore } from '../../stores/usePlayerStore';
+import { computeOutroSegmentPatch, resolveEffectiveOutroStart } from '../skipSegmentsUtils';
 import { IPlayerEngine } from '../types';
 
 export const OUTRO_TOAST_MS = 8000;
@@ -21,6 +22,7 @@ interface UseSkipSegmentsControllerParams {
   engineRef: MutableRefObject<IPlayerEngine | null>;
   onSeek: (targetSeconds: number) => void;
   onSeekDelta: (delta: number) => void;
+  onPlayNextEpisode?: () => boolean;
   showMiniHud: (payload: Omit<MiniHudState, 'id'>, durationMs?: number) => void;
 }
 
@@ -41,6 +43,7 @@ export function useSkipSegmentsController({
   engineRef,
   onSeek,
   onSeekDelta,
+  onPlayNextEpisode,
   showMiniHud,
 }: UseSkipSegmentsControllerParams) {
   const skipSegments = usePlayerStore((s) => s.skipSegments);
@@ -61,16 +64,37 @@ export function useSkipSegmentsController({
 
   const onSeekRef = useRef(onSeek);
   const onSeekDeltaRef = useRef(onSeekDelta);
+  const onPlayNextEpisodeRef = useRef(onPlayNextEpisode);
   const showMiniHudRef = useRef(showMiniHud);
   const effectiveDurationRef = useRef(effectiveDuration);
 
   onSeekRef.current = onSeek;
   onSeekDeltaRef.current = onSeekDelta;
+  onPlayNextEpisodeRef.current = onPlayNextEpisode;
   showMiniHudRef.current = showMiniHud;
   effectiveDurationRef.current = effectiveDuration;
 
   const skipKey = item ? getSkipKey(item) : '';
-  const currentSkipSegments = skipKey ? skipSegments[skipKey] : undefined;
+  const rawSkipSegments = useMemo(() => {
+    if (!item || !skipKey) return undefined;
+    return skipSegments[skipKey] || skipSegments[`item_${item.Id}`];
+  }, [item?.Id, skipKey, skipSegments]);
+
+  const isSeries = Boolean(item?.SeriesId || item?.Type === 'Series');
+  const effectiveTotalDuration =
+    effectiveDuration || (item ? ticksToSeconds(item.RunTimeTicks || 0) : 0);
+  const resolvedOutroStart = resolveEffectiveOutroStart(
+    rawSkipSegments,
+    effectiveTotalDuration,
+    isSeries
+  );
+  const currentSkipSegments = useMemo(() => {
+    if (!rawSkipSegments) return undefined;
+    if (resolvedOutroStart !== undefined && resolvedOutroStart !== rawSkipSegments.outroStart) {
+      return { ...rawSkipSegments, outroStart: resolvedOutroStart };
+    }
+    return rawSkipSegments;
+  }, [rawSkipSegments, resolvedOutroStart]);
 
   const showSkipNotice = useCallback((message: string) => {
     setSkipNotice(message);
@@ -110,7 +134,8 @@ export function useSkipSegmentsController({
       return { seconds: rawTime, skipped: false };
     }
 
-    const segments = state.skipSegments[getSkipKey(currentItem)];
+    const segments =
+      state.skipSegments[getSkipKey(currentItem)] || state.skipSegments[`item_${currentItem.Id}`];
     const introEnd = segments?.introEnd;
     const runtime = ticksToSeconds(currentItem.RunTimeTicks || 0);
     if (
@@ -160,10 +185,13 @@ export function useSkipSegmentsController({
       return;
     }
     const currentItem = state.item;
-    const segments = currentItem ? state.skipSegments[getSkipKey(currentItem)] : undefined;
-    const outroStart = segments?.outroStart;
+    const segments = currentItem
+      ? state.skipSegments[getSkipKey(currentItem)] || state.skipSegments[`item_${currentItem.Id}`]
+      : undefined;
     const total = dur || (currentItem ? ticksToSeconds(currentItem.RunTimeTicks || 0) : 0);
-    if (outroStart !== undefined && cur >= outroStart && (!total || outroStart < total - 2)) {
+    const isCurrentSeries = Boolean(currentItem?.SeriesId || currentItem?.Type === 'Series');
+    const outroStart = resolveEffectiveOutroStart(segments, total, isCurrentSeries);
+    if (outroStart !== undefined && cur >= outroStart && (!total || outroStart < total - 1)) {
       outroToastShownRef.current = true;
       setOutroRemainingMs(OUTRO_TOAST_MS);
       setOutroToast({ deadline: Date.now() + OUTRO_TOAST_MS });
@@ -225,7 +253,12 @@ export function useSkipSegmentsController({
         return;
       }
 
-      const existingOutro = state.skipSegments[skipKey]?.outroStart;
+      const existingSegments = state.skipSegments[skipKey] || state.skipSegments[`item_${item.Id}`];
+      const existingOutro = resolveEffectiveOutroStart(
+        existingSegments,
+        total,
+        Boolean(item.SeriesId || item.Type === 'Series')
+      );
       if (existingOutro !== undefined && seconds >= existingOutro - 1) {
         showSkipNotice('片头结束必须早于已标记的片尾开始');
         return;
@@ -235,7 +268,7 @@ export function useSkipSegmentsController({
       setSkipSegment(skipKey, { itemId: item.Id, introEnd: rounded });
       showSkipNotice(`片头结束已标记：${formatTime(rounded)}`);
     },
-    [item?.Id, skipKey, setSkipSegment, showSkipNotice, lastValidTimeRef, engineRef]
+    [item?.Id, item?.SeriesId, item?.Type, skipKey, setSkipSegment, showSkipNotice, lastValidTimeRef, engineRef]
   );
 
   const handleMarkOutroStart = useCallback(
@@ -262,25 +295,35 @@ export function useSkipSegmentsController({
         return;
       }
 
-      const existingIntro = state.skipSegments[skipKey]?.introEnd;
+      const existingIntro = (
+        state.skipSegments[skipKey] || state.skipSegments[`item_${item.Id}`]
+      )?.introEnd;
       if (existingIntro !== undefined && seconds <= existingIntro + 1) {
         showSkipNotice('片尾开始必须晚于已标记的片头结束');
         return;
       }
 
-      const rounded = Math.round(seconds);
-      setSkipSegment(skipKey, { itemId: item.Id, outroStart: rounded });
+      const isCurrentSeries = Boolean(item.SeriesId || item.Type === 'Series');
+      const patch = computeOutroSegmentPatch(seconds, total, item.Id, isCurrentSeries);
+      setSkipSegment(skipKey, patch);
       outroToastShownRef.current = false;
       outroDismissedRef.current = false;
-      showSkipNotice(`片尾开始已标记：${formatTime(rounded)}`);
+      showSkipNotice(
+        patch.outroOffsetFromEnd
+          ? `片尾开始已标记：${formatTime(patch.outroStart)}（距结尾 ${formatTime(patch.outroOffsetFromEnd)}）`
+          : `片尾开始已标记：${formatTime(patch.outroStart)}`
+      );
     },
-    [item?.Id, skipKey, setSkipSegment, showSkipNotice, lastValidTimeRef, engineRef]
+    [item?.Id, item?.SeriesId, item?.Type, skipKey, setSkipSegment, showSkipNotice, lastValidTimeRef, engineRef]
   );
 
   const handleClearSkipSegment = useCallback(
     (field: 'introEnd' | 'outroStart') => {
       if (!skipKey) return;
       clearSkipSegment(skipKey, field);
+      if (item?.Id && skipKey !== `item_${item.Id}`) {
+        clearSkipSegment(`item_${item.Id}`, field);
+      }
       if (field === 'outroStart') {
         outroToastShownRef.current = false;
         outroDismissedRef.current = false;
@@ -289,7 +332,7 @@ export function useSkipSegmentsController({
       }
       showSkipNotice(field === 'introEnd' ? '已清除片头标记' : '已清除片尾标记');
     },
-    [skipKey, clearSkipSegment, showSkipNotice]
+    [item?.Id, skipKey, clearSkipSegment, showSkipNotice]
   );
 
   const handleSkipOutro = useCallback(() => {
@@ -297,9 +340,15 @@ export function useSkipSegmentsController({
     setOutroToast(null);
     setOutroRemainingMs(0);
 
+    // 若存在下一集，跳过片尾时直接触发无缝切换下一集，避免 seek 到片尾造成卡顿停滞
+    if (onPlayNextEpisodeRef.current?.()) {
+      showSkipNotice('已跳过片尾，正在进入下一集');
+      return;
+    }
+
     const total = effectiveDurationRef.current || ticksToSeconds(item?.RunTimeTicks || 0);
     if (total > 0) {
-      onSeekRef.current(Math.max(0, total - 0.25));
+      onSeekRef.current(Math.max(0, total - 1));
       showSkipNotice('已跳过片尾');
     }
   }, [item?.RunTimeTicks, showSkipNotice]);

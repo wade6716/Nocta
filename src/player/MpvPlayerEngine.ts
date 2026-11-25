@@ -190,6 +190,8 @@ export class MpvPlayerEngine implements IPlayerEngine {
     cacheMemoryCapMB: 1024,
   };
   private loadEpoch = 0;
+  private loadfileDispatchedEpoch = 0;
+  private awaitingFileLoaded = false;
   private macWindowAttachPromise: Promise<void> | null = null;
 
   private _state: PlayerState = 'idle';
@@ -388,7 +390,7 @@ export class MpvPlayerEngine implements IPlayerEngine {
           case 'pause': {
             const isPaused = Boolean(data);
             this._paused = isPaused;
-            if (this._state !== 'loading') {
+            if (this._state !== 'loading' && !this.awaitingFileLoaded) {
               this.updateCurrentState();
             }
             break;
@@ -396,7 +398,7 @@ export class MpvPlayerEngine implements IPlayerEngine {
           case 'paused-for-cache': {
             this._pausedForCache = Boolean(data);
             this.bufferingFreezeTimePos = this._pausedForCache ? this._currentTime : null;
-            if (this._state !== 'loading') {
+            if (this._state !== 'loading' && !this.awaitingFileLoaded) {
               this.updateCurrentState();
             }
             break;
@@ -406,12 +408,18 @@ export class MpvPlayerEngine implements IPlayerEngine {
             if (this._isSeeking) {
               if (
                 this._state !== 'loading' &&
+                !this.awaitingFileLoaded &&
                 !this._isSeekBuffering &&
                 this.seekBufferTimer === null
               ) {
                 this.seekBufferTimer = window.setTimeout(() => {
                   this.seekBufferTimer = null;
-                  if (!this.isDestroyed && this._isSeeking && this._state !== 'loading') {
+                  if (
+                    !this.isDestroyed &&
+                    this._isSeeking &&
+                    this._state !== 'loading' &&
+                    !this.awaitingFileLoaded
+                  ) {
                     this._isSeekBuffering = true;
                     this.updateCurrentState();
                   }
@@ -420,13 +428,16 @@ export class MpvPlayerEngine implements IPlayerEngine {
             } else {
               this.clearSeekBufferTimer();
               this._isSeekBuffering = false;
-              if (this._state !== 'loading') {
+              if (this._state !== 'loading' && !this.awaitingFileLoaded) {
                 this.updateCurrentState();
               }
             }
             break;
           }
           case 'time-pos': {
+            if (this.awaitingFileLoaded) {
+              break;
+            }
             if (typeof data === 'number' && !Number.isNaN(data)) {
               this._currentTime = data;
               if (
@@ -450,6 +461,9 @@ export class MpvPlayerEngine implements IPlayerEngine {
             break;
           }
           case 'duration': {
+            if (this.awaitingFileLoaded) {
+              break;
+            }
             if (typeof data === 'number' && !Number.isNaN(data) && data > 0) {
               this._duration = data;
               this.timeUpdateListeners.forEach((cb) => cb(this._currentTime, this._duration));
@@ -568,6 +582,10 @@ export class MpvPlayerEngine implements IPlayerEngine {
         const evName = ev.event;
 
         if (evName === 'file-loaded') {
+          if (this.loadfileDispatchedEpoch !== this.loadEpoch) {
+            return;
+          }
+          this.awaitingFileLoaded = false;
           // 媒体文件头部已成功解析打开
           if (this.pendingSeekTime && this.pendingSeekTime > 0) {
             const targetSeek = this.pendingSeekTime;
@@ -582,6 +600,10 @@ export class MpvPlayerEngine implements IPlayerEngine {
           }
           this.attachMacWindow();
         } else if (evName === 'playback-restart') {
+          if (this.loadfileDispatchedEpoch !== this.loadEpoch) {
+            return;
+          }
+          this.awaitingFileLoaded = false;
           // 首帧或定点跳转后音视频解码恢复就绪，重置 start 属性以免影响后续切片
           setProperty('start', 'none').catch(() => {});
           this._pausedForCache = false;
@@ -595,6 +617,10 @@ export class MpvPlayerEngine implements IPlayerEngine {
         } else if (evName === 'end-file') {
           const reason = (ev as any).reason;
           if (reason === 'error') {
+            if (this.loadfileDispatchedEpoch !== this.loadEpoch) {
+              return;
+            }
+            this.awaitingFileLoaded = false;
             const errorCode =
               typeof (ev as any).error === 'number' ? (ev as any).error : undefined;
             const fileError = (ev as any).file_error;
@@ -603,7 +629,10 @@ export class MpvPlayerEngine implements IPlayerEngine {
             const errText = formatMpvEndFileError(errorCode, fileError);
             this.errorListeners.forEach((cb) => cb(errText));
           } else if (reason === 'eof') {
-            this.setState('ended');
+            // 切换新流期间被 replace 中止或处于 awaitingFileLoaded 时忽略旧流的 EOF 事件
+            if (!this.awaitingFileLoaded && this.loadfileDispatchedEpoch === this.loadEpoch) {
+              this.setState('ended');
+            }
           }
         }
       });
@@ -728,6 +757,11 @@ export class MpvPlayerEngine implements IPlayerEngine {
   async load(options: PlayerLoadOptions): Promise<void> {
     if (this.isDestroyed) return;
     const currentEpoch = ++this.loadEpoch;
+    // 在异步探测代理/初始化之前即刻置位，彻底阻断旧流遗留的 time-pos/end-file 污染新剧集状态
+    this.awaitingFileLoaded = true;
+    this._currentTime = 0;
+    this._duration = 0;
+    this.setState('loading');
 
     try {
       if (!this.isInitialized) {
@@ -735,6 +769,7 @@ export class MpvPlayerEngine implements IPlayerEngine {
       }
     } catch (initErr: any) {
       if (this.isDestroyed || currentEpoch !== this.loadEpoch) return;
+      this.awaitingFileLoaded = false;
       this.setState('idle');
       this.errorListeners.forEach((cb) => cb(initErr?.message || '初始化 libmpv 失败'));
       return;
@@ -805,6 +840,9 @@ export class MpvPlayerEngine implements IPlayerEngine {
         await setProperty('start', 'none').catch(() => {});
       }
 
+      if (this.isDestroyed || currentEpoch !== this.loadEpoch) return;
+      this.loadfileDispatchedEpoch = currentEpoch;
+
       try {
         await command('loadfile', [options.url, 'replace']);
       } catch (loadErr: any) {
@@ -820,6 +858,8 @@ export class MpvPlayerEngine implements IPlayerEngine {
           if (this.pendingSeekTime && this.pendingSeekTime > 0) {
             await setProperty('start', `+${Math.floor(this.pendingSeekTime)}`).catch(() => {});
           }
+          if (this.isDestroyed || currentEpoch !== this.loadEpoch) return;
+          this.loadfileDispatchedEpoch = currentEpoch;
           await command('loadfile', [options.url, 'replace']);
         } else {
           throw loadErr;
@@ -833,6 +873,7 @@ export class MpvPlayerEngine implements IPlayerEngine {
       this._paused = false;
     } catch (err: any) {
       if (this.isDestroyed || currentEpoch !== this.loadEpoch) return;
+      this.awaitingFileLoaded = false;
       console.error('[MpvEngine Load Error]', err);
       this.setState('idle');
       this.errorListeners.forEach((cb) => cb(err?.message || String(err) || '加载媒体流失败'));

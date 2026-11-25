@@ -487,3 +487,13 @@
   - [`autoMatchAndFetchDanmu`](file:///d:/wade/code/emby-tauri-player/src/api/danmuClient.ts) 按 `orderDanmuServersForAutoMatch` 依次最多探测 3 个节点（主节点健康则优先并高置信短路，失效时平滑移交低延迟备用节点），单测见 [`danmu-match-policy.test.mjs`](file:///d:/wade/code/emby-tauri-player/scripts/danmu-match-policy.test.mjs) 与 [`danmu-server-health.test.mjs`](file:///d:/wade/code/emby-tauri-player/scripts/danmu-server-health.test.mjs)。
 - **会话集成避坑 (`effectiveDurationRef`)**：
   - 在 [`useDanmakuSession.ts`](file:///d:/wade/code/emby-tauri-player/src/player/hooks/useDanmakuSession.ts) 中必须通过 `effectiveDurationRef` 读取运行时片源时长兜底（`ticksToSeconds(item.RunTimeTicks || 0) || effectiveDurationRef.current`），**严禁**将 `effectiveDuration` 直接加入 `triggerDanmakuLoad` 的 `useCallback` 依赖数组，否则底层播放器起播汇报时长更新时会重复触发 `autoMatchAndFetchDanmu` 造成弹幕二次闪刷；同时 `autoSeriesCacheRef` 记录实际获胜节点 `server` 以便同剧续集直接沿用而不改写用户全局主节点。
+
+### 38. 片头/片尾跳过、切集状态隔离与标记持久化规范 (`skipSegmentsUtils.ts` / `MpvPlayerEngine.ts` / `PlayerPage.tsx`)
+- **跳过片尾直切下一集与自然完播兜底**：
+  - 点击/自动触发「跳过片尾」（[`useSkipSegmentsController.ts`](file:///d:/wade/code/emby-tauri-player/src/player/hooks/useSkipSegmentsController.ts)）时，若存在 `nextEpisode`，通过 `onPlayNextEpisode` 直接调用 `switchToEpisode` 切换下一集；仅当无下一集（电影或剧终集）时才 `seek(total - 1)`。禁止使用 `seek(total - 0.25)` 依赖 `Math.ceil(remaining) === 0`（`Math.ceil(0.25) === 1` 会永远卡在片尾）。
+  - [`shouldTriggerAutoNext`](file:///d:/wade/code/emby-tauri-player/src/player/skipSegmentsUtils.ts) 以 `remaining <= 0.5 && currentTime > 10` 触发连播，且 `PlayerPage.tsx` 的 `case 'ended'` 在开启 `autoPlayNext` 且未取消时也触发 `switchToEpisode` 作为自然播放结束兜底。
+- **双层切集竞态与旧流泄漏隔离**：
+  - [`MpvPlayerEngine.ts`](file:///d:/wade/code/emby-tauri-player/src/player/MpvPlayerEngine.ts) 在 `load()` 递增 `loadEpoch` 时同步置位 `awaitingFileLoaded = true`、重置 `_currentTime = 0` / `_duration = 0`、切换状态为 `'loading'`，并拦截直至收到匹配 `loadfileDispatchedEpoch === loadEpoch` 的 `file-loaded`/`playback-restart` 前的旧流 `time-pos`、`duration` 与 `replace` 导致的 `end-file (eof)`；
+  - [`PlayerPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/PlayerPage.tsx) 在 `switchToEpisode` 入口即锁定 `isSwitchingEpisodeRef`、`switchingTargetIdRef`、`autoSwitchedItemIdRef` 并立刻 `pause()` 旧流，同时屏蔽旧流 `unlistenTime` / `unlistenState`，直至新流触发 `engine.load()` 时才释放锁，彻底杜绝「先点跳过卡在片尾，再点下一集时旧集残留进度污染新集导致连跳两集」。
+- **片尾跨集偏移适配与即时落盘 (`usePlayerStore.ts` / `skipSegmentsUtils.ts`)**：
+  - `SkipSegments` 扩展 `outroOffsetFromEnd`（`computeOutroSegmentPatch` 与 `resolveEffectiveOutroStart`），对剧集按「当前总片长 - 距结尾秒数」自动适配每集片长波动；`setSkipSegment`、`clearSkipSegment` 与 `applyRemoteStoreSnapshot` 改用 `saveStorageImmediate` 即时写入 `localStorage` 并覆盖新旧 `instantSyncKey`，避免切集/退播时 200ms 防抖或键值差异导致标记丢失。单测见 [`skip-segments-utils.test.mjs`](file:///d:/wade/code/emby-tauri-player/scripts/skip-segments-utils.test.mjs)。

@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Routes, Route, useLocation } from 'react-router-dom';
+import { Routes, Route, useLocation, useNavigate } from 'react-router-dom';
 import { TitleBar } from './components/layout/TitleBar';
 import { Sidebar } from './components/layout/Sidebar';
 import { HomePage } from './pages/HomePage';
@@ -51,6 +51,7 @@ const KeepAliveTabPane: React.FC<{
 
 export const App: React.FC = () => {
   const location = useLocation();
+  const navigate = useNavigate();
   const isPlayerPage = location.pathname.startsWith('/player');
   const isLoginPage = location.pathname === '/login';
   const serversCount = useAuthStore((s) => s.servers.length);
@@ -137,6 +138,30 @@ export const App: React.FC = () => {
 
     return () => window.clearTimeout(timer);
   }, []);
+
+  // 全局搜索快捷键 (Cmd+K / Ctrl+K / 斜杠)，覆盖所有非播放、非登录页面
+  useEffect(() => {
+    if (isPlayerPage || isLoginPage || serversCount === 0) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'k' || e.code === 'KeyK')) {
+        e.preventDefault();
+        navigate('/search');
+        return;
+      }
+      const target = e.target as HTMLElement | null;
+      const isEditing =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        Boolean(target?.isContentEditable);
+      if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey && !isEditing) {
+        e.preventDefault();
+        navigate('/search');
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isPlayerPage, isLoginPage, serversCount, navigate]);
 
   return (
     <ErrorBoundary fallbackTitle="应用发生意外错误">

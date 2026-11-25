@@ -1913,6 +1913,7 @@ export const PlayerPage: React.FC = () => {
           break;
         case 'KeyF':
           e.preventDefault();
+          if (e.repeat) break;
           handleToggleFullscreen();
           break;
         case 'KeyI':

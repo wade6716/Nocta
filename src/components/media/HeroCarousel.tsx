@@ -123,9 +123,10 @@ export const HeroCarousel: React.FC<HeroCarouselProps> = ({
 
   return (
     <section
+      onClick={() => onDetail(currentItem)}
       onMouseEnter={() => setIsPaused(true)}
       onMouseLeave={() => setIsPaused(false)}
-      className="relative w-full h-[440px] md:h-[490px] xl:h-[540px] overflow-hidden bg-[#0B0E17] group select-none"
+      className="relative w-full h-[440px] md:h-[490px] xl:h-[540px] overflow-hidden bg-[#0B0E17] group select-none cursor-pointer"
     >
       {/* 背景剧照层 */}
       {backdropUrl && (
@@ -174,7 +175,10 @@ export const HeroCarousel: React.FC<HeroCarouselProps> = ({
       <div className="absolute top-4 right-6 z-20 flex items-center space-x-2">
         <button
           type="button"
-          onClick={onRefresh}
+          onClick={(e) => {
+            e.stopPropagation();
+            onRefresh();
+          }}
           disabled={isRefreshing}
           className="p-2 rounded-full bg-black/35 hover:bg-black/55 text-slate-200 hover:text-white backdrop-blur-xl border border-white/10 transition cursor-pointer disabled:opacity-60"
           title="刷新媒体库"
@@ -188,7 +192,10 @@ export const HeroCarousel: React.FC<HeroCarouselProps> = ({
         <>
           <button
             type="button"
-            onClick={handlePrev}
+            onClick={(e) => {
+              e.stopPropagation();
+              handlePrev();
+            }}
             className="absolute left-4 top-1/2 -translate-y-1/2 z-20 w-10 h-10 rounded-full bg-black/40 hover:bg-black/65 text-white/80 hover:text-white backdrop-blur-xl border border-white/10 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all cursor-pointer"
             title="上一部"
           >
@@ -196,7 +203,10 @@ export const HeroCarousel: React.FC<HeroCarouselProps> = ({
           </button>
           <button
             type="button"
-            onClick={handleNext}
+            onClick={(e) => {
+              e.stopPropagation();
+              handleNext();
+            }}
             className="absolute right-4 top-1/2 -translate-y-1/2 z-20 w-10 h-10 rounded-full bg-black/40 hover:bg-black/65 text-white/80 hover:text-white backdrop-blur-xl border border-white/10 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all cursor-pointer"
             title="下一部"
           >
@@ -301,7 +311,10 @@ export const HeroCarousel: React.FC<HeroCarouselProps> = ({
         <div className="flex items-center space-x-3 mt-5">
           <button
             type="button"
-            onClick={() => onPlay(currentItem)}
+            onClick={(e) => {
+              e.stopPropagation();
+              onPlay(currentItem);
+            }}
             disabled={startingPlay}
             className="px-7 py-2.5 rounded-full bg-white hover:bg-slate-100 text-slate-950 font-bold text-xs sm:text-sm shadow-xl transition flex items-center space-x-2 cursor-pointer disabled:opacity-60"
           >
@@ -312,7 +325,10 @@ export const HeroCarousel: React.FC<HeroCarouselProps> = ({
           </button>
           <button
             type="button"
-            onClick={() => onDetail(currentItem)}
+            onClick={(e) => {
+              e.stopPropagation();
+              onDetail(currentItem);
+            }}
             className="px-6 py-2.5 rounded-full bg-white/15 hover:bg-white/25 text-white font-medium text-xs sm:text-sm backdrop-blur-xl border border-white/15 transition flex items-center space-x-1.5 cursor-pointer"
           >
             <Info className="w-4 h-4" />
@@ -330,7 +346,10 @@ export const HeroCarousel: React.FC<HeroCarouselProps> = ({
               <button
                 key={item.Id}
                 type="button"
-                onClick={() => setActiveIndex(idx)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setActiveIndex(idx);
+                }}
                 aria-label={`切换到第 ${idx + 1} 部推荐`}
                 className={`h-1.5 rounded-full transition-all duration-300 cursor-pointer ${
                   active ? 'w-7 bg-white' : 'w-1.5 bg-white/35 hover:bg-white/60'

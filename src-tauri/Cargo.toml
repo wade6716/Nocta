@@ -1,6 +1,6 @@
 [package]
 name = "nocta"
-version = "0.3.2"
+version = "0.3.3"
 description = "Nocta - 夜幕: 沉浸式 Emby 弹幕播放器"
 authors = ["wade"]
 edition = "2021"

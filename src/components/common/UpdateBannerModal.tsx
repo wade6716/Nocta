@@ -59,7 +59,7 @@ function renderInlineSegments(text: string): React.ReactNode {
     if (!part) return null;
     if (part.startsWith('**') && part.endsWith('**') && part.length > 4) {
       return (
-        <strong key={idx} className="font-semibold text-white">
+        <strong key={idx} className="font-semibold text-[#1D1D1F] dark:text-white">
           {part.slice(2, -2)}
         </strong>
       );
@@ -68,7 +68,7 @@ function renderInlineSegments(text: string): React.ReactNode {
       return (
         <code
           key={idx}
-          className="px-1 py-0.5 rounded bg-white/10 text-sky-300 font-mono text-[11px]"
+          className="px-1 py-0.5 rounded bg-black/[0.06] dark:bg-white/10 text-[#0369A1] dark:text-sky-300 font-mono text-[11px]"
         >
           {part.slice(1, -1)}
         </code>
@@ -81,7 +81,7 @@ function renderInlineSegments(text: string): React.ReactNode {
           href={part}
           target="_blank"
           rel="noreferrer"
-          className="text-sky-400 hover:text-sky-300 underline break-all"
+          className="text-[#0369A1] hover:text-[#0284C7] dark:text-sky-400 dark:hover:text-sky-300 underline break-all"
         >
           {part}
         </a>
@@ -95,7 +95,7 @@ export const ReleaseNotesContent: React.FC<{ body?: string }> = ({ body }) => {
   const cleaned = sanitizeReleaseNotes(body);
   if (!cleaned) {
     return (
-      <p className="text-slate-400">
+      <p className="text-[#6E6E73] dark:text-slate-400">
         暂无详细更新日志，建议点击下方链接查看 GitHub Release 页面。
       </p>
     );
@@ -110,14 +110,14 @@ export const ReleaseNotesContent: React.FC<{ body?: string }> = ({ body }) => {
           return <div key={idx} className="h-1" />;
         }
         if (/^(?:---|\*\*\*|___)$/.test(line)) {
-          return <hr key={idx} className="border-white/10 my-2" />;
+          return <hr key={idx} className="border-black/10 dark:border-white/10 my-2" />;
         }
         const headingMatch = line.match(/^#{1,6}\s+(.+)$/);
         if (headingMatch) {
           return (
             <h4
               key={idx}
-              className="text-white font-semibold text-xs pt-2 first:pt-0 tracking-wide"
+              className="text-[#1D1D1F] dark:text-white font-semibold text-xs pt-2 first:pt-0 tracking-wide"
             >
               {renderInlineSegments(headingMatch[1].trim())}
             </h4>
@@ -127,15 +127,15 @@ export const ReleaseNotesContent: React.FC<{ body?: string }> = ({ body }) => {
         if (bulletMatch) {
           return (
             <div key={idx} className="flex items-start gap-2 pl-0.5 leading-relaxed">
-              <span className="mt-2 w-1.5 h-1.5 rounded-full bg-sky-400/80 shrink-0" />
-              <span className="flex-1 text-slate-300">
+              <span className="mt-2 w-1.5 h-1.5 rounded-full bg-sky-500/80 dark:bg-sky-400/80 shrink-0" />
+              <span className="flex-1 text-[#48484A] dark:text-slate-300">
                 {renderInlineSegments(bulletMatch[1].trim())}
               </span>
             </div>
           );
         }
         return (
-          <p key={idx} className="text-slate-300 leading-relaxed">
+          <p key={idx} className="text-[#48484A] dark:text-slate-300 leading-relaxed">
             {renderInlineSegments(line)}
           </p>
         );
@@ -203,7 +203,7 @@ export const UpdateBannerModal: React.FC = () => {
     <>
       {/* 右下角无打扰更新浮窗（观影路由自动隐藏） */}
       {showFloatingToast && updateInfo && (
-        <div className="fixed bottom-5 right-5 z-50 w-[370px] max-w-[calc(100vw-2.5rem)] rounded-2xl bg-[#121622]/95 backdrop-blur-2xl border border-white/15 shadow-[0_20px_50px_rgba(0,0,0,0.75)] p-4 text-xs text-slate-200 select-none animate-in fade-in slide-in-from-bottom-4 duration-200">
+        <div className="fixed bottom-5 right-5 z-50 w-[370px] max-w-[calc(100vw-2.5rem)] rounded-2xl bg-[#121622]/95 backdrop-blur-2xl border border-white/15 shadow-[0_14px_36px_rgba(15,23,42,0.14)] dark:shadow-[0_20px_50px_rgba(0,0,0,0.75)] p-4 text-xs text-slate-200 select-none animate-in fade-in slide-in-from-bottom-4 duration-200">
           <div className="flex items-start justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0">
               <div

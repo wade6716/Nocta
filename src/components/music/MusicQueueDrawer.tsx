@@ -25,7 +25,7 @@ export const MusicQueueDrawer: React.FC = () => {
   return (
     <div className="fixed inset-0 z-[60] flex justify-end select-none">
       <div
-        className="flex-1 bg-black/45 backdrop-blur-xs"
+        className="flex-1 bg-slate-900/30 dark:bg-black/45 backdrop-blur-[2px]"
         onClick={() => setQueueOpen(false)}
       />
 
@@ -87,7 +87,7 @@ export const MusicQueueDrawer: React.FC = () => {
                       <Music className="w-4 h-4 text-slate-500" />
                     )}
                     {isCurrent && (
-                      <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                      <div className="preserve-dark absolute inset-0 bg-black/50 flex items-center justify-center">
                         <MusicEqualizerBars playing={isPlaying} />
                       </div>
                     )}

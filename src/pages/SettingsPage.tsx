@@ -840,7 +840,7 @@ export const SettingsPage: React.FC = () => {
                   aria-checked={nativeGlass}
                   onClick={() => setNativeGlass(!nativeGlass)}
                   className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
-                    nativeGlass ? 'bg-primary' : 'bg-white/20'
+                    nativeGlass ? 'bg-primary' : 'bg-black/15 dark:bg-white/20'
                   }`}
                 >
                   <span
@@ -1786,7 +1786,7 @@ export const SettingsPage: React.FC = () => {
                         })
                       }
                       className={`relative w-11 h-6 flex-shrink-0 rounded-full transition cursor-pointer ${
-                        playerPreferences.preloadNextEnabled ? 'bg-primary' : 'bg-white/15'
+                        playerPreferences.preloadNextEnabled ? 'bg-primary' : 'bg-black/15 dark:bg-white/15'
                       }`}
                       title="下一集内存预加载开关"
                     >
@@ -2056,7 +2056,7 @@ export const SettingsPage: React.FC = () => {
                       })
                     }
                     className={`relative w-11 h-6 flex-shrink-0 rounded-full transition cursor-pointer ${
-                      playerPreferences.pauseOnHeadphoneDisconnect ? 'bg-primary' : 'bg-white/15'
+                      playerPreferences.pauseOnHeadphoneDisconnect ? 'bg-primary' : 'bg-black/15 dark:bg-white/15'
                     }`}
                     title="耳机摘下 / 断开自动暂停"
                   >
@@ -2100,7 +2100,7 @@ export const SettingsPage: React.FC = () => {
                         })
                       }
                       className={`relative w-11 h-6 flex-shrink-0 rounded-full transition cursor-pointer ${
-                        skipSettings.skipIntroEnabled ? 'bg-primary' : 'bg-white/15'
+                        skipSettings.skipIntroEnabled ? 'bg-primary' : 'bg-black/15 dark:bg-white/15'
                       }`}
                       title="自动跳过片头"
                     >
@@ -2128,7 +2128,7 @@ export const SettingsPage: React.FC = () => {
                         })
                       }
                       className={`relative w-11 h-6 flex-shrink-0 rounded-full transition cursor-pointer ${
-                        skipSettings.skipOutroEnabled ? 'bg-primary' : 'bg-white/15'
+                        skipSettings.skipOutroEnabled ? 'bg-primary' : 'bg-black/15 dark:bg-white/15'
                       }`}
                       title="片尾跳过提示"
                     >
@@ -2210,7 +2210,7 @@ export const SettingsPage: React.FC = () => {
                       })
                     }
                     className={`relative w-11 h-6 flex-shrink-0 rounded-full transition cursor-pointer ${
-                      playerPreferences.defaultBottomAlign ? 'bg-primary' : 'bg-white/15'
+                      playerPreferences.defaultBottomAlign ? 'bg-primary' : 'bg-black/15 dark:bg-white/15'
                     }`}
                     title="默认开启画面沉浸贴底"
                   >
@@ -2309,17 +2309,17 @@ export const SettingsPage: React.FC = () => {
                     onChange={(e) => setProxyTestTarget(e.target.value as ProxyTestTarget)}
                     className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-xl text-xs text-white focus:outline-none focus:border-primary cursor-pointer"
                   >
-                    <option value="google" className="bg-[#161922] text-white">
+                    <option value="google" className="bg-white text-[#1D1D1F] dark:bg-[#161922] dark:text-white">
                       1. Google (全球外网连通性)
                     </option>
                     <option
                       value="emby"
                       disabled={!currentEmbyServer}
-                      className="bg-[#161922] text-white"
+                      className="bg-white text-[#1D1D1F] dark:bg-[#161922] dark:text-white"
                     >
                       2. 当前 Emby 服务器 {currentEmbyServer ? `(${currentEmbyServer.name || currentEmbyServer.url})` : '(尚未添加)'}
                     </option>
-                    <option value="custom" className="bg-[#161922] text-white">
+                    <option value="custom" className="bg-white text-[#1D1D1F] dark:bg-[#161922] dark:text-white">
                       3. 自定义网址
                     </option>
                   </select>
@@ -3183,7 +3183,7 @@ export const SettingsPage: React.FC = () => {
                     updater.status === 'downloading' ||
                     updater.status === 'installing'
                   }
-                  className="px-4 py-2 rounded-xl bg-primary hover:bg-sky-400 text-slate-950 font-semibold text-xs inline-flex items-center space-x-2 transition cursor-pointer disabled:opacity-50 self-start sm:self-center shadow-lg shadow-sky-500/20"
+                  className="px-4 py-2 rounded-xl bg-primary hover:bg-primary-hover text-slate-950 font-semibold text-xs inline-flex items-center space-x-2 transition cursor-pointer disabled:opacity-50 self-start sm:self-center shadow-lg shadow-sky-500/20"
                 >
                   <RefreshCw
                     className={`w-3.5 h-3.5 ${updater.status === 'checking' ? 'animate-spin' : ''}`}
@@ -3345,7 +3345,7 @@ export const SettingsPage: React.FC = () => {
                       }
                       className="sr-only peer"
                     />
-                    <div className="w-10 h-5 bg-white/10 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary" />
+                    <div className="w-10 h-5 bg-black/15 dark:bg-white/15 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:shadow-sm after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary" />
                   </label>
                 </div>
 

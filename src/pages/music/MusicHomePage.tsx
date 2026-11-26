@@ -224,7 +224,7 @@ export const MusicHomePage: React.FC<{ isActive?: boolean }> = ({ isActive = tru
                 setActiveSpace('video');
                 navigate('/');
               }}
-              className="px-4 py-2 rounded-full bg-[#38BDF8] hover:bg-sky-400 text-slate-950 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer transition"
+              className="px-4 py-2 rounded-full bg-primary hover:bg-primary-hover text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer transition"
             >
               <Film className="w-3.5 h-3.5" />
               <span>返回影视空间</span>

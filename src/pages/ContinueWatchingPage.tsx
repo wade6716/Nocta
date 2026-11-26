@@ -478,7 +478,7 @@ export const ContinueWatchingPage: React.FC<{ isActive?: boolean }> = ({
                   type="button"
                   onClick={() => handlePlayItem(item)}
                   disabled={playingItemKey !== null}
-                  className="relative w-full md:w-52 lg:w-56 aspect-video rounded-xl overflow-hidden bg-black/60 shrink-0 border border-white/10 cursor-pointer group/thumb text-left disabled:cursor-wait"
+                  className="preserve-dark relative w-full md:w-52 lg:w-56 aspect-video rounded-xl overflow-hidden bg-black/60 shrink-0 border border-white/10 cursor-pointer group/thumb text-left disabled:cursor-wait"
                   title={`点击立即播放「${mainTitle}」`}
                 >
                   {thumbUrl ? (

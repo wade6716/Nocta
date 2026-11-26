@@ -376,17 +376,17 @@ export const NetworkProxyModal: React.FC<NetworkProxyModalProps> = ({ isOpen, on
                 onChange={(e) => setTestTargetType(e.target.value as 'google' | 'emby' | 'custom')}
                 className="w-full px-3 py-2 bg-[#12141a] border border-white/10 rounded-xl text-xs text-white focus:outline-none focus:border-primary cursor-pointer"
               >
-                <option value="google" className="bg-[#161922] text-white">
+                <option value="google" className="bg-white text-[#1D1D1F] dark:bg-[#161922] dark:text-white">
                   1. Google (全球外网连通性)
                 </option>
                 <option
                   value="emby"
                   disabled={!currentServer}
-                  className="bg-[#161922] text-white"
+                  className="bg-white text-[#1D1D1F] dark:bg-[#161922] dark:text-white"
                 >
                   2. 当前 Emby 服务器 {currentServer ? `(${currentServer.name || currentServer.url})` : '(尚未添加)'}
                 </option>
-                <option value="custom" className="bg-[#161922] text-white">
+                <option value="custom" className="bg-white text-[#1D1D1F] dark:bg-[#161922] dark:text-white">
                   3. 自定义网址
                 </option>
               </select>

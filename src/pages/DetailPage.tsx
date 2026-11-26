@@ -18,6 +18,7 @@ import {
   EmbyItem,
   EmbyMediaSource,
   getItemDetail,
+  getSimilarItems,
   getSeriesSeasons,
   getSeriesEpisodes,
   resolveItemBackdropUrl,
@@ -34,6 +35,10 @@ import {
   sortMediaSourcesByQuality,
 } from '../player/playbackSessionService';
 import { EpisodeGrid } from '../components/media/EpisodeGrid';
+import { CastRail } from '../components/media/CastRail';
+import { MediaRail } from '../components/media/MediaRail';
+import { MediaCard } from '../components/media/MediaCard';
+import { DetailAboutSection } from '../components/media/DetailAboutSection';
 
 interface DetailedSourceSpecs {
   resolution?: string;
@@ -136,6 +141,7 @@ export const DetailPage: React.FC = () => {
   const [selectedSeasonId, setSelectedSeasonId] = useState<string | null>(null);
   const [episodes, setEpisodes] = useState<EmbyItem[]>([]);
   const [episodesLoading, setEpisodesLoading] = useState(false);
+  const [similarItems, setSimilarItems] = useState<EmbyItem[]>([]);
   const [startingPlay, setStartingPlay] = useState(false);
   const [overviewExpanded, setOverviewExpanded] = useState(false);
   const [overviewMode, setOverviewMode] = useState<'episode' | 'series'>('episode');
@@ -178,6 +184,7 @@ export const DetailPage: React.FC = () => {
     setOverviewMode('episode');
     setSeriesItem(null);
     setSelectedEpisode(null);
+    setSimilarItems([]);
     setLoadingEpisodeDetail(false);
     setBackdropStage(0);
     if (!currentServer || !itemId) {
@@ -222,14 +229,24 @@ export const DetailPage: React.FC = () => {
       if (!item || item.Id !== itemId) {
         setLoading(true);
       }
-      const detail = await getItemDetail(
-        currentServer.url,
-        currentServer.userId,
-        itemId,
-        currentServer.accessToken
-      );
+      const [detail, initialSimilar] = await Promise.all([
+        getItemDetail(
+          currentServer.url,
+          currentServer.userId,
+          itemId,
+          currentServer.accessToken
+        ),
+        getSimilarItems(
+          currentServer.url,
+          currentServer.userId,
+          itemId,
+          currentServer.accessToken,
+          14
+        ).catch(() => [] as EmbyItem[]),
+      ]);
       if (isStale()) return;
       setItem(detail);
+      setSimilarItems(initialSimilar);
       const initialEp = detail.Type === 'Episode' ? detail : null;
       setSelectedEpisode(initialEp);
       setBackdropStage(0);
@@ -237,7 +254,7 @@ export const DetailPage: React.FC = () => {
       // If it's a TV Series or Episode, fetch seasons, episode list & parent series detail
       const targetSeriesId = detail.Type === 'Series' ? detail.Id : detail.SeriesId;
       if (targetSeriesId) {
-        const [seasonsRes, parentSeries] = await Promise.all([
+        const [seasonsRes, parentSeries, seriesSimilar] = await Promise.all([
           getSeriesSeasons(
             currentServer.url,
             currentServer.userId,
@@ -252,9 +269,21 @@ export const DetailPage: React.FC = () => {
                 currentServer.accessToken
               ).catch(() => null)
             : Promise.resolve(null),
+          detail.Type === 'Episode' && detail.SeriesId && initialSimilar.length === 0
+            ? getSimilarItems(
+                currentServer.url,
+                currentServer.userId,
+                detail.SeriesId,
+                currentServer.accessToken,
+                14
+              ).catch(() => [] as EmbyItem[])
+            : Promise.resolve(null),
         ]);
         if (isStale()) return;
         setSeriesItem(parentSeries);
+        if (seriesSimilar && seriesSimilar.length > 0) {
+          setSimilarItems(seriesSimilar);
+        }
 
         const seasonList = seasonsRes.Items || [];
         setSeasons(seasonList);
@@ -520,8 +549,13 @@ export const DetailPage: React.FC = () => {
     seriesMetaParts.push(heroGenres.join(' / '));
   }
 
+  const heroPeople =
+    isEpisodeWithSeries && seriesItem?.People?.length
+      ? seriesItem.People
+      : item.People || [];
+
   return (
-    <div className="w-full text-[#1D1D1F] dark:text-[#F5F5F7] select-none pb-24 relative min-h-full">
+    <div className="w-full text-[#1D1D1F] dark:text-[#F5F5F7] select-none relative min-h-full flex flex-col">
       {/* 1. 全出血 Apple TV+ / Infuse 一体化沉浸 Hero */}
       <div className="relative w-full">
         {/* 动态剧照环境色柔光过渡带 */}
@@ -545,7 +579,9 @@ export const DetailPage: React.FC = () => {
 
         <section
           ref={heroRef}
-          className="preserve-dark relative z-10 w-full overflow-hidden bg-[#0A0A0C]"
+          className={`preserve-dark relative z-10 w-full overflow-hidden bg-[#0A0A0C] ${
+            !hasSeriesContext ? 'min-h-[460px] md:min-h-[500px] flex flex-col' : ''
+          }`}
         >
           {/* 真实剧照背景层 */}
           {effectiveBackdropUrl && (
@@ -569,7 +605,11 @@ export const DetailPage: React.FC = () => {
           <div className="absolute inset-0 bg-gradient-to-r from-black/85 via-black/52 via-55% to-transparent pointer-events-none" />
 
           {/* Hero 前景内容（顶部留白避让悬浮顶栏） */}
-          <div className="relative z-10 max-w-[1440px] mx-auto px-8 lg:px-12 pt-16 pb-9">
+          <div
+            className={`relative z-10 w-full max-w-[1440px] mx-auto px-8 lg:px-12 pt-16 pb-9 ${
+              !hasSeriesContext ? 'flex-1 flex flex-col justify-between' : ''
+            }`}
+          >
           {/* 顶部导航与极简弹幕状态微标 */}
           <div className="flex items-center justify-between gap-4 mb-6">
             <button
@@ -894,7 +934,7 @@ export const DetailPage: React.FC = () => {
 
       {/* 2. 剧集选集网格（紧贴 Hero 下方直接占据首屏） */}
       {hasSeriesContext && (
-        <div className="max-w-[1440px] mx-auto px-8 lg:px-12 mt-8">
+        <div className="w-full max-w-[1440px] mx-auto px-8 lg:px-12 mt-8">
           {episodesLoading ? (
             <div className="py-16 text-center text-xs text-slate-400">正在同步分集列表...</div>
           ) : (
@@ -919,6 +959,59 @@ export const DetailPage: React.FC = () => {
           )}
         </div>
       )}
+
+      {/* 3. 演职员横滑轨道 & 相关推荐海报墙 */}
+      {(heroPeople.length > 0 || similarItems.length > 0) && (
+        <div className="relative z-10 w-full max-w-[1440px] mx-auto px-8 lg:px-12 mt-10 space-y-10">
+          {heroPeople.length > 0 && currentServer && (
+            <CastRail
+              people={heroPeople}
+              serverUrl={currentServer.url}
+              onSelectPerson={(person) =>
+                navigate(`/search?q=${encodeURIComponent(person.Name)}`)
+              }
+            />
+          )}
+
+          {similarItems.length > 0 && currentServer && (
+            <div
+              className={
+                heroPeople.length > 0
+                  ? 'pt-9 border-t border-black/[0.06] dark:border-white/[0.07]'
+                  : ''
+              }
+            >
+              <MediaRail title="相关推荐">
+                {similarItems.map((sim) => (
+                  <div
+                    key={sim.Id}
+                    className="w-[164px] sm:w-[178px] lg:w-[192px] flex-shrink-0"
+                  >
+                    <MediaCard
+                      item={sim}
+                      serverUrl={currentServer.url}
+                      onClick={(clicked) => navigate(`/detail/${clicked.Id}`)}
+                      aspectRatio="poster"
+                    />
+                  </div>
+                ))}
+              </MediaRail>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* 4. Apple TV 风格「关于本片与媒体规格」底区 */}
+      <div className="mt-auto">
+        <DetailAboutSection
+          item={item}
+          seriesItem={seriesItem}
+          activePlayableItem={activePlayableItem}
+          activeMediaSource={activeMediaSource}
+          mediaSourcesCount={sortedItemMediaSources.length}
+          overviewText={seriesOverview || activeOverviewText}
+        />
+      </div>
     </div>
   );
 };

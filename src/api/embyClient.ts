@@ -113,7 +113,9 @@ export interface EmbyAuthResponse {
 
 export interface EmbyMediaStream {
   Codec?: string;
+  CodecTag?: string;
   Language?: string;
+  Title?: string;
   DisplayTitle?: string;
   DisplayLanguage?: string;
   Type: 'Audio' | 'Video' | 'Subtitle';
@@ -121,8 +123,11 @@ export interface EmbyMediaStream {
   IsDefault?: boolean;
   IsForced?: boolean;
   IsExternal?: boolean;
+  IsHearingImpaired?: boolean;
+  IsTextSubtitleStream?: boolean;
   DeliveryUrl?: string;
   ChannelLayout?: string;
+  AudioSpatialFormat?: string;
   BitRate?: number;
   Width?: number;
   Height?: number;
@@ -138,6 +143,19 @@ export interface EmbyMediaStream {
   ColorTransfer?: string;
   PixelFormat?: string;
   VideoRange?: string;
+  VideoRangeType?: string;
+  VideoDoViTitle?: string;
+  DvProfile?: number;
+  DvLevel?: number;
+  DvBlSignalCompatibilityId?: number;
+  DvVersionMajor?: number;
+  DvVersionMinor?: number;
+  RefFrames?: number;
+  IsInterlaced?: boolean;
+  IsAnamorphic?: boolean;
+  NalLengthSize?: string;
+  TimeBase?: string;
+  CodecTimeBase?: string;
   Channels?: number;
   SampleRate?: number;
 }
@@ -147,9 +165,16 @@ export interface EmbyMediaSource {
   Container?: string;
   Path?: string;
   Name?: string;
+  Protocol?: string;
   Size?: number;
   Bitrate?: number;
+  RunTimeTicks?: number;
   IsRemote?: boolean;
+  SupportsDirectPlay?: boolean;
+  SupportsDirectStream?: boolean;
+  SupportsTranscoding?: boolean;
+  DefaultAudioStreamIndex?: number;
+  DefaultSubtitleStreamIndex?: number;
   DirectStreamUrl?: string;
   MediaStreams?: EmbyMediaStream[];
 }
@@ -159,6 +184,14 @@ export interface EmbyChapter {
   Name?: string;
   MarkerType?: string; // e.g. 'Chapter' | 'IntroStart' | 'IntroEnd' | 'CreditsStart'
   ImageTag?: string;
+}
+
+export interface EmbyPerson {
+  Id?: string;
+  Name: string;
+  Role?: string;
+  Type?: string; // 'Actor' | 'Director' | 'Writer' | 'Producer' | ...
+  PrimaryImageTag?: string;
 }
 
 export interface EmbyItem {
@@ -226,6 +259,14 @@ export interface EmbyItem {
   ParentId?: string;
   DiscNumber?: number;
   Genres?: string[];
+  OriginalTitle?: string;
+  Taglines?: string[];
+  DateCreated?: string;
+  Path?: string;
+  ProviderIds?: Record<string, string>;
+  Studios?: Array<{ Name: string; Id?: string }>;
+  ProductionLocations?: string[];
+  People?: EmbyPerson[];
   Container?: string;
   Bitrate?: number;
   MediaStreams?: EmbyMediaStream[];
@@ -735,13 +776,37 @@ export async function getItemDetail(
   accessToken: string
 ): Promise<EmbyItem> {
   const base = normalizeServerUrl(serverUrl);
-  const url = `${base}/emby/Users/${userId}/Items/${itemId}?Fields=Overview,MediaSources,Path,People,Genres,Chapters,ParentBackdropImageTags,ImageTags,BackdropImageTags`;
+  const url = `${base}/emby/Users/${userId}/Items/${itemId}?Fields=Overview,MediaSources,MediaStreams,Path,People,Genres,Chapters,Studios,OriginalTitle,ProductionLocations,Taglines,OfficialRating,DateCreated,ProviderIds,ParentBackdropImageTags,ImageTags,BackdropImageTags`;
   const res = await httpClient(url, {
     method: 'GET',
     headers: buildEmbyHeaders(userId, accessToken, { serverUrl: base }),
   });
   if (!res.ok) throw new Error(`获取条目详情失败: ${res.status}`);
   return res.json();
+}
+
+/**
+ * 获取相似影片/剧集推荐 (GET /emby/Items/{Id}/Similar)
+ */
+export async function getSimilarItems(
+  serverUrl: string,
+  userId: string,
+  itemId: string,
+  accessToken: string,
+  limit = 14
+): Promise<EmbyItem[]> {
+  const base = normalizeServerUrl(serverUrl);
+  const fields =
+    'PrimaryImageAspectRatio,BasicSyncInfo,Overview,ChildCount,RecursiveItemCount,Status,CommunityRating,ProductionYear,PremiereDate,Genres,OfficialRating,RunTimeTicks,ImageTags,BackdropImageTags';
+  const url = `${base}/emby/Items/${itemId}/Similar?UserId=${userId}&Limit=${limit}&Fields=${fields}`;
+  const res = await httpClient(url, {
+    method: 'GET',
+    headers: buildEmbyHeaders(userId, accessToken, { serverUrl: base }),
+  });
+  if (!res.ok) return [];
+  const data = await res.json();
+  const list: EmbyItem[] = Array.isArray(data?.Items) ? data.Items : Array.isArray(data) ? data : [];
+  return list.filter(isVideoMedia);
 }
 
 /**
@@ -1142,6 +1207,22 @@ function buildTaggedImageCandidate(
     type,
     maxWidth: options.maxWidth,
     quality: options.quality,
+  });
+}
+
+/**
+ * 演职员头像安全寻址（严格校验 Id 与 PrimaryImageTag 存在后再发请求，避免无图条目触发 Emby 500）
+ */
+export function resolvePersonImageUrl(
+  serverUrl: string,
+  person?: EmbyPerson | null,
+  options: { maxWidth?: number; quality?: number } = {}
+): string {
+  if (!serverUrl || !person?.Id || !person.PrimaryImageTag) return '';
+  return buildItemImageUrl(serverUrl, person.Id, person.PrimaryImageTag, {
+    type: 'Primary',
+    maxWidth: options.maxWidth ?? 240,
+    quality: options.quality ?? 85,
   });
 }
 

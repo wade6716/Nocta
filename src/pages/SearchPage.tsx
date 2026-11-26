@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Search,
   ArrowLeft,
@@ -52,6 +52,7 @@ function saveSearchHistory(history: string[]) {
 
 export const SearchPage: React.FC<{ isActive?: boolean }> = ({ isActive = true }) => {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const servers = useAuthStore((s) => s.servers);
   const currentServer = useAuthStore((s) => s.getCurrentServer());
   const setCurrentServer = useAuthStore((s) => s.setCurrentServer);
@@ -83,6 +84,17 @@ export const SearchPage: React.FC<{ isActive?: boolean }> = ({ isActive = true }
   const inputRef = useRef<HTMLInputElement>(null);
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const searchReqIdRef = useRef(0);
+
+  // 支持通过 /search?q=xxx 外部直达搜索（例如点击演职员头像检索作品）
+  useEffect(() => {
+    if (!isActive) return;
+    const qParam = searchParams.get('q')?.trim();
+    if (!qParam) return;
+    setKeyword(qParam);
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete('q');
+    setSearchParams(nextParams, { replace: true });
+  }, [isActive, searchParams, setSearchParams]);
 
   // 进入搜索页时并行预热所有服务器的媒体库 Views 缓存，避免首次搜索串行等待 getUserViews
   useEffect(() => {

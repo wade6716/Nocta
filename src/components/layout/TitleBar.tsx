@@ -1,6 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Minus, Square, Copy, X, Search, Settings, Film, Headphones } from 'lucide-react';
+import {
+  Minus,
+  Square,
+  Copy,
+  X,
+  Search,
+  Settings,
+  Film,
+  Headphones,
+  PanelLeftClose,
+  PanelLeftOpen,
+  ChevronLeft,
+  ChevronRight,
+} from 'lucide-react';
 import { isTauriEnvironment } from '../../api/http';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { ServerSwitcherDropdown } from './ServerSwitcherDropdown';
@@ -11,11 +24,15 @@ import { useMusicPlayerStore } from '../../stores/useMusicPlayerStore';
 interface TitleBarProps {
   title?: string;
   onOpenAddServerModal?: () => void;
+  sidebarCollapsed?: boolean;
+  onToggleSidebar?: () => void;
 }
 
 export const TitleBar: React.FC<TitleBarProps> = ({
   title = 'Nocta · 夜幕',
   onOpenAddServerModal,
+  sidebarCollapsed = false,
+  onToggleSidebar,
 }) => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -25,7 +42,6 @@ export const TitleBar: React.FC<TitleBarProps> = ({
   const isMusicSpace =
     location.pathname.startsWith('/music') ||
     (activeSpace === 'music' && location.pathname === '/settings');
-  const isHomePage = location.pathname === '/' || location.pathname === '/music';
   const isLoginPage = location.pathname === '/login';
 
   const handleSwitchSpace = (space: 'video' | 'music') => {
@@ -101,12 +117,50 @@ export const TitleBar: React.FC<TitleBarProps> = ({
         isMac ? 'pl-20' : ''
       }`}
     >
-      {/* 左侧：Logo 与应用标题 */}
-      <div className="flex items-center space-x-2.5 pointer-events-none">
-        <img src="/app-icon.svg" alt="Nocta" className="w-4 h-4 rounded-sm object-contain" />
-        <span className="text-xs font-semibold tracking-wider text-slate-200">
-          {title}
-        </span>
+      {/* 左侧：侧边栏折叠 + Logo 与应用标题 + 历史后退/前进导航 */}
+      <div className="flex items-center space-x-2.5">
+        {!isLoginPage && onToggleSidebar && (
+          <button
+            type="button"
+            onClick={onToggleSidebar}
+            className="pointer-events-auto p-1.5 rounded-lg hover:bg-white/[0.08] text-slate-400 hover:text-slate-100 transition cursor-pointer"
+            title={sidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'}
+          >
+            {sidebarCollapsed ? (
+              <PanelLeftOpen className="w-4 h-4" />
+            ) : (
+              <PanelLeftClose className="w-4 h-4" />
+            )}
+          </button>
+        )}
+
+        <div className="flex items-center space-x-2 pointer-events-none">
+          <img src="/app-icon.svg" alt="Nocta" className="w-4 h-4 rounded-sm object-contain" />
+          <span className="text-xs font-semibold tracking-wider text-slate-200">
+            {title}
+          </span>
+        </div>
+
+        {!isLoginPage && (
+          <div className="pointer-events-auto flex items-center space-x-0.5 ml-1 pl-2 border-l border-white/[0.08]">
+            <button
+              type="button"
+              onClick={() => navigate(-1)}
+              className="p-1 rounded-lg hover:bg-white/[0.08] text-slate-400 hover:text-white transition cursor-pointer"
+              title="后退"
+            >
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate(1)}
+              className="p-1 rounded-lg hover:bg-white/[0.08] text-slate-400 hover:text-white transition cursor-pointer"
+              title="前进"
+            >
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        )}
       </div>
 
       {/* 中部：空间切换胶囊 + 聚合搜索快捷胶囊 + 服务器快速切换器 (确保非拖拽区域可交互) */}
@@ -159,45 +213,30 @@ export const TitleBar: React.FC<TitleBarProps> = ({
 
         <button
           onClick={() => navigate(isMusicSpace ? '/music/search' : '/search')}
-          className="flex items-center space-x-2 px-3 py-1.5 rounded-full bg-white/[0.04] hover:bg-white/[0.08] text-slate-400 hover:text-slate-100 border border-white/[0.08] hover:border-white/[0.15] transition cursor-pointer text-xs group"
-          title={isMusicSpace ? '搜索音乐 (Ctrl+K)' : '全局搜索 (Ctrl+K)'}
+          className="flex items-center justify-between space-x-2 sm:min-w-[260px] lg:min-w-[340px] px-3.5 py-1.5 rounded-full bg-white/[0.04] hover:bg-white/[0.08] text-slate-400 hover:text-slate-100 border border-white/[0.08] hover:border-white/[0.15] transition cursor-pointer text-xs group"
+          title={isMusicSpace ? '搜索音乐' : '全局搜索'}
         >
-          <Search
-            className={`w-3.5 h-3.5 group-hover:scale-110 transition-transform ${
-              isMusicSpace ? 'text-purple-400' : 'text-primary'
-            }`}
-          />
-          <span className="hidden sm:inline">
-            {isMusicSpace ? '搜索歌曲、专辑、歌手...' : '搜索片名、剧集、演员...'}
-          </span>
-          <kbd className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-white/[0.08] text-slate-400 border border-white/[0.08]">
+          <div className="flex items-center space-x-2 min-w-0">
+            <Search
+              className={`w-3.5 h-3.5 flex-shrink-0 group-hover:scale-110 transition-transform ${
+                isMusicSpace ? 'text-purple-400' : 'text-primary'
+              }`}
+            />
+            <span className="hidden sm:inline truncate">
+              {isMusicSpace ? '搜索歌曲、专辑、歌手...' : '搜索片名、剧集、演员...'}
+            </span>
+          </div>
+          <kbd className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-white/[0.08] text-slate-400 border border-white/[0.08] flex-shrink-0">
             {isMac ? '⌘K' : 'Ctrl K'}
           </kbd>
         </button>
 
         {currentServer ? (
-          isHomePage ? (
-            <ServerSwitcherDropdown
-              onOpenManageModal={() => navigate('/settings')}
-              onOpenAddModal={onOpenAddServerModal}
-            />
-          ) : (
-            <div
-              className="flex items-center space-x-2 px-3 py-1.5 rounded-full text-xs font-medium bg-white/[0.06] text-gray-300 border border-white/[0.08] cursor-default"
-              title="仅支持在首页切换 Emby 服务器"
-            >
-              <span
-                className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                  currentServer.lastTestOk === false
-                    ? 'bg-amber-400 animate-pulse'
-                    : 'bg-emerald-400'
-                }`}
-              />
-              <span className="max-w-[140px] truncate font-semibold">
-                {currentServer.name || '未命名服务器'}
-              </span>
-            </div>
-          )
+          <ServerSwitcherDropdown
+            targetHomePath={isMusicSpace ? '/music' : '/'}
+            onOpenManageModal={() => navigate('/settings')}
+            onOpenAddModal={onOpenAddServerModal}
+          />
         ) : (
           <button
             onClick={() => navigate(hasUpdate ? '/settings?tab=about' : '/settings')}

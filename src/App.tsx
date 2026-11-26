@@ -8,6 +8,7 @@ import { LoginPage } from './pages/LoginPage';
 import { DetailPage } from './pages/DetailPage';
 import { PlayerPage } from './pages/PlayerPage';
 import { SearchPage } from './pages/SearchPage';
+import { LibraryPage } from './pages/LibraryPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { MusicHomePage } from './pages/music/MusicHomePage';
 import { MusicBrowsePage } from './pages/music/MusicBrowsePage';
@@ -72,6 +73,26 @@ export const App: React.FC = () => {
   const hasMusicTrack = useMusicPlayerStore((s) => Boolean(s.currentTrack));
   const activeSpace = useMusicPlayerStore((s) => s.activeSpace);
 
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('nocta_sidebar_collapsed') === '1';
+    } catch {
+      return false;
+    }
+  });
+
+  const handleToggleSidebar = () => {
+    setSidebarCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('nocta_sidebar_collapsed', next ? '1' : '0');
+      } catch {
+        // ignore storage errors
+      }
+      return next;
+    });
+  };
+
   const isHomeTab = location.pathname === '/';
   const isContinueTab = location.pathname === '/continue-watching';
   const isSearchTab = location.pathname === '/search';
@@ -117,19 +138,30 @@ export const App: React.FC = () => {
     });
   }, [isLoginPage, serversCount, isHomeTab, isContinueTab, isSearchTab, isMusicHomeTab]);
 
-  // 全局搜索快捷键 Ctrl+K / Cmd+K 按当前所在空间分流
+  // 全局搜索快捷键 Ctrl+K / Cmd+K / 斜杠，按当前所在空间分流
   useEffect(() => {
-    if (isPlayerPage || isLoginPage) return;
+    if (isPlayerPage || isLoginPage || serversCount === 0) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+      const inMusic = location.pathname.startsWith('/music') || activeSpace === 'music';
+      if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'k' || e.code === 'KeyK')) {
         e.preventDefault();
-        const inMusic = location.pathname.startsWith('/music') || activeSpace === 'music';
+        navigate(inMusic ? '/music/search' : '/search');
+        return;
+      }
+      const target = e.target as HTMLElement | null;
+      const isEditing =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        Boolean(target?.isContentEditable);
+      if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey && !isEditing) {
+        e.preventDefault();
         navigate(inMusic ? '/music/search' : '/search');
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [isPlayerPage, isLoginPage, location.pathname, activeSpace, navigate]);
+  }, [isPlayerPage, isLoginPage, serversCount, location.pathname, activeSpace, navigate]);
 
   // 离开播放页后标记播放进度脏状态，供首页与继续观看静默刷新最新进度
   const prevPathRef = useRef(location.pathname);
@@ -287,30 +319,6 @@ export const App: React.FC = () => {
 
   const showMusicDock = hasMusicTrack && !isPlayerPage && !isLoginPage;
 
-  // 全局搜索快捷键 (Cmd+K / Ctrl+K / 斜杠)，覆盖所有非播放、非登录页面
-  useEffect(() => {
-    if (isPlayerPage || isLoginPage || serversCount === 0) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'k' || e.code === 'KeyK')) {
-        e.preventDefault();
-        navigate('/search');
-        return;
-      }
-      const target = e.target as HTMLElement | null;
-      const isEditing =
-        target instanceof HTMLInputElement ||
-        target instanceof HTMLTextAreaElement ||
-        target instanceof HTMLSelectElement ||
-        Boolean(target?.isContentEditable);
-      if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey && !isEditing) {
-        e.preventDefault();
-        navigate('/search');
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isPlayerPage, isLoginPage, serversCount, navigate]);
-
   return (
     <ErrorBoundary fallbackTitle="应用发生意外错误">
       <div
@@ -322,12 +330,20 @@ export const App: React.FC = () => {
         <MusicAudioController />
 
         {/* Native-style TitleBar for non-player routes */}
-        {!isPlayerPage && <TitleBar title="Nocta · 夜幕" />}
+        {!isPlayerPage && (
+          <TitleBar
+            title="Nocta · 夜幕"
+            sidebarCollapsed={sidebarCollapsed}
+            onToggleSidebar={handleToggleSidebar}
+          />
+        )}
 
         {/* Frameless Shell Body */}
         <div className="flex-1 min-h-0 w-full flex overflow-hidden">
           {/* Desktop Left Sidebar (Non-player & Non-login routes) */}
-          {!isPlayerPage && !isLoginPage && <Sidebar />}
+          {!isPlayerPage && !isLoginPage && (
+            <Sidebar collapsed={sidebarCollapsed} onToggleCollapse={handleToggleSidebar} />
+          )}
 
           {/* Main view container with Keep-Alive primary tabs */}
           <main
@@ -400,6 +416,7 @@ export const App: React.FC = () => {
                   <Route path="/music/playlist/:playlistId" element={<MusicPlaylistDetailPage />} />
                   <Route path="/music/search" element={<MusicSearchPage />} />
                   <Route path="/login" element={<LoginPage />} />
+                  <Route path="/library/:libraryId" element={<LibraryPage />} />
                   <Route path="/settings" element={<SettingsPage />} />
                   <Route path="/detail/:itemId" element={<DetailPage />} />
                   <Route path="/player/:itemId" element={<PlayerPage />} />

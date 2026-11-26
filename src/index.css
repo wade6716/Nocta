@@ -53,6 +53,15 @@ input[type="range"] {
   font-variant-numeric: tabular-nums;
 }
 
+/* Hide scrollbars on horizontal media rails while keeping scrollability */
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 /* Music Player GPU-accelerated animations */
 @keyframes music-eq-bar {
   0%, 100% {

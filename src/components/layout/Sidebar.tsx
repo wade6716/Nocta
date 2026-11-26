@@ -7,8 +7,6 @@ import {
   Tv,
   Search,
   Settings,
-  ChevronLeft,
-  ChevronRight,
   Folder,
   Music,
   Disc3,
@@ -51,6 +49,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const setActiveSpace = useMusicPlayerStore((s) => s.setActiveSpace);
 
   const currentPath = location.pathname;
+  const isMac = typeof navigator !== 'undefined' && /macintosh|mac os x/i.test(navigator.userAgent);
 
   // 路由与空间状态双向同步
   useEffect(() => {
@@ -96,52 +95,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <aside
-      className={`h-full flex-shrink-0 select-none bg-[#0B0E17]/90 backdrop-blur-2xl border-r border-white/[0.06] transition-all duration-300 flex flex-col justify-between z-30 ${
+      className={`h-full flex-shrink-0 select-none bg-[#080B12]/95 backdrop-blur-2xl border-r border-white/[0.06] transition-all duration-300 flex flex-col justify-between z-30 ${
         isCollapsed ? 'w-16' : 'w-56'
       }`}
     >
-      {/* 顶部 Logo 与折叠按钮 */}
-      <div className="flex flex-col flex-1 min-h-0">
-        <div
-          className={`h-14 flex items-center justify-between border-b border-white/[0.04] ${
-            isCollapsed ? 'px-2 justify-center' : 'px-3.5'
-          }`}
-        >
-          <div
-            onClick={() => navigate(isMusicSpace ? '/music' : '/')}
-            className={`flex items-center space-x-2.5 cursor-pointer overflow-hidden ${
-              isCollapsed ? 'justify-center w-full' : ''
-            }`}
-          >
-            <img
-              src="/app-icon.svg"
-              alt="Nocta"
-              className="w-7 h-7 rounded-lg object-contain flex-shrink-0 shadow-lg shadow-sky-500/20"
-            />
-            {!isCollapsed && (
-              <div className="flex flex-col min-w-0">
-                <span className="text-sm font-bold tracking-wider text-slate-100 truncate">
-                  Nocta
-                </span>
-                <span className="text-[10px] text-slate-500 tracking-widest font-mono uppercase">
-                  {isMusicSpace ? '夜幕音乐' : '夜幕影院'}
-                </span>
-              </div>
-            )}
-          </div>
-
-          {!isCollapsed && (
-            <button
-              onClick={toggleCollapse}
-              className="p-1 rounded-lg hover:bg-white/[0.06] text-slate-400 hover:text-slate-200 transition cursor-pointer"
-              title="折叠侧边栏"
-            >
-              <ChevronLeft className="w-4 h-4" />
-            </button>
-          )}
-        </div>
-
-        {/* 导航菜单列表 */}
+      {/* 导航菜单列表 */}
+      <div className="relative flex flex-col flex-1 min-h-0">
         <div className="flex-1 overflow-y-auto overflow-x-hidden py-3 px-2 space-y-1 custom-scrollbar">
           {!isMusicSpace ? (
             <>
@@ -149,16 +108,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <div className="space-y-0.5">
                 <button
                   onClick={() => handleNavClick('/')}
-                  className={`w-full h-10 rounded-xl flex items-center text-sm transition-all cursor-pointer relative group ${
+                  className={`w-full h-9 rounded-xl flex items-center text-sm transition-all cursor-pointer relative group ${
                     isCollapsed ? 'justify-center px-0' : 'px-3 gap-3'
                   } ${
-                    currentPath === '/' && !location.hash
+                    currentPath === '/'
                       ? 'bg-[#38BDF8]/15 text-[#38BDF8] font-medium'
                       : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.04]'
                   }`}
                   title="首页发现"
                 >
-                  {currentPath === '/' && !location.hash && (
+                  {currentPath === '/' && (
                     <span className="absolute left-0 w-1 h-5 rounded-full bg-[#38BDF8]" />
                   )}
                   <Compass className="w-4 h-4 flex-shrink-0" />
@@ -167,7 +126,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
                 <button
                   onClick={() => handleNavClick('/continue-watching')}
-                  className={`w-full h-10 rounded-xl flex items-center text-sm transition-all cursor-pointer relative group ${
+                  className={`w-full h-9 rounded-xl flex items-center text-sm transition-all cursor-pointer relative group ${
                     isCollapsed ? 'justify-center px-0' : 'px-3 gap-3'
                   } ${
                     currentPath === '/continue-watching'
@@ -182,40 +141,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <Play className="w-4 h-4 flex-shrink-0" />
                   {!isCollapsed && <span>继续观看</span>}
                 </button>
-
-                <button
-                  onClick={() => handleNavClick('/search')}
-                  className={`w-full h-10 rounded-xl flex items-center text-sm transition-all cursor-pointer relative group ${
-                    isCollapsed ? 'justify-center px-0' : 'justify-between px-3'
-                  } ${
-                    currentPath === '/search'
-                      ? 'bg-[#38BDF8]/15 text-[#38BDF8] font-medium'
-                      : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.04]'
-                  }`}
-                  title="影视聚合搜索 (Ctrl+K)"
-                >
-                  {currentPath === '/search' && (
-                    <span className="absolute left-0 w-1 h-5 rounded-full bg-[#38BDF8]" />
-                  )}
-                  {isCollapsed ? (
-                    <Search className="w-4 h-4 flex-shrink-0" />
-                  ) : (
-                    <>
-                      <div className="flex items-center gap-3">
-                        <Search className="w-4 h-4 flex-shrink-0" />
-                        <span>聚合搜索</span>
-                      </div>
-                      <kbd className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white/[0.06] text-slate-400 border border-white/[0.08]">
-                        ⌘K
-                      </kbd>
-                    </>
-                  )}
-                </button>
               </div>
 
               {/* 影视媒体库分类区 */}
               {views.length > 0 && (
-                <div className="pt-4 space-y-1">
+                <div className="pt-3 space-y-0.5">
                   {!isCollapsed && (
                     <div className="px-3 pb-1 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
                       媒体库
@@ -224,15 +154,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   {isCollapsed && <div className="border-t border-white/[0.06] my-2" />}
 
                   {views.map((v) => {
-                    const isSelected = location.hash === `#view-${v.Id}`;
+                    const targetPath = `/library/${v.Id}`;
+                    const isSelected = currentPath === targetPath;
                     const counts = viewCounts[v.Id];
                     const countNum = counts?.movieCount || counts?.seriesCount;
 
                     return (
                       <button
                         key={v.Id}
-                        onClick={() => handleNavClick('/', `view-${v.Id}`)}
-                        className={`w-full h-10 rounded-xl flex items-center text-sm transition-all cursor-pointer relative group ${
+                        onClick={() => navigate(targetPath)}
+                        className={`w-full h-9 rounded-xl flex items-center text-sm transition-all cursor-pointer relative group ${
                           isCollapsed ? 'justify-center px-0' : 'justify-between px-3'
                         } ${
                           isSelected
@@ -283,7 +214,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     <button
                       key={nav.path}
                       onClick={() => navigate(nav.path)}
-                      className={`w-full h-10 rounded-xl flex items-center text-sm transition-all cursor-pointer relative group ${
+                      className={`w-full h-9 rounded-xl flex items-center text-sm transition-all cursor-pointer relative group ${
                         isCollapsed ? 'justify-center px-0' : 'px-3 gap-3'
                       } ${
                         active
@@ -303,14 +234,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
                 <button
                   onClick={() => navigate('/music/search')}
-                  className={`w-full h-10 rounded-xl flex items-center text-sm transition-all cursor-pointer relative group ${
+                  className={`w-full h-9 rounded-xl flex items-center text-sm transition-all cursor-pointer relative group ${
                     isCollapsed ? 'justify-center px-0' : 'justify-between px-3'
                   } ${
                     currentPath === '/music/search'
                       ? 'bg-purple-500/15 text-purple-300 font-medium'
                       : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.04]'
                   }`}
-                  title="音乐搜索 (Ctrl+K)"
+                  title={`音乐搜索 (${isMac ? '⌘K' : 'Ctrl+K'})`}
                 >
                   {currentPath === '/music/search' && (
                     <span className="absolute left-0 w-1 h-5 rounded-full bg-purple-400" />
@@ -324,7 +255,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         <span>音乐搜索</span>
                       </div>
                       <kbd className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white/[0.06] text-slate-400 border border-white/[0.08]">
-                        ⌘K
+                        {isMac ? '⌘K' : 'Ctrl K'}
                       </kbd>
                     </>
                   )}
@@ -333,7 +264,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
               {/* 音乐库分区 */}
               {musicViews.length > 0 && (
-                <div className="pt-4 space-y-1">
+                <div className="pt-3 space-y-0.5">
                   {!isCollapsed && (
                     <div className="px-3 pb-1 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
                       音乐库
@@ -351,7 +282,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       <button
                         key={v.Id}
                         onClick={() => navigate(targetPath)}
-                        className={`w-full h-10 rounded-xl flex items-center text-sm transition-all cursor-pointer relative group ${
+                        className={`w-full h-9 rounded-xl flex items-center text-sm transition-all cursor-pointer relative group ${
                           isCollapsed ? 'justify-center px-0' : 'justify-between px-3'
                         } ${
                           isSelected
@@ -386,14 +317,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </>
           )}
         </div>
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-6 bg-gradient-to-t from-[#080B12] to-transparent" />
       </div>
 
-      {/* 底部系统配置与服务器状态区 */}
+      {/* 底部系统配置区 */}
       <div className="p-2 border-t border-white/[0.06] space-y-1">
         {/* 系统设置 */}
         <button
           onClick={() => handleNavClick('/settings', hasUpdate ? 'about' : undefined)}
-          className={`w-full h-10 rounded-xl flex items-center text-sm transition-all cursor-pointer relative ${
+          className={`w-full h-9 rounded-xl flex items-center text-sm transition-all cursor-pointer relative ${
             isCollapsed ? 'justify-center px-0' : 'justify-between px-3'
           } ${
             currentPath === '/settings'
@@ -409,7 +341,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <div className="relative flex items-center justify-center">
               <Settings className="w-4 h-4 flex-shrink-0" />
               {hasUpdate && isCollapsed && (
-                <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-[#38BDF8] ring-2 ring-[#0B0E17] animate-pulse" />
+                <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-[#38BDF8] ring-2 ring-[#080B12] animate-pulse" />
               )}
             </div>
             {!isCollapsed && <span>系统设置</span>}
@@ -421,46 +353,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
           )}
         </button>
 
-        {/* 展开按钮（仅折叠时展示） */}
-        {isCollapsed && (
-          <button
-            onClick={toggleCollapse}
-            className="w-full h-10 flex items-center justify-center rounded-xl hover:bg-white/[0.06] text-slate-400 hover:text-slate-200 transition cursor-pointer"
-            title="展开侧边栏"
+        {/* 未连接服务器时的快捷引导卡 */}
+        {!isCollapsed && !currentServer && (
+          <div
+            onClick={() => handleNavClick('/settings', 'sync')}
+            className="px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center space-x-2 cursor-pointer hover:bg-amber-500/20 transition group"
+            title="未连接服务器，点击导入配置或添加服务器"
           >
-            <ChevronRight className="w-4 h-4" />
-          </button>
-        )}
-
-        {/* 服务器连接指示卡 */}
-        {!isCollapsed && (
-          currentServer ? (
-            <div className="px-3 py-2 rounded-xl bg-white/[0.03] border border-white/[0.04] flex items-center space-x-2">
-              <span
-                className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                  currentServer.lastTestOk === false ? 'bg-amber-400' : 'bg-emerald-400'
-                }`}
-              />
-              <div className="min-w-0 flex-1">
-                <span className="text-xs text-slate-300 font-medium truncate block">
-                  {currentServer.name}
-                </span>
-              </div>
+            <span className="w-2 h-2 rounded-full flex-shrink-0 bg-amber-400 animate-pulse" />
+            <div className="min-w-0 flex-1">
+              <span className="text-xs text-amber-300 font-medium truncate block group-hover:underline">
+                未连接 · 导入配置
+              </span>
             </div>
-          ) : (
-            <div
-              onClick={() => handleNavClick('/settings', 'sync')}
-              className="px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center space-x-2 cursor-pointer hover:bg-amber-500/20 transition group"
-              title="未连接服务器，点击导入配置或添加服务器"
-            >
-              <span className="w-2 h-2 rounded-full flex-shrink-0 bg-amber-400 animate-pulse" />
-              <div className="min-w-0 flex-1">
-                <span className="text-xs text-amber-300 font-medium truncate block group-hover:underline">
-                  未连接 · 导入配置
-                </span>
-              </div>
-            </div>
-          )
+          </div>
         )}
       </div>
     </aside>

@@ -13,11 +13,13 @@ import { useMediaStore } from '../../stores/useMediaStore';
 interface ServerSwitcherDropdownProps {
   onOpenManageModal?: () => void;
   onOpenAddModal?: () => void;
+  targetHomePath?: string;
 }
 
 export const ServerSwitcherDropdown: React.FC<ServerSwitcherDropdownProps> = ({
   onOpenManageModal,
   onOpenAddModal,
+  targetHomePath = '/',
 }) => {
   const navigate = useNavigate();
   const { servers, currentServerId, setCurrentServer } = useAuthStore();
@@ -54,15 +56,16 @@ export const ServerSwitcherDropdown: React.FC<ServerSwitcherDropdownProps> = ({
 
   const handleSelectServer = (server: SavedServer) => {
     setIsOpen(false);
+    document.getElementById('home-scroll-container')?.scrollTo({ top: 0 });
     document.getElementById('main-scroll-container')?.scrollTo({ top: 0 });
     if (server.id === currentServer?.id) {
-      navigate('/', { replace: true });
+      navigate(targetHomePath, { replace: true });
       return;
     }
     // 清除旧缓存、切换服务器并强制回到首页重新拉取数据
     clearMediaCache();
     setCurrentServer(server.id);
-    navigate('/', { replace: true });
+    navigate(targetHomePath, { replace: true });
   };
 
   if (!currentServer && servers.length === 0) {

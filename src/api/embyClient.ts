@@ -182,8 +182,13 @@ export interface EmbyItem {
     Backdrop?: string;
     Thumb?: string;
     Banner?: string;
+    Logo?: string;
   };
   BackdropImageTags?: string[];
+  CommunityRating?: number;
+  OfficialRating?: string;
+  ParentLogoItemId?: string;
+  ParentLogoImageTag?: string;
   UserData?: {
     PlaybackPositionTicks?: number;
     PlayCount?: number;
@@ -500,7 +505,7 @@ export async function getUserViews(
  * 支持双重降级兜底，兼容所有 Emby 服务器版本
  */
 const PLAYBACK_MEDIA_FIELDS =
-  'PrimaryImageAspectRatio,BasicSyncInfo,MediaSources,Path,Overview,UserData,SeriesPrimaryImageTag,SeriesThumbImageTag,ParentThumbImageTag,ParentBackdropImageTags,ImageTags,BackdropImageTags,SeriesInfo,ChildCount,RecursiveItemCount,Status';
+  'PrimaryImageAspectRatio,BasicSyncInfo,MediaSources,Path,Overview,UserData,SeriesPrimaryImageTag,SeriesThumbImageTag,ParentThumbImageTag,ParentBackdropImageTags,ImageTags,BackdropImageTags,SeriesInfo,ChildCount,RecursiveItemCount,Status,CommunityRating,ParentLogoItemId,ParentLogoImageTag';
 
 /**
  * 获取继续观看列表 (GET /emby/Users/{UserId}/Items/Resume)
@@ -711,7 +716,7 @@ export async function getLatestItems(
   limit = 16
 ): Promise<EmbyItem[]> {
   const base = normalizeServerUrl(serverUrl);
-  const url = `${base}/emby/Users/${userId}/Items/Latest?ParentId=${parentId}&Limit=${limit}&Fields=PrimaryImageAspectRatio,BasicSyncInfo,Overview,ChildCount,RecursiveItemCount,Status`;
+  const url = `${base}/emby/Users/${userId}/Items/Latest?ParentId=${parentId}&Limit=${limit}&Fields=PrimaryImageAspectRatio,BasicSyncInfo,Overview,ChildCount,RecursiveItemCount,Status,CommunityRating,MediaSources,ImageTags,BackdropImageTags,ParentLogoItemId,ParentLogoImageTag`;
   const res = await httpClient(url, {
     method: 'GET',
     headers: buildEmbyHeaders(userId, accessToken, { serverUrl: base }),
@@ -1080,7 +1085,7 @@ export function buildItemImageUrl(
   itemId: string,
   imageTag?: string,
   options: {
-    type?: 'Primary' | 'Backdrop' | 'Thumb';
+    type?: 'Primary' | 'Backdrop' | 'Thumb' | 'Logo';
     maxWidth?: number;
     quality?: number;
     format?: 'webp' | 'jpg' | 'png' | 'original';
@@ -1366,6 +1371,82 @@ export function resolveItemBackdropUrl(
       : '') ||
     ''
   );
+}
+
+/**
+ * 解析透明剧名/片名 Logo URL（无可用 Logo 时返回空字符串，供调用方降级为大字排印）
+ */
+export function resolveItemLogoUrl(
+  serverUrl: string,
+  item: EmbyItem,
+  options: { maxWidth?: number; quality?: number } = {}
+): string {
+  if (!serverUrl || !item?.Id) return '';
+  const maxWidth = options.maxWidth ?? 600;
+  const quality = options.quality ?? 90;
+
+  if (item.ImageTags?.Logo) {
+    return buildItemImageUrl(serverUrl, item.Id, item.ImageTags.Logo, {
+      type: 'Logo',
+      maxWidth,
+      quality,
+      format: 'png',
+    });
+  }
+  if (item.ParentLogoItemId && item.ParentLogoImageTag) {
+    return buildItemImageUrl(serverUrl, item.ParentLogoItemId, item.ParentLogoImageTag, {
+      type: 'Logo',
+      maxWidth,
+      quality,
+      format: 'png',
+    });
+  }
+  if (item.SeriesId && item.ParentLogoImageTag) {
+    return buildItemImageUrl(serverUrl, item.SeriesId, item.ParentLogoImageTag, {
+      type: 'Logo',
+      maxWidth,
+      quality,
+      format: 'png',
+    });
+  }
+  return '';
+}
+
+/**
+ * 从真实 MediaStreams 中提取核心视频画质徽章（无流数据时返回空数组，绝不硬编码）
+ */
+export function extractVideoQualityBadges(item?: EmbyItem | null): string[] {
+  if (!item) return [];
+  const streams = item.MediaSources?.[0]?.MediaStreams || item.MediaStreams || [];
+  const videoStream = streams.find((s) => s.Type === 'Video');
+  if (!videoStream) return [];
+
+  const badges: string[] = [];
+  const width = videoStream.Width || 0;
+  const height = videoStream.Height || 0;
+  if (width >= 3800 || height >= 2000) {
+    badges.push('4K');
+  } else if (width >= 1900 || height >= 1000) {
+    badges.push('1080P');
+  } else if (width >= 1260 || height >= 700) {
+    badges.push('720P');
+  }
+
+  const rangeText = `${videoStream.VideoRange || ''} ${videoStream.DisplayTitle || ''}`.toUpperCase();
+  if (rangeText.includes('DOLBY VISION') || rangeText.includes('DOVI') || /\bDV\b/.test(rangeText)) {
+    badges.push('Dolby Vision');
+  } else if (rangeText.includes('HDR10+')) {
+    badges.push('HDR10+');
+  } else if (rangeText.includes('HDR')) {
+    badges.push('HDR');
+  } else if (videoStream.Codec) {
+    const codec = videoStream.Codec.toLowerCase();
+    if (codec === 'hevc' || codec === 'h265') badges.push('HEVC');
+    else if (codec === 'av1') badges.push('AV1');
+    else if (codec === 'h264' || codec === 'avc') badges.push('H.264');
+  }
+
+  return badges.slice(0, 2);
 }
 
 /**
@@ -2207,6 +2288,106 @@ export async function getFederatedPlaybackHistory(
     items: allItems,
     stats,
   };
+}
+
+export interface LibraryItemsQueryOptions {
+  startIndex?: number;
+  limit?: number;
+  sortBy?: string;
+  sortOrder?: 'Ascending' | 'Descending';
+  genres?: string[];
+  years?: number[];
+  filters?: string[];
+  searchTerm?: string;
+  includeItemTypes?: string;
+}
+
+/**
+ * 分页检索指定媒体库的全部影视条目（支持排序、状态筛选、类型与年份过滤）
+ */
+export async function getLibraryItems(
+  serverUrl: string,
+  userId: string,
+  parentId: string,
+  accessToken: string,
+  options: LibraryItemsQueryOptions = {}
+): Promise<{ Items: EmbyItem[]; TotalRecordCount: number }> {
+  const base = normalizeServerUrl(serverUrl);
+  const params = new URLSearchParams();
+  params.set('ParentId', parentId);
+  params.set('Recursive', 'true');
+  params.set('IncludeItemTypes', options.includeItemTypes || 'Movie,Series,Video,BoxSet');
+  params.set('StartIndex', String(options.startIndex ?? 0));
+  params.set('Limit', String(options.limit ?? 48));
+  params.set('SortBy', options.sortBy || 'DateCreated,SortName');
+  params.set('SortOrder', options.sortOrder || 'Descending');
+  params.set(
+    'Fields',
+    'PrimaryImageAspectRatio,BasicSyncInfo,Overview,ChildCount,RecursiveItemCount,Status,CommunityRating,Genres,ProductionYear,PremiereDate,ImageTags'
+  );
+
+  if (options.genres && options.genres.length > 0) {
+    params.set('Genres', options.genres.join('|'));
+  }
+  if (options.years && options.years.length > 0) {
+    params.set('Years', options.years.join(','));
+  }
+  if (options.filters && options.filters.length > 0) {
+    params.set('Filters', options.filters.join(','));
+  }
+  if (options.searchTerm && options.searchTerm.trim()) {
+    params.set('SearchTerm', options.searchTerm.trim());
+  }
+
+  const url = `${base}/emby/Users/${userId}/Items?${params.toString()}`;
+  const res = await httpClient(url, {
+    method: 'GET',
+    headers: buildEmbyHeaders(userId, accessToken, { serverUrl: base }),
+  });
+  if (!res.ok) {
+    throw new Error(`加载媒体库列表失败: HTTP ${res.status}`);
+  }
+  const data = await res.json();
+  const rawItems: EmbyItem[] = Array.isArray(data?.Items) ? data.Items : [];
+  return {
+    Items: rawItems.filter(isVideoMedia),
+    TotalRecordCount:
+      typeof data?.TotalRecordCount === 'number' ? data.TotalRecordCount : rawItems.length,
+  };
+}
+
+/**
+ * 获取指定媒体库内的全部流派/类型标签列表
+ */
+export async function getLibraryGenres(
+  serverUrl: string,
+  userId: string,
+  parentId: string,
+  accessToken: string
+): Promise<string[]> {
+  try {
+    const base = normalizeServerUrl(serverUrl);
+    const params = new URLSearchParams({
+      UserId: userId,
+      ParentId: parentId,
+      Recursive: 'true',
+      SortBy: 'SortName',
+      SortOrder: 'Ascending',
+    });
+    const url = `${base}/emby/Genres?${params.toString()}`;
+    const res = await httpClient(url, {
+      method: 'GET',
+      headers: buildEmbyHeaders(userId, accessToken, { serverUrl: base }),
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    const items = Array.isArray(data?.Items) ? data.Items : [];
+    return items
+      .map((g: { Name?: string }) => (typeof g?.Name === 'string' ? g.Name.trim() : ''))
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
 }
 
 

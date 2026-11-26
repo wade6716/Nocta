@@ -526,3 +526,14 @@
   - **Rust 媒体流与图片代理 (`proxy.rs` / `lib.rs` / `preload.rs` / `image_proxy.rs`)**：`proxy::init_app_handle` 初始化全局 `AppHandle`，`send_with_safe_redirects`、`diagnose_stream_url` 及 `image_proxy` 通过 `emby-hosts-observed` 事件回传多跳重定向链与最终图片主机；
   - **播放器 (`PlayerPage.tsx`)**：起播时记录直链、`.strm` `Path` 与外挂字幕地址，并在启用 `probePlaybackRedirects` 时延迟 1500ms 静默调用 `diagnose_stream_url`（按 `serverId::itemId::mediaSourceId` 去重）捕获 302 CDN 目标主机并透传 `currentRedirectHosts` 至 [`NetworkProxyPopover.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/NetworkProxyPopover.tsx) 供一键复制。
 - **规则导出与单测**：[`EmbyHostsModal.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/settings/EmbyHostsModal.tsx) 支持按类别/关键字筛选并导出 `Clash / Mihomo (YAML)`、`Surge / Shadowrocket`、`Sing-box (JSON)` 与纯文本列表（默认过滤私网/局域网 IP）；单测见 [`emby-host-collector.test.mjs`](file:///d:/wade/code/emby-tauri-player/scripts/emby-host-collector.test.mjs)。
+
+### 42. Apple TV+ 风格影视墙布局、壳层去冗余与独立媒体库浏览规范
+- **壳层单一入口与纵深层级 ([`TitleBar.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/layout/TitleBar.tsx) / [`Sidebar.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/layout/Sidebar.tsx) / [`App.tsx`](file:///d:/wade/code/emby-tauri-player/src/App.tsx))**：
+  - 品牌 Logo、搜索触发胶囊、服务器切换器统一收敛至 [`TitleBar.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/layout/TitleBar.tsx)（解除非首页切服限制，切服后自动回到对应空间首页），并集成侧边栏折叠开关（持久化至 `nocta_sidebar_collapsed`）与桌面端前进/后退导航；
+  - 侧边栏采用更深一阶底色 `bg-[#080B12]/95` 拉开与主内容区 `#0B0E17` 的空间纵深，移除重复 Logo 与静态服务器卡，快捷键提示按 `isMac` 动态区分 `⌘K` / `Ctrl K`；媒体库列表行高收紧至 `h-9` 并直接路由至 `/library/:libraryId`。
+- **沉浸式通栏 Hero 轮播与横滑影视墙 ([`HeroCarousel.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/media/HeroCarousel.tsx) / [`MediaRail.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/media/MediaRail.tsx) / [`HomePage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/HomePage.tsx))**：
+  - Hero 采用无圆角无边距通栏融底渐变设计，优先解析透明片名 Logo（`resolveItemLogoUrl`）与真实视频流画质/HDR 标签（`extractVideoQualityBadges`，严禁硬编码假 `4K HEVC`）及 `CommunityRating`；
+  - 首页首行黄金位展示 16:9 横版「继续观看」横滑轨道（含剩余时长与进度条），各媒体库分类采用单行横滑 `MediaRail`（配合 `index.css` `.no-scrollbar`），彻底消除 20+ 行超长网格；
+  - 海报卡片（[`MediaCard.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/media/MediaCard.tsx)）区分 16:9 续看与 2:3 竖版海报的 Hover 态，竖版海报移除遮挡人脸的居中大播放圆圈，展示真实 `CommunityRating` 星级徽章。
+- **独立媒体库完整分页浏览 ([`LibraryPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/LibraryPage.tsx) / [`embyClient.ts`](file:///d:/wade/code/emby-tauri-player/src/api/embyClient.ts))**：
+  - 通过 `getLibraryItems` 与 `getLibraryGenres` 支持 `/library/:libraryId` 吸顶筛选栏（观看状态、排序、流派、年份、库内搜索）与 `IntersectionObserver` 无限滚动分页（每页 48 条）。

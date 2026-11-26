@@ -122,7 +122,7 @@ pub fn init_media_session(app: &AppHandle) {
 
     let config = PlatformConfig {
         dbus_name: "nocta",
-        display_name: "Nocta · 夜幕",
+        display_name: "Nocta · 诺塔",
         hwnd,
     };
 
@@ -189,7 +189,7 @@ pub fn sync_media_session_metadata(
     let metadata = MediaMetadata {
         title: title.as_deref(),
         artist: subtitle.as_deref(),
-        album: Some("Nocta · 夜幕"),
+        album: Some("Nocta · 诺塔"),
         duration,
         cover_url: None,
     };

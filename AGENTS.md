@@ -1,542 +1,79 @@
-# Nocta (夜幕) · Agent Rules & Project Guide
+# Nocta (诺塔) · Agent Rules & Architecture Guardrails
 
-欢迎协助开发 **Nocta · 夜幕**（基于 Tauri 2.0 构建的暗色沉浸式私人影院客户端，深度集成 Emby/Jellyfin 媒体库，支持全网弹幕自动匹配、手动搜索绑定与彩色 Canvas 高性能渲染）。
+**Nocta · 诺塔** 是基于 Tauri 2.0 构建的沉浸式私人影院客户端（支持明暗双主题），深度集成 Emby/Jellyfin 媒体库与独立音乐空间，支持全网弹幕自动匹配、手动绑定与 Canvas 渲染。
 
-在开始任何新任务前，请务必先查阅项目完整上下文记忆文档：
-👉 [MEMORY.md](file:///d:/wade/code/emby-tauri-player/MEMORY.md)
-
----
-
-## 核心开发准则与不可违背的硬性约束 (Hard Rules)
-
-1. **Git 提交身份约束**：
-   - 必须使用配置的 GitHub 隐私邮箱提交：`59910348+wade6716@users.noreply.github.com`，用户名 `Wade`。
-   - 严禁使用未授权或真实个人外部邮箱，否则会被 GitHub remote rejected 拒绝推送。
-
-2. **弹幕客户端纯粹性**：
-   - 客户端**绝不能捆绑或打包任何服务端程序**（包括 `danmu_api`）。客户端仅作为纯 HTTP 消费者。
-   - **Token 必须直接包含在 API 地址中**（例如 `http://127.0.0.1:9321/87654321` 或 `http://vps:9321/my_token`），UI 中**不得**增加单独的 Token 输入框。
-
-3. **弹幕节点测试 Ping 路由**：
-   - 探测测速必须使用 `${base}/api/config` 并支持回退到 `POST /api/v2/match` 或 `GET /`。
-   - **绝对不能使用 `/api/v2/version`**，该接口在 `danmu_api` 中不存在（会导致 404 误报离线）。
-
-4. **媒体库播放列表约束**：
-   - “继续观看”（Resume）和“最近播放”（Recently Played）中**严禁展示任何非视频内容**（彻底排除音乐、歌单、音频）。
-   - 同一部电视剧的多集在“继续观看”中必须调用 `mergeMediaBySeries` 进行合并，仅保留最新观看的那一集和播放进度。
-
-5. **图标与品牌规范**：
-   - 应用主品牌：`Nocta · 夜幕`（窗口标题栏统一显示 `Nocta · 夜幕` 并附带应用 Logo）。
-   - 图标母版为根目录的 `app-icon.svg`。每次更新母版后，需执行 `pnpm tauri icon app-icon.svg` 自动同步编译全平台图标至 `src-tauri/icons/`。
-
-6. **代码构建验证**：
-   - 提交任何变更前，必须运行 `pnpm build`（`tsc && vite build`）确保编译零错误。
-
-7. **提交前必须先同步远程（Pull Before Commit）**：
-   - **每次提交代码前务必先 `git pull`**（即 `git fetch` 后整合 `origin/main`），确保基于远程最新提交，避免推送被拒或造成历史分叉。
-   - 若工作区存在其他人/其他会话的未提交改动，请使用 `git fetch` + `git merge origin/main`；**禁止使用 `git rebase --autostash`**（会临时搬移他人未提交文件，存在冲突或丢失风险）。
-   - **只提交本次任务自己的文件**（`git add` 后显式列出路径），严禁 `git add -A` / `git add .` 把他人尚未提交的在制品一并带入提交。
-   - 若拉取后产生冲突或 `pnpm build` 因他人在制品报错，先解决冲突/等待对方完成，不得强行推送。
-
-8. **任务闭环与知识自动沉淀约束（Post-Task Knowledge Synchronization）**：
-   - **每次完成任务后，必须自动将本次开发中沉淀出的可复用技术经验、避坑要点与业务规则写入本 `AGENTS.md`**（并在需要时同步详细背景至 `MEMORY.md`）。
-   - 形成自我迭代的知识闭环，确保后续所有会话与 Agent 能立即复用既有经验，坚决杜绝同类问题重复踩坑。
+- 详细功能背景与迭代记录：[`MEMORY.md`](file:///d:/wade/code/emby-tauri-player/MEMORY.md)
+- 视觉与交互设计规范：[`UI_UX_DESIGN_SPEC.md`](file:///d:/wade/code/emby-tauri-player/UI_UX_DESIGN_SPEC.md)
 
 ---
 
-## 核心架构经验与排坑指南 (Reusable Technical Guide)
+## 一、不可违背的硬性约束 (Hard Rules)
 
-### 1. 跨媒体库深度聚合检索穿透
-- **服务端全局排除避坑**：Emby / Jellyfin 许多特定库（如动漫、纪录片、4K、短片等）管理员常勾选「从全局搜索中排除」，直接调用无 `ParentId` 的全局搜索接口会导致漏检。
-- **穿透方案**：必须先获取用户可用视图 `getUserViews`（**注意**：其返回结构为 `{ Items: EmbyItem[]; TotalRecordCount: number }`，必须取 `.Items` 并排除 `music`/`photos`；搜索链路通过 `getCachedSearchViews` 维持 5 分钟 TTL 缓存并在 [`SearchPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/SearchPage.tsx) 挂载时预热），然后并发对每个媒体库带上 `ParentId=${view.Id}`（限 `perViewLimit <= 30`、剔除 `Overview` 字段减负）发起深度检索，与全局检索及 `/emby/Search/Hints` 统一转字符串 `Id` / `SeriesId` 并补全分集字段后聚合去重。
-- **类型过滤与主体优先去重**：`IncludeItemTypes` 必须包含 `Movie,Series,Episode,Video,BoxSet`；搜索结果调用 `mergeMediaBySeries(items, { preferSeries: true })`，优先保留 `Series` 剧集主体卡片并同时按 `String(SeriesId)` 与规范化 `SeriesName` 双键过滤，避免同服同剧因 `/Search/Hints` 缺 `SeriesId` 或类型混杂导致单剧多集重复刷屏（而续播/历史场景保留默认 `preferSeries: false` 以维持最新观看单集排序）。
-- **所属库回填**：必须为搜索结果条目注入 `LibraryName` / `LibraryId`，以便在卡片上明确提示来源媒体库。
+1. **Git 提交身份**：必须使用用户名 `Wade` 与 GitHub 隐私邮箱 `59910348+wade6716@users.noreply.github.com`，严禁使用未授权或真实外部邮箱。
+2. **弹幕客户端纯粹性**：绝不捆绑/打包任何服务端程序（含 `danmu_api`），仅作纯 HTTP 消费者；Token 必须直接包含在 API 地址中，UI 不得增加独立 Token 输入框。
+3. **弹幕测速路由**：节点探测必须使用 `${base}/api/config`（回退 `POST /api/v2/match` 或 `GET /`）；**严禁使用 `/api/v2/version`**（`danmu_api` 中不存在，会 404 误报离线）。
+4. **媒体库视频纯净与剧集合并**：“继续观看”与“最近播放”严禁展示音频/歌单等非视频内容；同剧多集必须经 `mergeMediaBySeries` 合并，仅保留最新单集与进度。
+5. **品牌与图标**：主品牌统一为 `Nocta · 诺塔`（已由「夜幕」更名）；图标母版 [`app-icon.svg`](file:///d:/wade/code/emby-tauri-player/app-icon.svg) 更新后须运行 `pnpm tauri icon app-icon.svg` 同步生成 `src-tauri/icons/`。
+6. **构建验证**：提交任何变更前必须运行 `pnpm build`（`tsc && vite build`）确保零错误。
+7. **提交前先同步远程**：提交前先 `git pull`；工作区有他人未提交改动时用 `git fetch && git merge origin/main`，**禁止 `git rebase --autostash`**。仅显式 `git add <files>` 提交本次任务文件，严禁 `git add -A` / `git add .`。
+8. **文档治理与防膨胀**：本文件**只记录硬性约束与跨任务高危架构红线**，总大小**严格控制在 20 KB 以内**以免系统注入截断。更新时须**原地合并/覆写对应章节并删除过时条款**，严禁按时间无限追加新节；普通功能说明与迭代流水归档至 `MEMORY.md` 或 `UI_UX_DESIGN_SPEC.md`。
 
-### 2. 原生播放器双层穿透视窗 (Window Layering)
-- **全局背景色透明要求**：`src/index.css` 的 `html, body, #root` 必须保持 `background-color: transparent;`。深色背景必须由 `App.tsx` 在非播放路由动态赋予。一旦 `#root` 设置了不透明背景，WebView2 将遮挡底层 Win32/Direct3D 视频画面，导致「只有弹幕黑屏飞过、无视频画面」。
-- **透明穿透浮层禁大半径外阴影**：在 Windows 透明 WebView2（`transparent: true` + 预乘 Alpha）上，直接悬浮在视频画布上的播放器浮层（OSD 胶囊、抽屉、弹窗、Toast、右键菜单、迷你 HUD 等）**严禁使用大半径外阴影**（如 `shadow-xl`、`shadow-2xl`、`shadow-[0_20px_50px_...]`），否则阴影衰减至最外沿低 Alpha 阈值时会产生一圈明显的 **1px 黑色轮廓伪影线**；统一依赖 `border-white/15` 细腻描边与深色半透底衬（`bg-[#0B0E17]/95`）区隔层次。
-- **系统代理透传**：Windows 下 `libmpv` 不会自动读取注册表系统代理。必须通过 Rust 命令探知系统代理并在播放引擎初始化与加载视频时动态注入 `http-proxy`。
+---
 
-### 3. 播放进度与状态防冲刷保护
-- **初始首跳防冲刷**：原生 `<video>` 初始加载时会派发 0 秒的 `onTimeUpdate`。必须使用 `hasInitialSeekedRef` 标记，首跳前拦截 0 秒事件，防止瞬时覆盖全局真实进度。
-- **闭包过时防护**：销毁上报与心跳定时器中，禁止直接读取旧闭包中的 `currentTime`，必须通过 `videoElemRef.current?.currentTime ?? usePlayerStore.getState().currentTime` 获取现场真实秒数。
-- **完播防回滚**：当进度距片尾不足 15 秒或超过 98% 时，视为完播，下次重新起播应从 0:00 开始。
+## 二、核心架构红线与排坑指南
 
-### 4. 多端配置同步与本地备份设计准则 (Sync & Backup Architecture)
-- **敏感信息安全与端到端加密 (E2EE)**：
-  - 本地导出支持脱敏开关（清除密码与 Access Token），并支持可选加密密码。
-  - 多端同步支持端到端同步密钥（Passphrase）：基于 Web Crypto API 使用 PBKDF2 (100,000 次 SHA-256 迭代) + AES-256-GCM 强加密。云端仅存储密文，彻底杜绝 Emby 凭据在公网 S3 或共享盘泄露。
-- **SMB 局域网协议穿透**：
-  - 在 Windows 平台，通过 Rust FFI 调用 Windows 原生 `WNetAddConnection2W` (链接系统库 `mpr`) 建立临时网络凭据会话，通过 UNC 路径 `\\host\share\path` 直接借助 `std::fs` 读写，完美支持 SMB 2/3、NTLMv2，无跨平台三方库的兼容性缺陷。
-  - macOS / Linux 环境下直接使用标准挂载路径（如 `/Volumes/...` 或 `/mnt/...`）进行透明文件读写。
-- **WebDAV 与 S3 驱动架构**：
-  - `src-tauri/Cargo.toml` 为 `tauri-plugin-http` 启用 `dangerous-settings` 与 `unsafe-headers` 特性；`httpClient` 默认配置 `danger: { acceptInvalidCerts: true, acceptInvalidHostnames: true }` 以兼容局域网 NAS / 自建 Emby 的自签名 HTTPS 证书，传入 `socks5://` 时自动升级为 `socks5h://` 由代理远端解析 DNS，并支持通过 `fallbackToDirect: false` 在测速场景下禁用静默直连回退。
-  - WebDAV 与 S3 均直接依托统一 `httpClient` 并显式传入 `getGlobalProxyConfig()` 读取纯全局代理（**绝不被当前 Emby 服务器的单服代理覆写劫持**），无需也不提供独立的协议级代理策略 UI，代理绕过行为完全遵循操作系统「跳过代理」列表；WebDAV 发送 `PUT` / `GET` / `MKCOL` / Basic Auth 时在 Tauri 环境下显式置空 `Origin: ''` 去除 `tauri://localhost` Origin 校验风险；当 `http://` 请求遇到纯 HTTP 误连 HTTPS 端口返回的 `400 Bad Request`（如 Synology 5006 / Caddy 等）时自动升级为 `https://` 重试并回写同步配置；首次写入遇到 `404`/`409` 时自动尝试 `MKCOL` 创建父级子目录。
-  - S3 采用轻量级 `aws4fetch` 计算 AWS SigV4 规范签名，随后将签名头交由 `httpClient` 发送，实现对 AWS S3、Cloudflare R2、MinIO、阿里云 OSS、腾讯云 COS 的全兼容与代理继承。
-- **双向智能合并算法 (Smart Merge)**：
-  - Emby 服务器：按 `url + username` 联合唯一标识合并，去重保留并集；导入脱敏配置时必须自动保留本机已有密码与 Token；活跃时间戳更新的一方优先。
-  - 弹幕节点：按 `baseUrl` 去重合并。
-  - 弹幕绑定：按 `itemId` 字典合并，以最新 `boundAt` 时间戳优先，保证各端绑定的剧集弹幕互补而不被抹除。
-  - 弹幕屏蔽词：数组去重求并集。
+### 1. Emby 媒体库、搜索、图片与零转码直链
+- **跨库穿透与多服聚合搜索**：许多库被管理员「从全局搜索中排除」。搜索须经 `getCachedSearchViews`（5 分钟 TTL，取 `getUserViews().Items` 并排除 `music`/`photos`）并发带 `ParentId` 穿透检索并注入 `LibraryName`/`LibraryId`；`IncludeItemTypes` 须含 `Movie,Series,Episode,Video,BoxSet`，搜索经 `mergeMediaBySeries(items, { preferSeries: true })` 保留剧集主体。多服联合检索调用 `searchFederatedMediaItems` 流式回调 + 独立 `timeoutMs`，[`SearchPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/SearchPage.tsx) 用 `searchReqIdRef` 防过期竞态。
+- **跨服卡片与切服同步**：多服条目注入 `ServerId`/`ServerName`/`ServerUrl`，海报寻址优先 `item.ServerUrl || serverUrl`。全站任意路由可切服，点击跨服条目或切服前必须调用 `setCurrentServer` 与 `clearMediaCache()`（递增 `cacheVersion`）并自动回到对应空间首页，[`HomePage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/HomePage.tsx) 用 `loadReqIdRef` 丢弃旧服慢响应。
+- **剧集总集数、`Episode` 归属与首页卡片元数据**：`Series` 总集数取 `RecursiveItemCount`，API `Fields` 须显式包含 `ChildCount,RecursiveItemCount,Status`，且首页/续播接口（`PLAYBACK_MEDIA_FIELDS` 与 `getLatestItems`）须包含 `ProductionYear,PremiereDate,Genres,OfficialRating,RunTimeTicks,Taglines` 防缺年份流派。[`DetailPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/DetailPage.tsx) 遇 `Episode && SeriesId` 须并发拉父级 `Series` 详情；分集 `Backdrop` 优先取 `ParentBackdropItemId || SeriesId` 配 `ParentBackdropImageTags?.[0]`。
+- **无 `tag` 图片 500 防护 ([`embyClient.ts`](file:///d:/wade/code/emby-tauri-player/src/api/embyClient.ts))**：部分 `.strm`/未刮削条目无 `&tag=` 或强转 `&format=webp` 会触发服务端 `.NET NullReferenceException (500)`。**严禁盲发无 `tag` 图片请求或在 `onError` 中剥离 `&tag=` 重试**；统一走 `resolveEpisodeThumbnailUrl` / `resolveItemPosterUrl` / `resolveItemBackdropUrl`（无 tag 直接本地占位、零网络请求），`onError` 须带步进锁仅 via `stripImageFormatWebp` 剥离 `&format=webp`（保留 `&tag=`）重试一次。
+- **100% 零转码原画直出 & 多版本择优**：视频流仅允许 `static=true` 直出，**严禁请求实时转码或 MP4 重封装**；HTML5 不支持格式直接报错并引导切 MPV。`buildNativeDirectStreamUrl` 优先 `DirectStreamUrl` → 标准 `/stream.{ext}?static=true` 并规范化容器后缀，**绝不能绕过服务端 302/307 重写直接优先返回 `.strm` (`IsRemote`) 陈旧 `mediaSource.Path`**（仅作末位 fallback）。所有起播统一经 [`playbackSessionService.ts`](file:///d:/wade/code/emby-tauri-player/src/player/playbackSessionService.ts) `sortMediaSourcesByQuality` 择优（禁直取 `MediaSources[0]`）。
+- **统一默认 UA 与客户端名**：前后端（`embyClient.ts`、[`preload.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/preload.rs)、[`proxy.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/proxy.rs)）统一默认 UA `Nocta/${APP_VERSION} (Desktop; EmbyClient)` 与 `Client="Nocta"`；`buildEmbyHeaders` 仅在 `isTauriEnvironment()` 为 `true` 时注入 `User-Agent`，避免浏览器 Dev 模式禁改头警告。
 
-### 5. 跨多个 Emby 服务器联合聚合搜索 (Federated Multi-Server Search)
-- **多服并行渐进流式检索与容错机制**：
-  - 调用 `searchFederatedMediaItems(targets, params)`，并行检索全部已配置的 Emby 服务器（各服务器内部依然自动穿透全部分类库），为每台服务器设置 `timeoutMs`（默认 `12000ms`）独立超时保护（`finally` 清理定时器）与 `onServerResult` 单服即时回调——快服无需等待慢服/离线服，结果即时经 `sortFederatedSearchItems` 排序上屏（精确匹配→前缀匹配→剧集/电影主体优先→年份降序）；
-  - 前端 [`SearchPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/SearchPage.tsx) 必须维护 `searchReqIdRef` 竞态锁拦截过期搜索回调，并用「搜索中...」微动效区分仍在并行响应的服务器，绝不让单台慢服/故障阻断其他健康服务器的即时展示；
-- **条目来源标定与多服海报寻址**：
-  - 搜索结果条目必须注入所在服务器信息：`ServerId`、`ServerName`、`ServerUrl`；
-  - `MediaCard` 海报封面寻址必须优先使用 `effectiveServerUrl = item.ServerUrl || serverUrl`，防止向非当前主服务器请求图片导致 401/404；
-  - 卡片左上角渲染来源服务器微标（`serverBadge || item.ServerName`），右上角渲染媒体库或剧集分类；
-- **跨服点击无缝迁移**：
-  - 用户点击非当前服务器的影视卡片时，在 `navigate('/detail/' + item.Id)` 前，必须同步调用 `useAuthStore.getState().setCurrentServer(target.id)` 并执行 `useMediaStore.getState().clearMediaCache()`，确保详情页和播放页直接使用目标服务器的 Token 与直链播放，彻底避免跨服会话错乱。
+### 2. 播放器引擎 (`libmpv` / HTML5)、缓冲与切集生命周期
+- **FFI 内存安全与实例复用红线**：
+  - **严禁调用 `getProperty(..., 'node')`**（`nini22P/libmpv-wrapper` 栈指针 8 字节而 C API 写 16 字节 `mpv_node` 必现栈溢出崩溃），复杂/数值属性一律通过 `observeProperties` 获取。
+  - **严禁调用 `tauri-plugin-libmpv` 的 `destroy()`**（存在 UAF 竞态）。`'main'` 实例进程级复用，离页仅解绑监听并 `setProperty('pause', true)` + `command('stop')`。
+- **MPV 参数与起播生命周期 ([`MpvPlayerEngine.ts`](file:///d:/wade/code/emby-tauri-player/src/player/MpvPlayerEngine.ts))**：
+  - `X-Emby-Authorization` 含逗号，**严禁 `setProperty('http-header-fields', ...)`**，须用 `command('change-list', ['http-header-fields', 'clr', ''])` 后逐条 `append`；`demuxer-max-bytes` 与 `demuxer-max-back-bytes` 须以 `String(bytes)` 字符串下发。
+  - **严禁在 `loadfile` 后同步调用 `command('seek')`**：须在 `loadfile` 前预设 `start`、`this._currentTime = 0`，在 `file-loaded` 后执行带 `try/catch` 绝对寻址，在 `playback-restart` 后重置 `start='none'`。保留 `force-seekable: 'yes'`、`demuxer-seekable-cache: 'yes'`、`hr-seek-framedrop: 'yes'`、`demuxer-mkv-subtitle-preroll: 'no'` 防 MKV 远端顺序下载死锁；`lifecycleQueue` 串行化 `init`/`destroy`。
+- **进度保护、片头/片尾跳过与切集隔离**：
+  - 用 `hasInitialSeekedRef` 拦截首跳前 0 秒 `onTimeUpdate`；停播/切集上报读现场秒数或 `lastValidTimeRef.current` 并以 `reportedStoppedSessionRef` 防覆盖，禁读旧闭包 `currentTime`；距片尾 `< 15s` 或 `> 98%` 视作完播。
+  - 跳过片尾（[`useSkipSegmentsController.ts`](file:///d:/wade/code/emby-tauri-player/src/player/hooks/useSkipSegmentsController.ts)）有 `nextEpisode` 时直接 `switchToEpisode`，无下一集时 `seek(total - 1)`（**严禁 `seek(total - 0.25)`** 导致 `Math.ceil` 卡死片尾）；切集通过 `loadEpoch`（拦截非当前 epoch 的 `time-pos`/`duration`/`end-file`）与 [`PlayerPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/PlayerPage.tsx) `isSwitchingEpisodeRef` + 立即 `pause()` 隔离旧流；`SkipSegments` 变更走 `saveStorageImmediate` 即时落盘。
+- **动态时长缓冲与纯内存预加载 ([`preload.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/preload.rs) / [`useNextEpisodePreloader.ts`](file:///d:/wade/code/emby-tauri-player/src/player/hooks/useNextEpisodePreloader.ts))**：
+  - `setBufferConfig` 协同下发 `demuxer-readahead-secs`（默认 5 分钟）与受 `cacheMemoryCapMB` 约束的 `demuxer-max-bytes` 防 OOM。
+  - 预加载用 1 MiB 内存分块（零磁盘 IO），**严禁持 `RwLock` 跨越 `.await`**；文件大小用 `GET Range: bytes=0-0` 探测；302 跨域必须剥离 `authorization`/`X-Emby-*`；切入预载集立即 `abort()` 下载，稳定起播后调用 `release_active_preload_memory` 释分块保透传；`-13` 自动 `diagnose_stream_url` 逐跳排查并在 Rust 可达时单次降级零内存 `start_stream_relay`。
+- **缓冲态解耦**：播放中缓冲仅显示 `pointer-events-none` 的 [`BufferingIndicator.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/BufferingIndicator.tsx)，**严禁拉起全屏 `isLoadingVideo` 或强制显示 OSD**。
 
-### 6. 电视剧集数（媒体文件）角标展示与 API 字段规范
-- **Emby 服务端集数字段特性**：
-  - 在 Emby / Jellyfin 中，`Series`（电视剧系列）条目的总集数（包含的媒体文件数）为 `RecursiveItemCount`；`ChildCount` 通常为季（Season）数或直属子项数；
-  - Emby API 请求（`/emby/Users/{UserId}/Items`、`/Items/Latest` 等）必须显式在 `Fields` 参数中声明 `ChildCount,RecursiveItemCount,Status`，否则服务端默认会裁剪这些计数属性导致前端无法获取集数；
-- **智能文案规则 (`formatSeriesEpisodeBadge`)**：
-  - 连载中（`Status === 'Continuing'`）：展示为 `更新至 X 集`；
-  - 已完结（`Status === 'Ended'`）：展示为 `全 X 集`；
-  - 其它/未标注完结状态：展示为 `共 X 集`；
-  - 单集分集条目（`Episode`）：展示为 `第 X 集`；
-- **卡片四角非遮挡布局**：
-  - 左上角：服务器来源微标（`serverBadge`）；
-  - 右上角：媒体库分类徽章（`badge`，如 `动漫`、`电影`）或 `已看`；
-  - 右下角：剧集总集数角标（`effectiveEpisodeBadge`，带 `Tv` 图标与深色半透毛玻璃背景），位于底部细线进度条上方，互不遮挡。
+### 3. 视窗穿透、主题毛玻璃与 macOS 原生窗口/全屏浮层
+- **透明穿透与原生毛玻璃隔离**：[`index.css`](file:///d:/wade/code/emby-tauri-player/src/index.css) 的 `html, body, #root` 必须保持 `background-color: transparent;`；进入 `/player/*` 时 [`App.tsx`](file:///d:/wade/code/emby-tauri-player/src/App.tsx) `<main>` 透明且**必须立即调用 `set_window_glass_effect("off")` 清除原生 Acrylic / UnderWindowBackground**（[`lib.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/lib.rs)），严禁遮挡底层 `libmpv`。
+- **透明 WebView 叠层与 Tailwind v3 红线**：Windows 透明 WebView2 上悬浮于视频画面的浮层**严禁大半径外阴影**（产生 1px 黑色轮廓伪影），且 `backdrop-blur-*` 无法模糊原生底层视频，须用高不透明深色底（如 `bg-[#0B0E17]/95`）+ `border-white/15`。Tailwind v3 透明度修饰符**必须为 5 的倍数或方括号任意值**（如 `/95`、`/[0.92]`、`z-[35]`），裸非 5 倍数会被静默丢弃。
+- **双主题视觉与详情/冷启动约束**：亮色主画布采用纯净不透明 `#FFFFFF`（`#F5F5F7` 用于侧边栏/分组，`<main>` 须实色 `bg-canvas` 防背后窗口透字，禁叠青/紫径向光斑）、暗色 `#0A0A0C`，亮色互动主色收敛为 `#1D1D1F` 单色高对比；首页与详情页均全出血并用 `scrollProgress` 连续插值顶栏透明度与动态剧照环境柔光带（亮色 Hero 禁底部白雾）；`DetailPage` Hero 背景须在容器内用 `absolute inset-0`（**禁 `fixed -z-10`**）；无服务器冷启动须保留直达 `/settings?tab=sync` 的配置恢复入口。
+- **macOS 原生交通灯、嵌入与焦点恢复**：禁 CSS 模拟交通灯，由 [`tauri.macos.conf.json`](file:///d:/wade/code/emby-tauri-player/src-tauri/tauri.macos.conf.json) 配置 Overlay 交通灯；[`mpv_embed_macos.m`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/mpv_embed_macos.m) 在主线程以 `addChildWindow` 嵌入 mpv 窗口（选项为 `input-cursor-passthrough`，AppKit 须经 `run_on_main_thread`）；无边框窗口退全屏后 `tao` 会重置 `firstResponder` 导致失焦，须经 `nocta_configure_main_window` 与 `nocta_focus_webview` 异步恢复 `WKWebView` 焦点，`KeyF` 防 `e.repeat` 连发。
+- **macOS 原生全屏 OSD 浮层 ([`osd_overlay.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/osd_overlay.rs) / [`OsdOverlayPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/OsdOverlayPage.tsx))**：**仅 `macOS + engineType === 'mpv' + 原生全屏` 启用** `osd-overlay`；`show()` 后重设 `NSStatusWindowLevel` 与 `FullScreenAuxiliary`，遇 `label already exists` 视为成功。主窗口与浮层经 [`osdOverlaySync.ts`](file:///d:/wade/code/emby-tauri-player/src/player/osdOverlaySync.ts) + Revision 防环锁同步；浮层仅 `applyRemoteStoreSnapshot(..., false)` 更新内存，**严禁直接写盘、调引擎或 Emby API**，所有操作经 `osd:command` 回传主窗口。
 
-### 7. 播放器详细播放信息与媒体统计面板规范 (Playback Information & Stats HUD)
-- **非阻断式 HUD 视窗设计**：
-  - 采用半透明毛玻璃浮层（`bg-[#12151d]/90 backdrop-blur-xl`，`z-35`），浮动在播放器画面右上角/中央，允许用户在不暂停或不阻断播放的前提下实时观察视频色深、帧率、HDR 格式、音频声道和码率；
-  - 快捷入口：OSD 控制栏右侧常驻信息入口按钮（`<Info />`），全局快捷键 `I`（Info）快捷打开/关闭，按 `Escape` 优先关闭；
-- **技术参数细分体系（6大模块）**：
-  1. 当前回放状态：播放进度、倍速、传输模式（DirectStream 直连/转码）、服务器名称；
-  2. 视频流参数：分辨率（4K/1080p 等）、编码格式（HEVC/AVC/AV1 等）、帧率（fps）、色深（10-bit/8-bit）、动态范围（HDR10/Dolby Vision/SDR）、Profile/Level、码率；
-  3. 音频流参数：当前音轨语言与标题、编码格式（TrueHD/DTS-HD/FLAC/AAC 等）、声道布局（7.1/5.1/立体声）、采样率（kHz）、码率；
-  4. 字幕流参数：当前字幕标题与语言、格式（ASS/SRT/PGS 等）、外挂或内嵌状态；
-  5. 播放引擎与渲染：内核类型（libmpv / HTML5）、GPU 硬件加速状态、渲染器；
-  6. 弹幕与存储容器：匹配弹幕源标题、弹幕总条数、时间偏移、文件封装容器（mkv/mp4）及服务器物理路径；
-- **一键技术支持复制（Copy to Clipboard）**：
-  - 提供一键复制全部纯文本参数功能，方便用户向服务端管理员或开发者提供完整的故障排查报告。
+### 4. 弹幕系统与零闪烁渲染
+- **CI 源码直编 ([`vite.config.ts`](file:///d:/wade/code/emby-tauri-player/vite.config.ts))**：`danmaku` 须优先解析 `src/index.js` 并保留在 `optimizeDeps.exclude`，严禁 CI 退回旧 `dist/`。
+- **零闪烁与按需懒加载**：`formattedComments` 的 `useMemo` **严禁依赖 `visible`/`opacity`/`speed`/`area`/`maxLines`/`bottomMargin`/`showHeatmap`**，防拖滑块 Canvas 重建闪烁。[`useDanmakuSession.ts`](file:///d:/wade/code/emby-tauri-player/src/player/hooks/useDanmakuSession.ts) 仅在 `visible === true` 时触发，用 `effectiveDurationRef` 读时长（**严禁将 `effectiveDuration` 加入 `triggerDanmakuLoad` 依赖**），并用 `danmakuReqIdRef` + `activeItemIdRef` 防竞态。
+- **两阶段匹配、熔断与分集解析 ([`danmuClient.ts`](file:///d:/wade/code/emby-tauri-player/src/api/danmuClient.ts))**：Stage 1 (`POST /api/v2/match`) 0 弹幕或时长偏差超阈值回退 Stage 2 关键词搜索（绝不拼 `@preferredPlatform`），仅严格更优才替换；仅网络/超时/`401`/`403`/`429`/`5xx` 触发指数熔断，`200` 空/`404` 不惩罚；[`DanmakuDrawer.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/DanmakuDrawer.tsx) 经 `parseDanmuEpisodeInfo` 剥离平台前缀（不剥 `SP`/`OVA` 等），选集定位用容器 `scrollTo`（禁 `scrollIntoView`），拉取用独立 `bindingEpisodeId` 防卸载列表。
 
-### 8. 版本发布与 GitHub Actions 自动化打包规范 (Release & Packaging Pipeline)
-- **版本号单一数据源 (`../package.json`)**：
-  - 由于项目桌面端打包已移除 Windows WiX MSI（仅保留 Windows NSIS、macOS `.app`/`.dmg`、Linux `.deb`），[`src-tauri/tauri.conf.json`](file:///d:/wade/code/emby-tauri-player/src-tauri/tauri.conf.json) 直接使用 `"version": "../package.json"`、前端通过 Vite `define.__APP_VERSION__` 注入同一版本号，实现全栈单一数据源。
-  - 若需兼容旧版 Pre-release 标签，仍保持在 `package.json`（如 `0.1.0-alpha.15`）与 Git tag `v0.1.0-alpha.15` 同步标记，CI 自动识别 `(alpha|beta|rc)` 为预发布状态。
-- **GitHub Actions Tag 缓存隔离避坑、`main` 自动触发与缓存读写红线**：
-  - **缓存作用域原理**：GitHub Actions 原生缓存严格按 `github.ref` 隔离——新推 Tag（`refs/tags/v0.1.0-alpha.14`）无法读取旧 Tag（`alpha.13`）的缓存，只能回退读取默认分支 `refs/heads/main`。若只在推 Tag 时构建 Release（或漏写 `save-if: github.ref == 'refs/heads/main'`），会导致 4 端每次 100% 冷编译且在任务末尾浪费数分钟上传下个 Tag 永远读不到的“死缓存”。
-  - **`on.push` `tags` + `paths` 互斥陷阱与 `main` 统一发版**：GitHub Actions **禁止**在同一 `on.push` 块下同时声明 `tags:` 与 `paths:`（会报工作流语法非法）；且在 `push: tags` 触发下无法回写 `main` 热缓存。因此 [`.github/workflows/release.yml`](file:///d:/wade/code/emby-tauri-player/.github/workflows/release.yml) 统一监听 `push: branches: [main]` 与 `workflow_dispatch`（已移除 `push.tags` 避免补推/重写历史标签时重复触发冷构建），并在 `build-frontend` 首步 `Resolve Release Metadata` 通过 `git ls-remote --tags origin "refs/tags/${tagName}"` 检查远端 Tag 是否已存在：
-    - 仅普通代码提交推送至 `main`（`v<pkg.version>` Tag 已存在）：`should_release=false`，跳过后续所有构建与发布步骤（约 5 秒结束，零资源浪费）；
-    - 更新 `package.json` 新版本号并推送至 `main`（或手动 `workflow_dispatch` on `main`）：`should_release=true`，直接在 `refs/heads/main` 上下文并发构建 4 端，**100% 命中并刷新 `main` 热缓存**，并由 `tauri-action` 自动创建 Tag 与 Release。
-  - **严格只允许 `main` 写入缓存**：`swatinem/rust-cache@v2` 必须设置 `save-if: ${{ github.ref == 'refs/heads/main' }}` 与 `cache-on-failure: false`；`actions/cache/save@v4` 均须带 `github.ref == 'refs/heads/main'` 守卫，保证偶发手动推 Tag 构建仅只读继承 `main` 缓存而不传死缓存。
-- **三阶段流水线与多层加速架构**：
-  1. **单次前端编译与元数据解析（`build-frontend`）**：仅在 `ubuntu-latest` 执行一次 `pnpm install --frozen-lockfile && pnpm build` 并上传 `dist/` Artifact，同时解析 `tag_name` 与 `@tauri-apps/cli` 版本；4 端编译矩阵直接下载 `dist/`，搭配 [`src-tauri/tauri.ci.conf.json`](file:///d:/wade/code/emby-tauri-player/src-tauri/tauri.ci.conf.json)（`beforeBuildCommand: ""`）及官方预编译 `cargo-tauri` 二进制（`tauriScript: 'cargo tauri'`），免除 4 端重复安装 Node/pnpm 与重复编译前端；`tauri-cli` 按宿主 `${{ runner.os }}-${{ runner.arch }}` 键共享缓存。
-  2. **Windows NSIS 跨端快速编译（`ubuntu-24.04` + `cargo-xwin` + `lld` + Linux `makensis`）**：
-     - 原生 `windows-latest` Runner 受限于 Microsoft Defender 文件拦截、NTFS 小文件 I/O 与 MSVC `link.exe` 串行耗时；因此 Release 的 `Windows x64` 任务运行于 `ubuntu-24.04`（1x 计费），通过 `--runner cargo-xwin --target x86_64-pc-windows-msvc --bundles nsis` 交叉编译。
-     - 安装并缓存 `clang lld llvm nsis p7zip-full`（`ubuntu24-xwin-v1`），在校验步骤自动为 Ubuntu 24.04 的带版本号 LLVM 工具（如 `llvm-rc-18` / `lld-link-18` / `clang-cl-18` / `llvm-lib-18`）建立无版本后缀软链至 `/usr/bin`（保持 `clang-cl` 的 `InstalledDir` 与 Ubuntu LLVM 一致）并显式导出 `RC=llvm-rc` 与 `XWIN_CACHE_DIR=$HOME/.cache/cargo-xwin`，同时单独缓存 `~/.cache/cargo-xwin`（Windows SDK/CRT）与 `~/.cache/tauri`（NSIS 插件工具）；**切勿调用 `llvm-rc --version`**（`llvm-rc` 采用 `rc.exe` 参数语义，不支持 `--version` 会在 `set -e` 下报 `Exactly one input file should be provided.` 并退出 1，应仅用 `command -v llvm-rc` 校验）。
-     - 若 [`.github/workflows/ci.yml`](file:///d:/wade/code/emby-tauri-player/.github/workflows/ci.yml) 使用 `windows-latest`，须通过 Defender 排除 `${{ github.workspace }}`、`$env:CARGO_HOME`、`$env:RUNNER_TEMP` 及 `cargo/rustc/link/lld-link/cl.exe`。
-  3. **Release Profile 编译调优 & Linux `lld`**：[`src-tauri/Cargo.toml`](file:///d:/wade/code/emby-tauri-player/src-tauri/Cargo.toml) 配置 `[profile.release]`（`opt-level = 2`、`codegen-units = 16`、`lto = false`、`strip = "symbols"`），降低 500+ Rust crate 的 LLVM 优化开销并减小产物体积；Linux `.deb` 保留在 `ubuntu-22.04` 保证 glibc 2.35 兼容性，接入 `lld`（`ubuntu22-tauri2-v2` 与 `ci.yml` 共享）并设置 `RUSTFLAGS="-C link-arg=-fuse-ld=lld"` 加速链接。
-  4. **Rust 缓存与防配额驱逐策略**：Release 按 `shared-key: "release-${{ matrix.cache_id }}-v2"` 严格隔离 4 目标平台，`ci.yml` 使用 `ci-check-<platform>-v1`；**禁止**在 4 端矩阵中同时叠加 `sccache` + `rust-cache`，避免突破 GitHub 仓库 10 GB 缓存上限引发 LRU 驱逐热缓存。
-  5. **macOS Intel 在 Apple Silicon (`macos-15`) 上交叉编译**：`macOS Intel` 任务固定跑在高速 `macos-15`（ARM64）上，通过 `--target x86_64-apple-darwin` 交叉编译，并注意四项隔离要点——`cli_asset` 必须匹配宿主 ARM64（`cargo-tauri-aarch64-apple-darwin.zip`）、`cache_id` 使用 `macos-x86_64-on-arm64` 以防 `rust-cache` 混入旧 Intel Runner 宿主 `proc-macro` 动态库；由于 Homebrew 已拒绝在 Apple Silicon Rosetta 下安装 Intel Homebrew（`Homebrew on macOS is only supported on Apple Silicon processors!`），改为在 `build-frontend` 通过 `gh api` 查询 `refs/heads/main` 是否存在 `mpv-bundle-v2-macos-x86_64-*` 缓存——命中时 0 秒跳过，仅缓存失效时按需拉起前哨任务 `prepare-macos-x64-mpv`（`macos-15-intel` 自带预装 Intel `brew`）生成纯 `x86_64` 动态库并写入缓存与临时 Artifact；**切勿使用 `rm -f src-tauri/lib/libmpv*.dylib` 通配符清理**（会误删 `libmpv-wrapper.dylib` 并污染缓存，必须显式删除 `libmpv.dylib` 与 `libmpv.2.dylib`），且修改打包脚本后须递增 macOS `mpv_cache_version`（现为 `v2`）并保留 `lipo -archs` 强制校验。
-  6. **`src-tauri/lib/` 整包缓存与冷构建加速**：通过 `mpv-bundle-v1-<mpv_platform>-<mpv_arch>-<hash(setup-mpv.mjs)>` 缓存完整动态库产物。macOS 命中后跳过 Homebrew、`setup-mpv.mjs`、`dylibbundler` 与并行 `codesign`；[`scripts/setup-mpv.mjs`](file:///d:/wade/code/emby-tauri-player/scripts/setup-mpv.mjs) 优先调用原生 `7z`/`unzip`/`tar` 解压，Windows 仅保留 `nsis`（`compression: "zlib"`），Linux 仅保留 `.deb`，`src-tauri/Cargo.toml` 桌面端保持 `crate-type = ["rlib"]`。
-  7. **下游汇聚任务 (`finalize-release`) 必须显式防 `skipped` 传递误跳过**：由于 `release-tauri` 通过 `if: always() && ...` 允许命中缓存而 `skipped` 的前置任务 `prepare-macos-x64-mpv` 放行，若下游 `finalize-release` 仅写 `if: needs.build-frontend.outputs.should_release == 'true'` 而不加 `always()`，GitHub Actions 隐式包裹的 `success()` 会因祖先节点存在 `skipped` 而返回 `false`，静默跳过整个清单发布步骤导致 `latest.json` / `stable.json` 404；必须显式写成 `if: always() && needs.build-frontend.outputs.should_release == 'true' && needs.build-frontend.result == 'success' && needs.release-tauri.result == 'success'`。
-  8. **双层更新日志自动生成与纯净客户端渲染 (`scripts/generate-release-notes.mjs`)**：由于 GitHub 原生 `releases/generate-notes` 仅汇总 PR 而忽略直接推入 `main` 的提交，发版阶段调用 [`scripts/generate-release-notes.mjs`](file:///d:/wade/code/emby-tauri-player/scripts/generate-release-notes.mjs) 优先提取 [`CHANGELOG.md`](file:///d:/wade/code/emby-tauri-player/CHANGELOG.md) 中对应 `## [vX.Y.Z]` 精选说明，未命中时自动解析 `git log <prevTag>..HEAD` 并按 Conventional Commits 分类归纳（自动过滤纯发版与 Merge 提交、彻底剥离 `<!-- ... -->` HTML 注释）；发版前应优先在 `CHANGELOG.md` 补充当版本中文更新亮点。前端 [`UpdateBannerModal.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/common/UpdateBannerModal.tsx) 内置无第三方依赖 Markdown 清洗渲染器展示更新内容。
-  9. **防并发创建 Release 标签竞态（`release_id` 预创建传递）**：4 端并行 `release-tauri` 矩阵任务若同时调用 `tauri-apps/tauri-action@v0` 自动创建尚未存在的 Tag 与 Release，会触发 GitHub REST API 并发竞态报错 `Published releases must have a valid tag` (HTTP 422)。因此统一由前置单节点 `build-frontend`（需 `contents: write`）先检索或创建 Tag 与 Release（`Ensure GitHub Release Exists`），再将 `release_id` 传入 `tauri-action` 的 `releaseId` 参数，4 端仅并发上传产物，彻底消除并发建库竞态（日志中 `Couldn't parse --config flag as inline JSON` 属 `tauri-action` 解析 `--config <file>` 时的正常提示，非错误）。
-- **CI 流水线按需手动触发规范**：
-  - `.github/workflows/ci.yml` 仅保留 `workflow_dispatch` 手动触发，已关闭 `push` 与 `pull_request` 自动触发，避免日常提交占用配额；需要云端多平台静态校验时手动触发即可。
+### 5. 全栈网络代理、域名收集与配置同步
+- **HTTP 作用域与 TLS ([`default.json`](file:///d:/wade/code/emby-tauri-player/src-tauri/capabilities/default.json) / [`http.ts`](file:///d:/wade/code/emby-tauri-player/src/api/http.ts))**：`http:allow-fetch` 须包含显式端口通配（`http://*:*`、`http://*:*/*`、`http://*:*/**` 及对应 `https`），避开 WHATWG URLPattern 默认端口限制；`httpClient` 默认容忍自签证书并将 `socks5://` 升为 `socks5h://`。
+- **OS 跳过代理与分层路由**：前后端对齐 `shouldBypassProxy` / `should_bypass_proxy` 严格遵循系统跳过代理列表（含 CIDR/`<local>`/通配），**严禁硬编码旁路私网/局域网地址**。MPV 遇 `socks5` 经 Rust `ensure_socks5_http_bridge` 建 HTTP 桥，Rust 预加载/中转走原生 `rustProxy`，本机环回流强制直连；WebDAV/S3/Updater 显式传 `getGlobalProxyConfig()` 与单服 Emby 代理隔离。
+- **`nocta-img` 图片代理 & 域名收集**：Emby 图片经 `wrapEmbyImageUrl` 走 [`image_proxy.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/image_proxy.rs) 遵循应用代理与 UA，变更配置递增 `imageProxyRevision` 触发重载；[`useEmbyHostsStore.ts`](file:///d:/wade/code/emby-tauri-player/src/stores/useEmbyHostsStore.ts) 禁导入 `useAuthStore` 防循环依赖，样本自动脱敏。
+- **同步与本地导出**：WebDAV/S3 走 `httpClient`（Tauri 下 WebDAV 置空 `Origin: ''`，400 自动升 HTTPS，404/409 自动 `MKCOL`）；Windows SMB 走 Win32 `WNetAddConnection2W`；Windows 打开下载目录直接 `explorer <dir>`（**严禁 `/select,"<Path>"`** 防回退文档目录）。
 
-### 9. 桌面端本地文件导出与系统文件管理器/访达联动规范 (Native File Reveal & Local Backup)
-- **WebView 下载局限与原生桥接**：
-  - 在 Tauri 桌面客户端中，纯前端 `a.click()` 触发 Blob 下载无法准确捕获最终保存物理路径，且无法唤起文件管理器高亮选中目标文件。
-  - **解决方案**：通过 Tauri 原生命令 `save_backup_file`，优先调用 `app.path().download_dir()` 定位系统下载目录并安全写入；若遇到同名文件，自动采用 `stem (1).ext` 自增序号避免文件覆盖。
-- **跨平台文件管理器唤起与直接打开下载目录 (`open_directory_in_file_manager`)**：
-  - **Windows 陷阱与解决**：若调用 `explorer.exe /select,"<Path>"`，因 Windows 底层命令行参数带引号解析问题，会导致 explorer 识别参数失败并**默认降级回退打开“文档”目录**。因此在文件导出下载场景中，直接调用 `Command::new("explorer").arg(&dir_str)`，保证 100% 精准打开真实的系统“下载”目录；
-  - **macOS**：调用 `Command::new("open").arg(dir)` 直接打开访达下载目录；
-  - **Linux**：调用 `Command::new("xdg-open").arg(dir)` 打开下载目录。
-- **UI 反馈与双重操作通道**：
-  - 导出成功后提供双层反馈：卡片内呈现带文件名与保存目录的绿色状态面板，页面右上角弹出毛玻璃浮动 Toast；
-  - 两处均提供常驻的「打开下载目录」按钮，允许用户随时再次唤起系统文件管理器查看文件。
+### 6. 双空间隔离（影视 / 音乐）、Keep-Alive 与系统媒体会话
+- **影视/音乐强隔离 ([`embyMusicClient.ts`](file:///d:/wade/code/emby-tauri-player/src/api/embyMusicClient.ts) / [`MusicAudioController.tsx`](file:///d:/wade/code/emby-tauri-player/src/music/MusicAudioController.tsx))**：音乐接口须限定 `CollectionType === 'music'` 视图 `ParentId` + `MediaTypes=Audio` + 客户端严格白名单；进 `/player/*` 自动暂停音乐，非视频路由由音乐控制器接管媒体会话。
+- **Keep-Alive 门控**：隐藏态保活页（`/`、`/continue-watching`、`/search`）须以 `isActive` 门控快捷键与自动 `focus()`；离 `/player/*` 递增 `playbackDirtyRevision` 静默增量刷新。
+- **媒体会话与耳机断连 ([`media_session.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/media_session.rs))**：`lib.rs` 中 `.manage(MediaSessionState::default())` 须在 `.setup()` 前调用；Linux `souvlaki` 用 `use_zbus`（免 `libdbus-1-dev`）；Windows 在 [`Cargo.toml`](file:///d:/wade/code/emby-tauri-player/src-tauri/Cargo.toml) 同时声明 `windows-core`；外放切耳机不误停，耳机断开/切回扬声器自动暂停。
 
-### 10. 无服务器冷启动下的设置访问与配置恢复规范 (Cold Start Settings & Backup Restoration)
-- **冷启动死锁避坑**：
-  - 当本地尚未添加任何 Emby 服务器（`servers.length === 0`）时，`HomePage` 会重定向至 `/login` 且侧边栏被隐藏。若无独立入口，用户将彻底无法进入 `/settings`，导致无法通过导入备份或多端同步恢复配置。
-- **全链路常驻入口体系**：
-  1. **登录页快捷胶囊条**：在 Logo 下方常驻展示「系统设置」、「导入配置」（`navigate('/settings?tab=sync')`）与「网络代理」；
-  2. **快速导入恢复卡片**：在登录表单下方配备图文卡片「已有备份或多端配置？支持导入多端同步或备份文件一键恢复」，一键直达恢复向导；
-  3. **标题栏与侧边栏兜底**：当 `!currentServer` 时，`TitleBar` 中部展示「设置 & 导入」胶囊按钮；`Sidebar` 底部展示「未连接 · 导入配置」警示卡片，点击自动切至同步 Tab；
-  4. **URL 参数深度寻址**：`SettingsPage` 必须支持 `useSearchParams()` 读取 `?tab=sync` 等参数并自动激活对应选项卡；导入完成后直接提供「前往首页进入媒体库」一键直达按钮。
+### 7. `libmpv` 动态库打包与本地开发前置
+- **本地缺库检查**：新克隆或 `src-tauri/lib/` 仅剩 `.gitkeep` 时先运行 `pnpm setup-mpv`（[`setup-mpv.mjs`](file:///d:/wade/code/emby-tauri-player/scripts/setup-mpv.mjs) 在 macOS 找不到 Homebrew `libmpv` 时必须失败）并重启 `pnpm tauri dev`。
+- **Windows DLL 126 防护**：Rust 入口调用 `SetDllDirectoryW` 并前置写入 `PATH` 注入 `lib/`，保障二级依赖 `libmpv-2.dll` 加载。
+- **macOS 自包含与防双份加载**：`ensure_unix_symlink` 遇旧指向须删除重建，禁同进程加载两份 `libmpv`；通过 `[patch.crates-io]` 本地 `tauri-plugin-libmpv` 扩展 `Contents/Resources/lib` 寻址 + `RTLD_GLOBAL` 预加载；复制 Homebrew 只读 dylib 后须 `chmod 0755`。
 
-### 11. Tauri v2 HTTP 插件 URL 作用域端口与通配规范 (WHATWG URLPattern Port Whitelisting)
-- **默认端口陷阱**：
-  - Tauri v2 底层采用 WHATWG URLPattern 解析 HTTP 作用域。当配置为 `http://**` 或 `https://**` 时，仅匹配默认端口（HTTP 80 / HTTPS 443）；
-  - 当请求带有任何显式端口号（如弹幕服务 `http://127.0.0.1:9321/...`、Emby 服务 `http://x.x.x.x:8096/...` 或局域网自定义端口）时，会被严格拦截并抛出：`[Tauri HTTP Error] url not allowed on the configured scope`；
-- **通配配置要求**：
-  - 在 `src-tauri/capabilities/default.json` 的 `http:allow-fetch` 中，必须同时声明不带端口与通配端口的完整 URLPattern：
-    `http://*`, `http://*/*`, `http://*/**`, `http://*:*`, `http://*:*/*`, `http://*:*/**`, `http://**`，以及对应完整的 `https://...` 规则。
-
-### 12. libmpv / libmpv-wrapper 打包与 Windows DLL 依赖链加载规范 (Dynamic Library Bundling & Windows DLL Search Path)
-- **CI/CD 打包前置依赖注入**：
-  - Git 仓库基于体积考虑排除了 `src-tauri/lib/*.dll`, `*.so`, `*.dylib`；因此在 GitHub Actions CI 流水线中，打包动作前必须运行 `scripts/setup-mpv.mjs --platform <platform> --arch <arch>` 自动拉取与目标平台架构严格匹配的 `libmpv-wrapper`（以及 Windows 专属的 `libmpv-2.dll`），避免安装包遗漏内核导致冷启动崩溃；
-- **本地开发环境前置检查**：
-  - 新克隆仓库、切换机器或拉取代码后发现 `src-tauri/lib/` 只有 `.gitkeep` 时，必须先执行 `pnpm install`、安装平台内核（macOS：`brew install mpv`；Windows/Linux 按 README 指引），再执行 `pnpm setup-mpv`；
-  - `pnpm setup-mpv` 在 macOS 找不到 Homebrew `libmpv` 时必须直接失败并提示 `brew install mpv`，不得输出 `SUCCESS` 掩盖缺库；同步动态库后必须重启 `pnpm tauri dev`，否则 Rust 进程不会重新执行 `init_macos_mpv_environment` 的预加载与软链建立；
-  - 典型误报：`Failed to load libmpv-wrapper from 'libmpv-wrapper.dylib'` 且搜索路径全部显示 `no such file`，优先检查 `src-tauri/lib/libmpv-wrapper.dylib` 与 `src-tauri/lib/libmpv.dylib` 是否存在且架构匹配（`file` / `otool -L`），不要先怀疑 Bundle 寻址补丁；
-  - **禁止同时装载两份同源 `libmpv`**：`ensure_unix_symlink` 若发现目标软链已存在但指向旧路径（如 Homebrew `libmpv`），必须删除并重建为当前资源副本，不能因 `dst.exists()` 直接跳过；开发模式下 `init_macos_mpv_environment(None)` 还必须识别 `current_exe().parent()/lib/`（即 `target/debug/lib`）作为资源目录。否则进程会既预载 Homebrew 原件又由 wrapper 加载项目副本，触发 Objective-C `Class ... is implemented in both ...` 重复类警告甚至崩溃；可通过 `lsof -p <nocta-pid> | grep libmpv` 验证只映射一份。
-- **Windows 下 DLL 依赖链加载与 126 错误码修复**：
-  - 在 Windows 下，`tauri-plugin-libmpv` 会调用 `LoadLibraryExW` 加载 `libmpv-wrapper.dll`，而该 DLL 的导入表强依赖同目录下的 `libmpv-2.dll`；
-  - Windows 系统加载器在解析二级依赖 DLL 时，默认仅检索主程序 `.exe` 所在目录和系统目录，不会自动将子目录 `lib/` 纳入解析链，从而抛出 `LoadLibraryExW code 126 ("找不到指定的模块。")`；
-  - **解决方案**：在 Rust 程序入口（`pub fn run()` 及 `app.setup`）中，调用 Win32 API `SetDllDirectoryW` 动态将当前程序的 `lib/`、`resources/lib/` 目录注入为进程级 DLL 优先搜索路径，并同步将其追加到进程环境变量 `PATH` 前端，100% 确保内核与所有二级从属动态库均能顺利装载。
-
-### 13. MPV 原生硬解起播生命周期、异步定点 Seek 与错误回退隔离规范 (MPV Load/Seek Lifecycle & Error Fallback)
-- **远端 HTTP / MKV 记忆播放跳转与范围请求强制穿透 (`force-seekable`)**：
-  - **全量顺序下载避坑**：当播放挂载在 CloudDrive/Alist/Google Drive 或反代上的 MKV 文件时，若服务端/代理未显式返回 `Accept-Ranges: bytes` 响应头，`mpv` 默认会将流标记为不可寻址（non-seekable）。当带有历史进度起播或定点 Seek 时，`mpv` 会放弃发送 HTTP Range 请求，转而在后台**以全网速（如 15MB/s）从第 0 字节开始顺序读取并丢弃整个前置文件**（例如 4GB 视频起播在第 8 分钟会强制顺序下载前 830MB），表现为「网卡疯狂走流量但播放器持续黑屏死锁」；
-  - **解决方案**：在 `MpvPlayerEngine` 初始化及 `load()` 时显式注入：
-    - `force-seekable: 'yes'`：强制开启 HTTP Range 范围切片跳转，跳过不可寻址检测直接向服务端请求目标 Cluster 字节区间；
-    - `cache: 'yes'` 与 `demuxer-seekable-cache: 'yes'`：激活解复用流级缓存与回退寻址；
-    - `demuxer-max-bytes: 419430400`（400MB）与 `demuxer-max-back-bytes: 157286400`（150MB）：保障 4K 60fps 10-bit HDR 高码率流充足预取；
-    - `hr-seek-framedrop: 'yes'`：高精跳转时丢弃中间非关键帧，避免 4K 60fps HEVC 解码器因解码大量中间帧造成显卡拥塞黑屏；
-    - `demuxer-mkv-subtitle-preroll: 'no'`：严禁 MKV 内嵌/外挂字幕（如 SUBRIP/ASS）跨网络流反向倒灌探测，彻底消除寻道拖垮。
-- **严禁在 `loadfile` 后同步调用 `command('seek')`**：
-  - `libmpv` 的 `command('loadfile', [url])` 是异步入队指令，函数返回时网络流尚未打开（`file-loaded` 尚未触发）。若在 `initialTime > 0`（有历史观看进度）时紧接着调用 `await command('seek', [initialTime, 'absolute'])`，`libmpv` 会直接拒绝并抛出 `mpv command failed: error running command`；
-  - **正确做法**：在 `loadfile` 前通过 `await setProperty('start', '+' + Math.floor(initialTime))` 预设起播时间点，且初始记录 `this._currentTime = 0`（严禁在起播前假赋值为 `initialTime` 导致兜底逻辑被短路）；在监听到 `file-loaded` 事件（文件头就绪）后安全执行带独立 `try/catch` 的 `command('seek', [targetSeek, 'absolute'])` 绝对寻址；在监听到 `playback-restart` 事件（解码真正就绪）后再重置 `start='none'`。
-- **加载遮罩与黑屏穿透防护**：
-  - 在 `PlayerPage` 中，若 `initialTimeRef.current > 0`，在 `hasInitialSeekedRef.current` 达成且收到首个有效解码秒数（`cur >= 1`）前，即使收到内核 `state='playing'` 也禁止过早解除 `isLoadingVideo`，彻底杜绝底层尚未出帧时的黑色底板穿透。
-- **全局串行生命周期队列 (`MpvPlayerEngine.lifecycleQueue`)**：
-  - `tauri-plugin-libmpv` 按窗口标签 `'main'` 维护单例。跨页面快速进出播放页时，前一个引擎实例的异步 `destroy()` 与新实例的 `init()` 可能并发冲突。必须通过静态 Promise 队列串行化 `init` 与 `destroy`，并在实例内用 `initPromise` 合并并发的初始化请求。
-- **区分引擎的流回退策略与陈旧闭包防护**：
-  - `PlayerPage` 注册 `engine.onError` 时必须使用 `handleVideoErrorRef` 与 `fallbackLevelRef` 获取实时状态，防止因 React 首次挂载闭包陈旧导致 `fallbackLevel` 永远停留在 `0` 而死锁在黑屏加载层；
-  - `MPV` 原生硬解支持全格式直连（`static=true`），回退时**必须跳过专为 HTML5 `<video>` 设计的 Level 1（`MP4 轻量重封装`）**，避免在禁用转码或 302 直链的 Emby 服上因重封装失败而黑屏。
-- **容器后缀规范化与局域网代理旁路**：
-  - `buildNativeDirectStreamUrl` 必须规范化 `mediaSource.Container`（例如将 `mov,mp4,m4a,3gp,3g2,mj2` 取首项 `mov`，将 `matroska,webm` 映射为 `mkv`）；
-  - 当目标流 URL 为局域网或回环地址（`192.168.x.x`、`10.x.x.x`、`172.16-31.x.x`、`localhost`、`127.0.0.1`）时，`MpvPlayerEngine` 自动将 `http-proxy` 置空直连，防止局域网 NAS 视频流被系统代理截留或因非 HTTP 代理协议报错。
-
-### 14. 100% 直连原画与零服务端转码约束 (Zero Server Transcoding & Direct Play Only Policy)
-- **坚决禁止隐式转码与重封装**：
-  - 客户端所有播放流请求必须且只能使用 `static=true` 原始直出，**严禁向 Emby 服务端请求任何实时转码参数（如 `VideoCodec=h264&AudioCodec=aac`）或实时 MP4 重封装（`VideoCodec=copy`）**；
-  - 杜绝因播放器兼容性差而霸占或打满 NAS / VPS 服务端 CPU 与显卡算力；
-- **HTML5 播放内核遇不支持格式直接报错引导**：
-  - HTML5 引擎仅作为基础原画兼容（仅直接播放 MP4/H.264 等浏览器原生支持的原始文件）；
-  - 当遇到 MKV、HEVC、AV1、DTS 等浏览器无法直接硬件解码的格式时，**绝不回退到服务端转码**，直接提示：*“当前片源格式浏览器内核无法直接解码，已严格阻止服务端转码。请使用 MPV 原生硬解引擎播放原画。”*；
-  - 并在错误遮罩中提供「一键切换至 MPV 硬解」行动按钮，方便用户一键无缝恢复播放。
-
-### 15. 播放器实时网络速度测量与 OSD 状态联动规范 (Real-Time Network Speed Monitoring & OSD Integration)
-- **测量数据源与平滑采集机制**：
-  - `libmpv` 原生硬解：通过 `observeProperties` 监听 `cache-speed`（`int64`）与 `demuxer-cache-state`（`node`），提取网络输入速率（字节/秒）；配合纯 JS 定时器（**严禁调用 `getProperty(..., 'node')`**）在超过 2.5 秒无新速率事件或闲置时自动平滑归零；
-  - `HTML5` 引擎：在 `video` 原生加载周期中以 1 秒为基准采样 `video.buffered` 增量估算瞬时网络下载速率；
-- **OSD 同步显隐与非侵入视觉呈现**：
-  - 用户体验要求实时网速必须跟随进度条一起隐藏和显示；因此将网速微标布局在底部控制栏左侧时间显示（`currentTime / duration`）右侧，天然受 `PlayerOsd` 的 `isOsdVisible` 统一控制（3.5 秒闲置淡出，鼠标移动即时淡入）；
-  - 采用轻量格式化工具 `formatNetworkSpeed`（支持 `0 KB/s`、`KB/s`、`MB/s`，保留一位小数），配备微脉冲下载动效与等宽字体（`font-mono`）；
-  - 详细播放信息面板（HUD 浮层）同步呈现当前实时下载速率，并在「一键复制信息」纯文本中导出。
-- **首播加载遮罩 (`isLoadingVideo`) 与播放中卡顿缓冲 (`isBuffering`) 严格解耦（无遮挡网速浮标规范）**：
-  - 播放中途因网络波动或远端慢速 Seek 触发引擎 `buffering` 状态时，**严禁拉起全屏 `isLoadingVideo` 遮罩或强制显示 `PlayerOsd`**，以免遮挡当前视频画面；
-  - 统一由无遮挡、可穿透交互（`pointer-events-none`）的 [`BufferingIndicator.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/BufferingIndicator.tsx) 仅在屏幕中央渲染加载旋转图标与实时网速，同时暂停 `MpvDanmakuBridge` 弹幕前进并暂停 `useNextEpisodePreloader` 避免带宽竞争；macOS 全屏独立浮层 [`OsdOverlayPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/OsdOverlayPage.tsx) 经 `OsdSyncPayload.isBuffering` 保持 100% 同步一致；
-  - [`MpvPlayerEngine.ts`](file:///d:/wade/code/emby-tauri-player/src/player/MpvPlayerEngine.ts) 通过 `observeProperties` 监听 `['seeking', 'flag', 'none']`（带 250ms 防抖避免缓存内瞬时跳转闪烁），并在收到冻结/Seek 跳转目标 `time-pos` 时避免过早误清 `_pausedForCache`。
-
-### 16. `libmpv-wrapper` 内存安全红线与 macOS 自包含动态库打包规范 (FFI Memory Safety & macOS Self-Contained Dylib Bundling)
-- **严禁调用 `getProperty(..., 'node')`（致命栈溢出红线）**：
-  - `nini22P/libmpv-wrapper` 的 `get_property_node` 在栈上仅声明了 8 字节指针（`let mut data: *mut mpv_node = null_mut()`），而 `libmpv` C API 的 `mpv_get_property(..., MPV_FORMAT_NODE, &mut data)` 会直接向 `&mut data` 写入 **16 字节** 的 `struct mpv_node` 结构体，随后 `defer!` 又将损坏的结构体首字段当作指针传入 `mpv_free_node_contents`；
-  - 一旦在前端调用 `getProperty('demuxer-cache-state', 'node')`（或任何 `'node'` 类型的 `getProperty`），会导致 100% 必现的栈缓冲区溢出与非法内存访问崩溃（Windows 弹窗报错 `nocta has stopped working / Error launching CrashSender.exe`）；
-  - **正确做法**：所有复杂属性或数值属性统一通过 `observeProperties` 事件回调获取（`events.rs` 中 `mpv_event_property.data` 为真实指针且无非法释放），**绝不调用 `getProperty(..., 'node')`**。
-- **规避 `tauri-plugin-libmpv` 的 `destroy()` Use-After-Free 崩溃**：
-  - `tauri-plugin-libmpv` 在 `destroy()` 时调用 `mpv_wrapper_destroy` 后立即执行 `Box::from_raw(instance.event_userdata)` 释放内存，而此时 `libmpv-wrapper` 的后台 `event-client` 线程仍在并发回调 `event_callback(Event::Shutdown)` 读取 `event_userdata`；
-  - **解决方案**：`'main'` 窗口的 `mpv` 实例一经创建即作为进程级持久单例复用（`MpvPlayerEngine.mpvInstanceCreated = true`）；退出播放页调用 `MpvPlayerEngine.destroy()` 时，仅解绑前端事件监听并执行 `setProperty('pause', true)` + `command('stop')` 使内核进入 0 占用的 `idle` 状态，不调用插件的 `destroy()`。
-- **macOS 自包含 `libmpv.dylib` + `MoltenVK` 打包与运行时软链规范**：
-  - `libmpv-wrapper` 在 macOS 下首先查找 `current_exe().parent().join("libmpv.dylib")`（即 `Nocta.app/Contents/MacOS/libmpv.dylib`），随后回退调用 `dlopen("libmpv.dylib")`（在 GUI 应用中仅搜索 `$HOME/lib:/usr/local/lib:/usr/lib`，**不会搜索 `/opt/homebrew/lib`**），若找不到则直接返回 `NULL` 并报错 `Failed to create mpv instance`；
-  - **CI 打包规范与 Homebrew 只读权限避坑**：
-    - Homebrew 安装在 Cellar 中的动态库文件权限默认为只读（`0444`/`0555`）。通过 `setup-mpv.mjs` 复制或 shell 脚本重复覆盖时，BSD/macOS 的 `cp` 会直接报 `cp: src-tauri/lib/libmpv.dylib: Permission denied` 导致 CI 构建中断；
-    - **解决方案**：在 `setup-mpv.mjs` 复制完后立即 `chmodSync(dest, 0o755)`；在 CI 工作流执行打包前显式注入 `chmod -R u+w src-tauri/lib/ 2>/dev/null || true` 并使用 `rm -f` + `cp -fL`，彻底杜绝权限不足；
-    - macOS Apple Silicon (`macos-15`) 与 Intel (`macos-15-intel`) 分别在原生架构 Runner 上通过 `dylibbundler` 将 `libmpv.dylib` 及其全部非系统依赖动态库、连同 `libMoltenVK.dylib` 与 `MoltenVK_icd.json` 一并打包进 `src-tauri/lib/`，重写 `@loader_path/` 并对所有 `.dylib` 执行 `codesign --force --sign -` 重签名；
-  - **macOS Bundle 架构下 `tauri-plugin-libmpv` 原生动态库寻址穿透与 dlopen 预热**：
-    - **上游插件硬编码路径缺陷**：`tauri-plugin-libmpv` 原版 `desktop.rs` 仅检查 `current_exe().parent()` (`Contents/MacOS`) 与 `exe_dir.join("lib")` (`Contents/MacOS/lib`)。在 macOS Bundle 体系中，Tauri 的 `"resources": ["lib/**/*"]` 必然打入 `Contents/Resources/lib/`。若在只读 DMG（`EROFS`）或签名后的 `/Applications` 运行时，动态在 `Contents/MacOS` 建立软链会失败，导致 `valid_lib_path` 退化为裸文件名 `"libmpv-wrapper.dylib"`，继而触发 dyld 报错：`dlopen(libmpv-wrapper.dylib, 0x0005): tried: 'libmpv-wrapper.dylib' (no such file)...`；
-    - **解决方案 1（插件原生路径补丁）**：通过 Cargo `[patch.crates-io]` 本地重写 `src-tauri/crates/tauri-plugin-libmpv`，在 `search_dirs` 中显式扩展 `contents_dir.join("Resources").join("lib")`、`contents_dir.join("Resources")`、`contents_dir.join("Frameworks")` 及 `self.app.path().resource_dir()`，确保绝对路径 100% 精准寻址；
-    - **解决方案 2（Rust 进程全局预热 Pre-loading）**：在 `init_macos_mpv_environment` 中，使用 `libc::dlopen(..., RTLD_NOW | RTLD_GLOBAL)` 先行预热加载 `libmpv-wrapper.dylib` 与 `libmpv.dylib`，将动态库镜像常驻进程内存，使后续任何裸库名 dlopen 均能瞬间命中内存缓存。
-  - **macOS 播放窗口必须嵌入 Nocta 主窗口（禁止独立 mpv 窗口体验）**：
-    - mpv 官方 `--wid` 仅支持 X11、Win32、Android，macOS 的 `CocoaCB` 会忽略 `wid` 并自行创建 `NSWindow`；不能通过插件传入 NSView 指针实现嵌入；
-    - 当前方案：mpv 启动参数使用固定标题 `Nocta Video Surface`、`border=no`、`title-bar=no`、`auto-window-resize=no`、`focus-on=never`、`input-cursor-passthrough=yes`；前端在 `file-loaded` / `playback-restart` 后调用 `attach_mpv_window`；
-    - Rust 侧 `src-tauri/src/mpv_embed_macos.m` 在主线程枚举 `NSApp.windows`，找到固定标题窗口后设置为无边框、透明背景、忽略鼠标事件、`FullScreenAuxiliary`，并通过 `addChildWindow:ordered:NSWindowBelow` 放在 Nocta 主窗口下方；WebView 保持上层，弹幕、OSD 和控制栏继续由 React 渲染；
-    - `NSWindow` / AppKit 操作必须经 `window.run_on_main_thread(...)`，绝不能在 Tauri IPC 线程直接调用；离开播放页时调用 `detach_mpv_window` 将子窗口移除并 `orderOut`；
-    - 选项名避坑：mpv 实际选项为 `input-cursor-passthrough`，写成 `cursor-passthrough` 会使 `mpv_set_option_string` 返回错误，导致内核初始化失败。
-    - **macOS 全屏使用原生 `setFullscreen`**：`setSimpleFullscreen` 本质仍是铺满屏幕的普通窗口，会被用户感知为“只是最大化”，且 Tauri 会吞掉底层失败返回值。进入原生全屏后必须依靠 `mpv_embed_macos.m` 的 `NSWindowDidEnterFullScreenNotification` / `NSWindowDidExitFullScreenNotification` / `NSWindowDidChangeScreenNotification` 监听，在事件后同步子窗口 frame 并执行 `orderWindow:NSWindowBelow relativeTo:`，重新把 mpv 压回 WebView 下方；200ms 同步定时器也要持续校正层级。
-
-### 17. macOS 原生交通灯与标题栏 Overlay 规范 (Native Traffic Lights & Overlay Title Bar)
-- **禁止在 macOS 用 CSS 模拟交通灯**：12px 圆点经过 WebView 合成必然存在模糊与语义偏差（绿色按钮无法正确进入原生全屏）。macOS 必须使用 AppKit 原生交通灯。
-- 通过 `src-tauri/tauri.macos.conf.json` 做平台覆盖：`decorations: true`、`titleBarStyle: "Overlay"`、`trafficLightPosition: { x: 16, y: 18 }`、`hiddenTitle: true`；主 `tauri.conf.json` 保持 `decorations: false`，供 Windows/Linux 使用自定义右侧窗口按钮。
-- 原生交通灯覆盖在 48px 自定义标题栏左上角，`TitleBar` 保留 `pl-20` 让位，但不得再渲染红黄绿 CSS 按钮；标题栏自身仍使用 `data-tauri-drag-region`。播放页的 `PlayerOsd` 在 macOS 非全屏时使用 `pl-20` 避让原生交通灯，全屏时恢复 `pl-5`。
-- 全屏入口统一调用原生 `setFullscreen`，绿色交通灯、OSD 全屏按钮、`F` 与 `Escape` 必须使用同一状态来源 `isFullscreen()`；“最大化”只能是独立操作，禁止再用“窗口全屏”文案混淆。
-
-### 18. macOS 原生全屏 OSD 独立浮层规范 (Fullscreen OSD Overlay Window)
-- **根因认知**：进入 macOS 原生全屏 Space 后，mpv 的 `FullScreenAuxiliary` 子窗口会被系统抬到主窗口之上，WebView 内渲染的 OSD、弹幕与进度条被视频画面遮挡。这不是 CSS `z-index` 问题，`orderWindow:NSWindowBelow` 与 200ms 层级校正也无法穿透全屏合成器；因此不要在全屏时继续单窗口渲染 OSD。
-- **方案**：仅当 `macOS + engineType === 'mpv' + 原生全屏` 时，由 `PlayerPage` 调用 `open_osd_overlay` 创建第二个 Tauri 窗口 `osd-overlay`（`index.html?osd=1`），透明、无边框、`always_on_top`，并在主线程配置 `NSStatusWindowLevel` + `NSWindowCollectionBehaviorFullScreenAuxiliary`，承载 `PlayerOsd` 与 `DanmakuLayer`；主窗口同时隐藏自身 OSD 与弹幕，退出全屏或离开播放页立即 `close_osd_overlay`。
-- **状态同步协议**（`src/player/osdOverlaySync.ts`）：主窗口每 200ms 广播 `osd:sync`（播放进度、音量、倍速、网速、音字幕轨、弹幕设置等），弹幕列表变化时广播 `osd:comments`，浮层挂载后发 `osd:ready`，浮层操作通过 `osd:command` 回传主窗口统一执行。禁止在浮层里直接操作引擎或 Emby API。
-- **浮层交互**：浮层是 key window，必须自行接管全部播放器快捷键与鼠标手势（含 `Space / ← → / ↑ ↓ / D / F / ? / I / N / P / Esc` 分层退出）。`PlayerOsd` 在 `overlayMode` 下**保留全部功能控件**（弹幕抽屉、弹幕开关、画质调校、分集、多版本切换、播放信息、代理浮层与退出全屏还原按钮），仅禁掉原生窗口拖拽区/双击最大化及非全屏专属的 Pin/Min/Close 按钮；主窗口与全屏浮层共享一致的悬浮进度条、右击菜单（全屏下隐藏无意义的窗口置顶项）及弹幕开关 HUD 反馈。OSD 隐藏时顶部胶囊必须同步 `pointer-events-none`，否则不可见区域会吞掉视频点击。
-- **窗口生命周期**：`WebviewUrl::App("index.html?osd=1")` 由 Tauri 通过 `Url::join` 解析；创建后、`show()` 后都要重新应用原生 level/collectionBehavior，防止显示时排序被重置。React StrictMode 会并发触发创建，Rust 侧遇到 `label already exists` 必须视为成功返回。
-- **平台隔离红线**：该浮层只允许 macOS + mpv 引擎启用；Windows/Linux 的 `--wid` 嵌入与 HTML5 引擎必须保持原单窗口渲染路径，禁止无条件调用 `open_osd_overlay`。
-
-### 19. 片头片尾标记与自动跳过规范 (Intro/Outro Skip Segments)
-- **数据模型与共享粒度**：
-  - `SkipSegments` 仅存储 `introEnd`（片头结束秒数）、`outroStart`（片尾开始秒数）与 `updatedAt`；不要存“片头开始”，起播永远从 0 或用户记忆进度开始判断；
-  - `getSkipKey(item)` 对带 `SeriesId` 的剧集统一使用 `series_<SeriesId>`（标一集全剧生效），电影/无剧集条目使用 `item_<Id>`；跨集继承时必须额外校验 `introEnd < runtime - 5`、`outroStart < runtime - 2`，避免不同时长剧集误触发；
-- **起播自动跳片头**：
-  - 必须在 `PlayerPage` 内、`engine.load()` 前把记忆进度解析为 effective initial time；满足 `skipIntroEnabled && rawTime < introEnd - 1` 时以 `introEnd` 作为 `initialTime` 传给引擎；
-  - MPV 与 HTML5 引擎都复用既有 `initialTime` 链路（MPV 的 `start` 预设、HTML5 的首帧 seek），禁止在 `loadfile` 后同步追加 `seek`；`initialTimeRef` 必须更新为实际起播秒数，继续参与首跳黑屏防护；
-- **片尾轻提示与取消**：
-  - 检测点放在引擎无关的 `onTimeUpdate`，用 `usePlayerStore.getState()` 读取最新标记与设置，禁止依赖首次挂载闭包；每次播放/每次切换条目仅触发一次 `outroToastShownRef`；
-  - 8 秒倒计时由主窗口统一维护，`cancel` 设置 `outroDismissedRef`（本次会话不再提示），`skip` 执行 `seek(total - 0.25)` 让播放器自然派发 ended；默认行为为 `ask`（倒计时结束仅关闭提示），可选 `auto`；
-  - 片尾提示独立于 OSD 显隐渲染（`z-40`），即使进度条因鼠标闲置淡出也必须保持可见；
-- **OSD 标记面板**：
-  - 控制栏使用 `Crosshair` 标记入口（与下一集 `SkipForward` 区分），面板提供“标记片头结束/片尾开始”、点击已标记时间跳转校验与清除操作；标记必须校验 `seconds >= 1`、片头不超过片长 95%、片头结束早于片尾开始、片尾开始晚于片头结束且早于结尾 2 秒；
-- **macOS 全屏浮层同步**：
-  - `osd:sync` 载荷必须携带 `skipSegments / outroToast{visible,remainingMs,totalMs} / skipOutroAction / skipNotice`；浮层渲染同一套标记面板、片尾 Toast 与操作提示；
-  - 浮层的标记、清除、跳过、取消全部通过 `osd:command` 回传主窗口执行，禁止浮层直接写 store 或操作引擎；
-- **持久化与多端同步**：
-  - localStorage 使用 `nocta_skip_segments` / `nocta_skip_settings`；备份与多端合并时按 `updatedAt` 取新者，导入旧版本备份必须容忍字段缺失并保留本机已有数据（replace 模式除外）；
-  - 设置页提供“自动跳过片头 / 片尾跳过提示 / 倒计时结束仅提示或自动跳过”三项，默认全部开启且采用 `ask`，避免错过片尾彩蛋。
-
-### 20. 播放器沉浸体验、零闪烁弹幕与透明代理热切规范 (Player UX, Zero-Flicker Danmaku & Live Proxy Switching)
-- **严禁因视觉参数变更触发 `DanmakuLayer` 重建 Canvas（消除闪烁红线）**：
-  - `DanmakuLayer` 监听 `[bridge, comments]` 引用重建实例。因此 `PlayerPage` 构造 `formattedComments` 的 `useMemo` **只能依赖实际改变弹幕内容的字段**（`rawComments`, `fontSize`, `fontWeight`, `strokeWidth`, `colorMode`, `blockScroll`, `blockTop`, `blockBottom`, `blockColor`, `blockedWords`, `mergeDuplicates`）；
-  - **绝不能将 `visible` / `opacity` / `speed` / `area` / `maxLines` / `bottomMargin` / `showHeatmap` 放入 `useMemo` 依赖**，否则拖动滑块调参时会造成满屏弹幕销毁重绘闪烁。
-- **进度条拖拽防抖、圆点垂直居中锚定与防进度丢失（Scrub Debounce, Thumb Centering & Session Progress Safety）**：
-  - `PlayerOsd` 的进度条 `<input type="range">` 拖动过程中只更新本地 `scrubTime`（借助 `isScrubbingRef` + `scrubTimeRef`），仅在 `onPointerUp` / `onTouchEnd` / `onKeyUp` 释放时才调用 `onSeek`；
-  - 进度条外层交互区带有非对称 `pt-3 pb-1` 热区留白以容纳弹幕热力图，因此内部的轨道（`overflow-hidden`）、弹幕热力图（`bottom-full`）与圆形指示手柄必须共同包裹在**零内边距的 `relative w-full` 锚定容器**内，手柄统一使用 `top-1/2 -translate-x-1/2 -translate-y-1/2` 居中（**切勿混用 `bottom-*` + `top: calc(...)` 或误写正方向 `translate-y-1/2`，且禁止在手柄上使用 `transition-all` 导致 `left` 滞后于进度填充条**）；
-  - 在播放页内原地切集或切换多版本片源时，必须先用 `lastValidTimeRef.current` 上报当前会话的 `reportPlaybackStopped` 并记录 `reportedStoppedSessionRef`，防止 `useEffect` 清理函数在引擎 `load()` 重置 `_currentTime = 0` 后误将 Emby 播放进度冲刷归零。
-- **无边框播放窗顶部拖拽区交互规范**：
-  - `PlayerOsd` 顶部栏外层必须使用在 `visible` 状态下具备 `pointer-events-auto` 与 `data-tauri-drag-region`（`overlayMode` 下禁用）的有限高度容器，两侧毛玻璃胶囊内部通过 `stopPropagation` 防止事件干扰，才可确保无边框窗口态可平滑拖拽与双击最大化。
-- **`libmpv` 真实硬解遥测与透明 `socks5` 路由提示**：
-  - 真实硬解状态 (`hwdec-current`)、帧率 (`estimated-vf-fps`)、丢帧数 (`frame-drop-count`)、前向缓冲 (`demuxer-cache-duration`, `demuxer-cache-time`, `fw-bytes`) 全部通过 `OBSERVED_PROPERTIES` + 节流事件推送获取，延续「绝不调用 `getProperty(..., 'node')`」红线；
-  - `resolveMpvProxyDetailed` 明确区分系统 HTTP 代理、手动 HTTP 代理、局域网直通旁路、直连以及 `socks5_fallback_direct`——当用户配置 `socks5://` 时透明展示说明并引导使用混合端口，同时支持通过 `StreamProxyOverride`（`follow` / `direct` / `proxy`）在不退出播放页的前提下原地保留精确秒数热重连媒体流。
-- **快捷键无打扰 Mini HUD 规范**：
-  - 键盘调音量、快进/快退（支持 800ms 内连按累加显示）、倍速、长按 `→` 临时 2.5x 倍速快进（注意忽略 `e.repeat` 并处理 `blur` 恢复）、弹幕/字幕偏移均只呼出 `MiniActionHud` 轻量反馈胶囊，绝不拉起完整上下 OSD 工具栏，最大化沉浸观影体验。
-
-### 21. 播放器模块解耦、并发竞态防护与 CI 打包红线 (Architecture Refactoring & Guardrails)
-- **CI 必须直编 `danmaku` 源码 (`vite.config.ts`)**：
-  - `node_modules/danmaku`（`github:wade6716/Danmaku`）更新了 `src/index.js`（新增 `area` / `opacity` / `maxLines` / `bottomMargin` / `offset`）但未重建 `dist/esm/danmaku.js`。因此 `vite.config.ts` 必须做两级源码解析：优先 `../Danmaku/src/index.js`，不存在时回退至 `node_modules/danmaku/src/index.js` 并将其保留在 `optimizeDeps.exclude`，严禁 CI 打包机静默退回到旧版 `dist/` 导致发布包弹幕布局配置失效。
-- **高频时钟与 Store 持久化分层**：
-  - `PlayerPage` 收到引擎 `onTimeUpdate` 后，对 `MpvDanmakuBridge.onMpvTimePos` 与片尾起点检测保持不节流实时直通，对写入 Zustand `updateTime` 保持 **250ms 节流**（Seek 或时长变更立即穿透）；各抽屉、面板与 `PlayerPage` 一律使用精细化 Selector 按字段订阅状态，非开启状态的面板按需条件渲染（`DanmakuDrawer` 保留实例但将 `currentTime` 量化至 5 秒分桶）；
-  - `usePlayerStore` 的高频滑块持久化统一走 `saveStorageDebounced`（200ms 合并写入 + `beforeunload` 刷盘），且 `setPlaybackContext` 必须通过 `get().playerPreferences` 读取内存最新偏好，禁止直接重读 `localStorage` 造成未刷盘偏好丢失。
-- **异步切集与弹幕匹配并发竞态锁**：
-  - `useDanmakuSession`（`danmakuReqIdRef` + `activeItemIdRef`）与 `switchToEpisode`（`episodeSwitchReqIdRef`）在每个 `await` 后均校验请求令牌是否仍是最新且属于当前条目，防止快速连点切集时慢响应倒灌覆盖新剧集；
-  - 统一通过 `src/player/playbackSessionService.ts` 装配零转码直连流地址与音字幕轨道，`DetailPage` 与 `PlayerPage` 共享同一套起播服务，正交业务拆入 `src/player/hooks/` 四个领域 Hooks。
-- **macOS 全屏浮层协议与快捷键对齐**：
-  - `OsdSyncPayload` / `OsdCommand` 与 `OsdOverlayPage` 完整同步画质徽标、硬解遥测、代理路由、章节、高能弹幕热力图、A-B 循环及 `MiniActionHud`，并接入全部快捷键（含 200% MPV 音量增益、长按 `→` 倍速、滚轮手势）。
-
-### 22. macOS 全屏浮层完全对等同步与详情分集卡片可读性规范
-- **双 WebView 状态双向防环同步（Store Bridge Pattern）**：
-  - macOS 全屏下 `OsdOverlayPage`（独立窗口 `osd-overlay`）与主窗口 `PlayerPage` 各自拥有独立的 Zustand 内存实例与 `localStorage` 句柄。凡是来自主窗口同步的状态，浮层侧必须通过 `usePlayerStore.applyRemoteStoreSnapshot(patch, false)` 与 `useDanmuStore.syncServersFromRemote(..., false)` 仅更新内存状态、禁止重复写盘；而用户在浮层面板主动修改设置时，通过 `OsdCommand` 回传主窗口执行 `applyRemoteStoreSnapshot(patch, true)` 统一落盘，防止双端相互覆盖或持久化竞态。
-  - **防环回写锁**：主窗口维护 `storeRevisionRef` 与 `applyingOverlayPatchRef`，浮层维护 `lastStoreRevisionRef` 与 `applyingRemoteStoreRef`；仅当远端 Revision 递增且本地未处于回放补丁阶段时才应用快照，彻底避免双向同步引发事件风暴死循环。
-- **高频 60fps UI 与原始弹幕零延迟同步**：
-  - 浮层内的 `DanmakuDrawer`、`VideoProPanel`、`EpisodeDrawer`、`NetworkProxyPopover`、`PlaybackInfoModal`、`ShortcutsModal`、`NetworkProxyModal` 全部 7 个抽屉/弹窗与主窗口保持 100% 一致；高帧率滑块直接读取本窗口 Zustand 状态获得 60fps 跟手响应。
-  - `OSD_OVERLAY_RAW_COMMENTS_EVENT` 独立传输当前匹配到的原始弹幕数组，避免在 200ms 常规心跳中反复序列化大数组；同时 `useMacOsdOverlaySync` 提供 `instantSyncKey` 触发器，切换开关、章节、面板状态时 0 延迟即时同步。
-- **浮层交互护栏与快捷键分层退出**：
-  - 任何面板打开时（`isAnyPanelOpen`），必须冻结 OSD 自动隐藏计时器并暂停视频区滚轮手势（防止调节弹幕列表或画质滑块滚动时误触音量/进度）；视频单击切换播放需保留 240ms 防抖以区分双击全屏还原；`Escape` 遵循「最上层弹窗 -> 侧滑抽屉 -> 右键菜单 -> 退出全屏」严格层级依次收起。
-- **弹幕控制行为全模式统一**：
-  - 无论处于窗口态还是 macOS 原生全屏态，点击底部/顶部弹幕开关图标统一执行 `handleToggleDanmakuWithHud` 并展示 `MiniActionHud` 状态提示，点击顶部右侧弹幕数胶囊或底部「弹幕」按钮统一打开弹幕抽屉。
-- **分集卡片空间分配与长文本可读性规范**：
-  - `EpisodeGrid` 严禁在多列（`xl:grid-cols-4`）下使用左侧固定宽度缩略图 + 右侧窄列文本的横向挤占排版；必须采用「上方 `w-full aspect-video` 宽屏剧照 + 下方全宽标题与最多 3 行高对比度简介（`text-xs text-slate-300/95`）」的影院级竖向卡片布局，确保窄屏与宽屏下分集编号、标题及简介均完整清晰可读。
-  - 详情页主简介及播放器分集抽屉同步保持清晰行高（`leading-7`）与「展开全部 / 收起简介」长文展开能力。
-- **视频文件体积展示与 `.strm` 空体积兼容规范**：
-  - 全应用统一复用 [`embyClient.ts`](file:///d:/wade/code/emby-tauri-player/src/api/embyClient.ts) 导出的 `formatFileSize`（支持 `TB`/`GB`/`MB`/`KB`）与 `getItemFileSize`（优先读取首个有效正值 `MediaSources[].Size`，缺失时回退 `item.Size`）。
-  - 遇到 `.strm` 远程流或未扫描入库的条目时，`Size` 可能为 `undefined` 或 `0`；严格仅在存在有限正数体积时渲染体积徽标，杜绝出现 `0 MB` 或空白占位符。
-  - 详情页在剧集（`Series`）视图下按当前选中季已拉取的分集汇总总体积（`本季`/`共`），切换非剧集条目时须及时清空残留季/集状态；多版本片源主标签附带版本数量并在 `title` 中逐行列出各版本封装与体积。
-- **弹幕源分集标题结构化解析与选集交互规范**：
-  - `danmu_api` 返回的分集标题常带有 `【bilibili1】`、`[qq]` 等平台来源前缀（如 `【bilibili1】第188集`），若直接显示或使用朴素正则 `/(\d+)/` 提取集号，会导致窄列按钮截断只剩 `【bilibili1...` 且同剧延续匹配会把 `bilibili1` 里的 `1` 误认作第 1 集。
-  - 统一通过 [`danmuClient.ts`](file:///d:/wade/code/emby-tauri-player/src/api/danmuClient.ts) 导出的 `parseDanmuEpisodeInfo` 循环剥离平台来源前缀（**严禁**误剥 `SP`/`OVA`/`OAD`/`PV`/`OP`/`ED` 等番外标记）并提取 `platform`、`episodeNumber`、`shortLabel`、`badgeLabel` 与 `subTitle`；[`useDanmakuSession.ts`](file:///d:/wade/code/emby-tauri-player/src/player/hooks/useDanmakuSession.ts) 的同剧延续匹配亦须复用该解析器。
-  - [`DanmakuDrawer.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/DanmakuDrawer.tsx) 在主平台前缀一致时将该标识提升至头部去重胶囊，超 50 集长番剧自动按每 50 集分段并提供全集筛选、当前播放集一键定位，以及「纯数字网格 / 含副标题列表」自适应视图。选定番剧加载完分集后，优先依据当前播放集号（`IndexNumber` 缺失时从标题 `S01E188`/`第188集`/`EP188` 推导兜底）匹配目标分集，先自动切页再用容器级双 `requestAnimationFrame` + `container.scrollTo({ behavior: 'smooth' })` 将目标按钮与分段标签平滑居中（严禁调用 `Element.scrollIntoView()` 以免外层抽屉跳动）；点击分集拉取绑定期间须使用独立的 `bindingEpisodeId` 局部加载态，严禁复用 `loadingEpisodes` 卸载分集列表导致滚动位置归零。
-- **独立「继续观看」跨服列表页与「仅首页切换 Emby 服务器」约束**：
-  - 「继续观看与最近播放」已从首页抽离为独立页面 [`ContinueWatchingPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/ContinueWatchingPage.tsx)（路由 `/continue-watching`），底层通过 [`embyClient.ts`](file:///d:/wade/code/emby-tauri-player/src/api/embyClient.ts) 导出的 `getFederatedPlaybackHistory` 并发拉取全部已配置 Emby 服务器的断点与最近播放记录，单服内严格经 `isVideoMedia` 过滤非视频并以 `mergeMediaBySeries` 合并同剧集多集，跨服按最近播放与未完播优先级排序、注入 `ServerId`/`ServerName`/`ServerUrl`，支持按服务器、观看状态与关键词筛选及列表内一键跨服直链续播（点击跨服卡片时遵循第 5 节先对齐 `setCurrentServer` 与 `clearMediaCache`）。
-  - **仅允许在首页（`/`）手动切换当前 Emby 服务器**：[`TitleBar.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/layout/TitleBar.tsx) 仅在 `location.pathname === '/'` 时渲染可展开的 `ServerSwitcherDropdown`，非首页展示只读当前服务器状态胶囊；[`EmbyServerModal.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/settings/EmbyServerModal.tsx) 仅在首页渲染切换按钮；[`SettingsPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/SettingsPage.tsx) 仅负责服务器配置增删改查，不提供切换动作。
-  - **切换后强制回首页重拉与防竞态**：[`useAuthStore.ts`](file:///d:/wade/code/emby-tauri-player/src/stores/useAuthStore.ts) 的 `setCurrentServer` 必须返回不可变排序数组；[`useMediaStore.ts`](file:///d:/wade/code/emby-tauri-player/src/stores/useMediaStore.ts) 的 `clearMediaCache` 自增 `cacheVersion`；切换入口统一清空缓存、将 `#main-scroll-container` 滚回顶部并 `navigate('/', { replace: true })`；[`HomePage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/HomePage.tsx) 借助 `cacheVersion` 与 `loadReqIdRef` 丢弃旧服慢响应，确保切服后媒体库、视图统计与 Hero Spotlight 100% 刷新为目标服务器数据。
-
-### 23. 内存按时长缓冲（默认 5 分钟）与纯内存下一集智能预加载规范 (In-Memory Duration Buffering & Preloading)
-- **时长与 `libmpv` 解复用双限协同避坑**：
-  - `libmpv` 同时受 `demuxer-readahead-secs` 与 `demuxer-max-bytes` **先到达者**截断。若只加大字节上限而不放宽 `demuxer-readahead-secs`（原硬编码 `60s`），低码率流永远无法缓满 5 分钟；反之只设时长而不设 `cacheMemoryCapMB` 上限，高码率 4K 原盘（60~80 Mbps）会瞬间占用 2~3 GB 内存导致 OOM。
-  - [`MpvPlayerEngine.ts`](file:///d:/wade/code/emby-tauri-player/src/player/MpvPlayerEngine.ts) 实现 `setBufferConfig({ bufferDurationSeconds, mediaBitrateBps, cacheMemoryCapMB })`，默认按 **5 分钟（300 秒）** 结合真实码率（`1.25x` 余量，缺失时按 16 Mbps 兜底）实时下发 `demuxer-readahead-secs`、`demuxer-max-bytes`（`clamp(est, 128 MiB, cacheMemoryCapMB)`）与 `demuxer-max-back-bytes`（25% 占比、`64~256 MiB`）；全配置通过 [`usePlayerStore.ts`](file:///d:/wade/code/emby-tauri-player/src/stores/usePlayerStore.ts) `normalizePlayerPreferences` 统一钳制校验（安全上限支持 `256M / 512M / 1G / 1.5G / 2G`，默认 `1G`）。
-- **纯内存分块预加载（零磁盘 IO）与片头跳过字节区间规划 ([`preload.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/preload.rs))**：
-  - 严禁向磁盘写临时文件或分配超大单一连续 `Vec<u8>`（防扩容 realloc 抖动与清理遗漏），统一采用 **1 MiB 分块区间存储（`ExtentStore` / `MemExtent`）**，销毁或释放时 `clear_and_shrink()` 立刻归还 OS 内存；**绝对禁止在持有 `RwLock` 时跨越 `.await`**，避免并发 Socket 读流死锁或中毒。
-  - 探测上游文件总大小必须使用 `GET Range: bytes=0-0`（兼容 Alist/CloudDrive 等对 `HEAD` 支持较弱的网关），启用自签证书容忍与代理复用（播放 `127.0.0.1` 本地代理流时 `libmpv` 直连不走外部代理，同时保留 `upstreamUrl` 让前端代理状态诊断保持真实）；若跳过片头（`startSec > 5`），按 `头部 4 MiB` + `尾部 4 MiB`（MKV Cues / MP4 moov 关键索引） + `线性时间估算偏移 - 12s VBR 余量` 起正片区间拉取目标时长（含 `1.15x` VBR 余量并严格受限于 `cacheMemoryCapMB`）。
-- **可调触发时机、切集即停下载与防双份内存堆积**：
-  - [`useNextEpisodePreloader.ts`](file:///d:/wade/code/emby-tauri-player/src/player/hooks/useNextEpisodePreloader.ts) 支持 4 种设置页与播放器面板可调触发时机（`smart` / `buffer_ready` / `remaining_time` / `progress` 及对应阈值）并感知手动 `skipSegments` 与 Emby `Chapters` 片头（若下一集已有更靠后观看进度则优先续播位置；播放中途新增/修改片头标记自动作废并重算重拉）。
-  - 切入下一集调用 `activate_preloaded_episode` 时，Rust 后端**立即设置 `cancelled` 并 `abort()` 后台下载任务**，仅将已有分块暴露给本机 `127.0.0.1:0` HTTP/1.1 Range 服务瞬间秒开；新集稳定推进后（推进 `>= 15s` 且缓冲 `>= 10s` 或切集 `>= 25s`），或启动再下一集预加载时，自动调用 `release_active_preload_memory` **释放内存分块并保留轻量上游透明 Range 回源代理**；切入非目标集、切换多版本片源/代理或离开播放页立即停止下载并彻底清零内存。
-
-### 24. 全链路 Emby User-Agent / 鉴权头统一与 MPV `-13` 诊断规范 (Unified User-Agent & Stream Headers)
-- **禁止放任 `libmpv` 使用裸默认 `User-Agent: libmpv`**：
-  - 大量套用 Cloudflare WAF、客户端白名单或 302 网盘直链（如 115 / Alist）的 Emby 公益服会直接拦截 `libmpv` 默认 UA，表现为 API 接口正常但起播立即返回 `end-file` `error: -13 (MPV_ERROR_LOADING_FAILED)`。
-  - [`embyClient.ts`](file:///d:/wade/code/emby-tauri-player/src/api/embyClient.ts) 统一提供 `DEFAULT_EMBY_USER_AGENT`（桌面 Chrome UA）、`EMBY_USER_AGENT_PRESETS`、解耦解析器 `registerEmbyUserAgentGetter` / `resolveEmbyUserAgent` 以及 `buildEmbyStreamHeaders`；[`useAuthStore.ts`](file:///d:/wade/code/emby-tauri-player/src/stores/useAuthStore.ts) 支持按服务器持久化 `userAgent` 并在备份合并时向后兼容保留。
-  - 在 Tauri 环境下，`buildEmbyHeaders`、`MpvPlayerEngine`（`user-agent` + `tls-verify=no`）、[`useNextEpisodePreloader.ts`](file:///d:/wade/code/emby-tauri-player/src/player/hooks/useNextEpisodePreloader.ts) 与 Rust [`preload.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/preload.rs)（`reqwest::ClientBuilder::user_agent`）必须全链路发送同一 `User-Agent`；`buildEmbyHeaders` 仅在 `isTauriEnvironment()` 为 `true` 时注入 `User-Agent`，避免纯浏览器 Dev 模式触发 Fetch 禁改头警告。
-- **MPV `http-header-fields` 含逗号头注入红线 (`change-list append`)**：
-  - `X-Emby-Authorization` 值内部包含多个逗号分隔字段（`Client="...", Device="...", Token="..."`）。**严禁直接调用 `setProperty('http-header-fields', ...)`**（mpv 会按逗号把字符串列表拆分，导致将 `Device="..."` 当成非法 HTTP 头引发 `400 Bad Request`）。
-  - 必须在 [`MpvPlayerEngine.ts`](file:///d:/wade/code/emby-tauri-player/src/player/MpvPlayerEngine.ts) 的 `applyNetworkHeadersToMpv` 中先执行 `command('change-list', ['http-header-fields', 'clr', ''])`，再对每个非 `user-agent` 头逐条调用 `command('change-list', ['http-header-fields', 'append', `${key}: ${val}`])`；同时保留 `MpvPlayerEngine` 初始化后 `user-agent` 与 `end-file` 数字错误码（`-13` ~ `-18`）中文解析。
-- **直链构造与 `.strm` (`IsRemote`) 陈旧 `Path` 避坑**：
-  - `.strm` (`IsRemote: true`) 媒体源在 Emby 入库时保存的 `mediaSource.Path` 往往包含过期签名或已迁移/下线的网盘穿透节点（例如旧节点返回 Cloudflare `HTTP 530 / error code: 1033`）；而服务端返回的 `mediaSource.DirectStreamUrl`（常为相对路径如 `/videos/{id}/stream?...`）或标准 `/emby/Videos/{id}/stream.{ext}?static=true` 会在服务端经过 302/307 中间件动态重写至当前健康节点并重新签名。
-  - **严格优先级**：[`embyClient.ts`](file:///d:/wade/code/emby-tauri-player/src/api/embyClient.ts) 的 `buildNativeDirectStreamUrl` 必须优先使用经 `resolveEmbyDirectStreamCandidate` 解析的 `DirectStreamUrl`（支持以 `/` 开头的相对路径拼接并补全 `static=true` 与 `api_key`），其次使用 `buildStandardEmbyStaticStreamUrl`，**绝不能在未经过 Emby 服务端重写前直接优先返回 `.strm` 原始 `mediaSource.Path`**；原始外部 `mediaSource.Path`（排除公网域名访问私网/回环 `Path`）仅作为 `resolveEmbyFallbackStreamCandidates` 中的末位备选，在播放失败时由 [`PlayerPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/PlayerPage.tsx) 自动探测可达性并按需降级切换。
-- **MPV `demuxer-max-bytes` 属性类型避坑**：
-  - `demuxer-max-bytes` 与 `demuxer-max-back-bytes` 在 `mpv` 中属于 `OPT_BYTE_SIZE` 选项，通过 `tauri-plugin-libmpv` 传入 JSON 数字易在某些平台触发 `Failed to set property 'demuxer-max-bytes': error accessing property`。必须在 [`MpvPlayerEngine.ts`](file:///d:/wade/code/emby-tauri-player/src/player/MpvPlayerEngine.ts) 中以 `String(bytes)` 字符串下发。
-- **Emby 客户端 `Client` 标识联动与 `PlaybackInfo` 重协商**：
-  - 仅改 HTTP `User-Agent` 而不改 `X-Emby-Authorization` 中的 `Client="..."` 仍可能被部分公益服客户端白名单拦截。[`embyClient.ts`](file:///d:/wade/code/emby-tauri-player/src/api/embyClient.ts) 通过 `resolveEmbyClientName` 将自定义 UA/预设自动同步至 `Client`（默认配置保持 `EmbyTauriPlayer` 不破坏存量会话）；播放页切换客户端预设后需重新调用 `fetchAndPreparePlaybackSession` 重拉 `PlaybackInfo`。
-- **`libmpv` `-13` 自动逐跳诊断与 Rust 零内存透明中转 (`preload.rs`)**：
-  - 当 `libmpv` 触发 `-13` 时，[`PlayerPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/PlayerPage.tsx) 自动调用 [`preload.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/preload.rs) 的 `diagnose_stream_url` 逐跳执行 `GET Range: bytes=0-0`（禁用自动重定向，302 跨域自动剥离 `X-Emby-*` / `authorization` 头防网盘拒收，且 URL 敏感 Query 参数强制脱敏）。若 Rust 探测可达（问题出在 `libmpv`/FFmpeg TLS 或跳转兼容），自动切入零内存透明 Range 中转 `start_stream_relay`（单次流仅自动回退一次，离开/切集及时 `stop_stream_relay`）；否则呈现逐跳 HTTP 状态码、`cf-ray` / `cf-mitigated`、响应体片段与无转码 `DirectStreamUrl` 备选重试。
-
-### 25. 首页大图与剧集详情页的 `Episode` 归属与图片降级规范
-- **禁止对 `Episode` 直接使用分集自身标题与横版剧照冒充整部剧详情**：
-  - 首页 Hero Spotlight 优先取「继续观看」首位，往往为 `Type === 'Episode'`。若直接以 `episode.Id` 跳转详情页并渲染 `item.Name`、`Primary`/`Backdrop`，会出现「大标题显示单集名、2:3 竖版海报拉伸或 404、背景图 404」问题。
-  - [`DetailPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/DetailPage.tsx) 在检测到 `item.Type === 'Episode' && item.SeriesId` 时必须并发拉取父级 `Series` 详情（附带 `loadReqIdRef` 防竞态）：大标题、竖版 2:3 海报、全屏氛围背景、年份与剧集主简介优先取 `seriesItem`（并在主标题下方附加单集副标题及「立即/继续播放 第 X 集」按钮）。
-- **分集 `Backdrop` 寻址与多级 `onError` 降级**：
-  - Emby 分集条目通常没有独立的 `Backdrop`，请求分集 `Backdrop/0` 会返 404。[`HomePage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/HomePage.tsx)、[`DetailPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/DetailPage.tsx) 与 [`PlayerPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/PlayerPage.tsx) 对分集背景图统一优先取 `ParentBackdropItemId || SeriesId` 配合 `ParentBackdropImageTags?.[0]`，禁止把分集的 `BackdropImageTags` 错配给剧集 ID；同时所有海报与背景图必须配置带防重入标记（`dataset.fallbackStep`/`fallbackStage`）的 `onError` 降级链，避免裂图或控制台报错。
-  - 首页大图操作分工明确：「立即播放」针对 `Movie`/`Episode` 直接起播进入播放器，「剧集详情」对 `Episode` 自动跳转至 `/detail/${item.SeriesId}`。
-
-### 26. Emby 无标签图片请求触发 500 `NullReferenceException` 防护与统一寻址规范
-- **根因机制（无 `&tag=` 盲请求导致大量 HTTP 500）**：
-  - 部分 `.strm` / 未完整刮削分集剧照的 Emby 服务端在收到不带 `&tag=` 的图片请求（如 `GET /emby/Items/{id}/Images/Primary?maxWidth=640&quality=85&format=webp`）或强制 `&format=webp` 转码无对应缓存文件条目时，后端图像处理管线不会返回 404，而是直接抛出 `.NET System.NullReferenceException: Object reference not set to an instance of an object.` 返回 **500 Internal Server Error**；当分集列表（[`EpisodeGrid.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/media/EpisodeGrid.tsx)）一次性渲染整季几十上百集时，会瞬间触发海量 500 刷屏报错。
-  - 此外，`getSeriesEpisodes` 若未在 `Fields` 中显式声明 `ImageTags,BackdropImageTags,ParentBackdropImageTags`，也可能丢失本已存在的剧照标签。
-- **强制 tag 校验与统一图片解析入口 ([`embyClient.ts`](file:///d:/wade/code/emby-tauri-player/src/api/embyClient.ts))**：
-  - **严禁盲发无 `tag` 图片请求**：禁止任何组件直接用 `undefined` tag 调用 `buildItemImageUrl` 探测图片是否存在，也不得在 `onError` 中剥离 `&tag=` 重试（例如原 `DetailPage` 剥离 tag 重试与 [`MediaCard.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/media/MediaCard.tsx) 未带步进标记的 `onError` 死循环重试）。
-  - 统一通过 [`embyClient.ts`](file:///d:/wade/code/emby-tauri-player/src/api/embyClient.ts) 提供的 `resolveEpisodeThumbnailUrl`、`resolveItemPosterUrl`、`resolveItemBackdropUrl` 按「自带 tag -> 父级/所属剧集已带 tag 背景/缩略图/封面 -> 空串」顺序寻址；若全部无可用 tag，直接渲染本地暗色占位视图，**零网络请求**。
-  - 若带 `tag` 的图片仍偶发请求失败（例如服务端 WebP 编码异常），各视图的 `onError` 必须通过 `dataset.fallbackStep` 或阶段计数器限制重试上限：仅通过 `stripImageFormatWebp` 剥离 `&format=webp`（保留 `&tag=`）重试一次，必要时切换已校验的剧集大图，最终兜底本地内联 SVG 占位图或隐藏 `<img>` 并锁定 `'done'` 状态。
-
-### 27. 跨平台自动更新架构与发版清单规范 (Tauri v2 Updater)
-- **Ed25519 密钥与构建配置隔离红线**：
-  - `tauri-plugin-updater` 强制要求二进制签名验签：公钥写入 [`src-tauri/tauri.conf.json`](file:///d:/wade/code/emby-tauri-player/src-tauri/tauri.conf.json) 的 `plugins.updater.pubkey`；**私钥绝不提交入库**，保存在仓库外 `~/.tauri/nocta.key` 并由 GitHub Secrets `TAURI_SIGNING_PRIVATE_KEY`（及可选 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`）在 CI 中注入。
-  - [`src-tauri/tauri.ci.conf.json`](file:///d:/wade/code/emby-tauri-player/src-tauri/tauri.ci.conf.json) 必须默认保持 `"createUpdaterArtifacts": false`（不得放在基础 `tauri.conf.json` 或无条件开启）：若 GitHub Secrets 未配置 `TAURI_SIGNING_PRIVATE_KEY`，直接在 step `env:` 传入 `${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}` 会向进程注入空字符串 `""`，触发 `failed to decode secret key: incorrect updater private key password: Missing comment in secret key` 导致 NSIS/安装包打包失败；必须在 [`release.yml`](file:///d:/wade/code/emby-tauri-player/.github/workflows/release.yml) 中前置校验 `RAW_SIGNING_KEY` 非空后再写入 `$GITHUB_ENV` 并动态将 `createUpdaterArtifacts` 置为 `true`。
-- **版本号对齐、`reqwest 0.13` SOCKS 统一与更新状态诊断**：
-  - `tauri-conf` 的 `version` 使用 `"../package.json"`，前端通过 [`vite.config.ts`](file:///d:/wade/code/emby-tauri-player/vite.config.ts) 注入 `__APP_VERSION__`，避免旧版硬编码 `0.1.0` 导致 SemVer 判定 `0.1.0-alpha.x < 0.1.0` 而永不提示升级。
-  - `tauri-plugin-updater` 2.14.1 本身不暴露 `socks` feature 且内部依赖 `reqwest 0.13`。在 [`src-tauri/Cargo.toml`](file:///d:/wade/code/emby-tauri-player/src-tauri/Cargo.toml) 中通过重命名依赖 `updater-reqwest-socks = { package = "reqwest", version = "0.13", default-features = false, features = ["socks"] }` 触发 Cargo 特性统一，[`updater.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/updater.rs) 将 `socks5://` / `socks://` 升级为 `socks5h://` 实现代理远端 DNS 解析并支持失败自动 `.no_proxy()` 直连回退；前端 [`useUpdaterStore.ts`](file:///d:/wade/code/emby-tauri-player/src/stores/useUpdaterStore.ts) 必须通过 `resolveEffectiveProxyDetailed(getGlobalProxyConfig())` 结合系统跳过代理列表读取全局代理，避免被单服 Emby 代理覆写劫持。
-  - 公开仓库下 `tauri-plugin-updater` 若因「仓库暂未设为 Public」或「仅发布了预发布版而无正式版 `latest.json`」返回 `Could not fetch a valid release JSON from the remote`，[`updater.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/updater.rs) 通过 `diagnose_manifest_failure` 查询 `api.github.com` 精确区分「仓库不可公开访问 (404)」与「尚无 Stable 清单、请切至预发布通道 (404)」。
-- **CI 并发竞态消除与预发布/正式双通道清单**：
-  - 4 端并发矩阵禁止在各 OS Job 中开启 `includeUpdaterJson: true`（会并发覆写删除 Release 下的 `latest.json` 触发 404）；统一在 [`release.yml`](file:///d:/wade/code/emby-tauri-player/.github/workflows/release.yml) 设置 `includeUpdaterJson: false`，macOS 必须传入 `--bundles app,dmg` 以生成 `.app.tar.gz` + `.sig`。
-  - 由单任务 `finalize-release` 清理旧资产时**务必豁免 `latest.json`、`*.sig`、`*.tar.gz`**，并通过 [`scripts/generate-updater-manifest.mjs`](file:///d:/wade/code/emby-tauri-player/scripts/generate-updater-manifest.mjs) 统一汇聚 4 端 `.sig` 与包 URL 生成 `latest.json`，同时推送 `prerelease.json`（及正式版 `stable.json`）至孤儿分支 `updater-manifests`，通过 `raw.githubusercontent.com` 实现无 API 限流的预发布更新检查。
-
-### 28. Tailwind CSS v3 透明度修饰符与透明 WebView 叠层可读性红线
-- **Tailwind v3 非 5 倍数透明度修饰符静默失效坑点**：
-  - 本项目使用 Tailwind CSS v3（`tailwindcss@3.4`），内置 `opacity` Scale 仅包含 5 的倍数（`/0`、`/5`、`/10`、…、`/95`、`/100`）；若编写裸非 5 倍数修饰符（如 `bg-[#0B0E17]/88`、`/92`、`/82`、`/84`、`/98` 或 `/12`、以及非内置 `z-35`），Tailwind 构建器不会报错，而是**直接丢弃整条 CSS 规则**，导致容器回退为 `background-color: transparent`（完全透明、无底色）。
-  - **强制规范**：所有透明度修饰符必须使用 5 的倍数（`/85`、`/90`、`/95` 等）或显式方括号任意值语法（如 `/[0.92]`、`z-[35]`）；修改样式后建议抽查 `dist/assets/*.css` 确认类规则实际生成。
-- **底层原生视频穿透视窗的可读性要求**：
-  - 在透明 WebView 叠加底层 `libmpv`（Win32/Direct3D 或 macOS NSWindow）渲染视频画面的架构下，CSS `backdrop-blur-*` **无法模糊原生底层视频像素**。因此播放器侧边抽屉（[`VideoProPanel.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/VideoProPanel.tsx)、[`DanmakuDrawer.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/DanmakuDrawer.tsx)、[`EpisodeDrawer.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/EpisodeDrawer.tsx)）、悬浮弹出层（[`NetworkProxyPopover.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/NetworkProxyPopover.tsx)、[`PlayerContextMenu.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/PlayerContextMenu.tsx)、[`MiniActionHud.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/MiniActionHud.tsx)、[`UpNextOverlay.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/UpNextOverlay.tsx)、[`SkipNoticeToast.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/SkipNoticeToast.tsx)）及 OSD 控制栏（[`PlayerOsd.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/PlayerOsd.tsx)）必须显式使用高不透明度深色底（`bg-[#0B0E17]/95` 或 `/90`）搭配高对比度边框（`border-white/15`），确保在高亮画面上文字依然清晰可读，同时保持点击空白处遮罩为 `bg-transparent` 以便实时预览调校画面。
-
-### 29. 全栈统一网络代理架构、SOCKS5 本地隧道桥接与 `nocta-img` 图片代理规范
-- **严格遵循操作系统「跳过代理」列表 (`shouldBypassProxy` / `should_bypass_proxy`)**：
-  - Rust [`proxy.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/proxy.rs) 的 `detect_system_proxy`（带 3 秒 TTL `detect_system_proxy_cached`）跨平台解析 Windows 注册表 `ProxyOverride`、macOS `scutil --proxy`（含 `SOCKS`、`ExceptionsList` 及 `ExcludeSimpleHostnames` 映射 `<local>`）及 Linux / `NO_PROXY`，统一输出 `SystemProxyInfo { enabled, url, bypass }`。
-  - 前端 [`http.ts`](file:///d:/wade/code/emby-tauri-player/src/api/http.ts) 与 Rust 对齐 `shouldBypassProxy` / `should_bypass_proxy` 规则：**严格禁止在应用内硬编码旁路私网/局域网地址或 `.local`/`.lan`**，在 `system` 与 `manual` 代理模式下均统一读取操作系统跳过代理列表并按需旁路（完整支持 IPv4/IPv6 CIDR 如 `192.168.0.0/16`、`fc00::/7`，`<local>`、通配符 `*`/`?`、前导点后缀、方括号 IPv6、`http://`/`https://` 协议前缀与 `host:port`）。命中规则后通过 `noProxy: '*'` 彻底屏蔽 `reqwest` 内置系统代理探测；`httpClient` 自动将 `socks5://` 升级为 `socks5h://` 确保远端 DNS 解析；代理连通性测试（[`useAuthStore.ts`](file:///d:/wade/code/emby-tauri-player/src/stores/useAuthStore.ts) 的 `testProxyConnection`）显式传入 `respectSystemBypass: false` 与 `fallbackToDirect: false` 确保真实经过所测代理；WebDAV / S3 同步及应用更新检查均通过 `getGlobalProxyConfig()` 与单服 Emby 代理隔离。
-- **视频流与预加载的分层代理路径 (`http-proxy` / `ensure_socks5_http_bridge` / `rustProxy`)**：
-  - HTTP/HTTPS 代理直接下发给 `libmpv` `http-proxy`（零额外本地 TCP 转发开销）。
-  - 检测到 `socks5://` / `socks5h://` 代理时，[`MpvPlayerEngine.ts`](file:///d:/wade/code/emby-tauri-player/src/player/MpvPlayerEngine.ts) 调用 Rust 命令 `ensure_socks5_http_bridge` 启动按需按地址复用的本机 L4 `HTTP CONNECT -> SOCKS5` 隧道桥（支持 RFC 1928 握手、RFC 1929 用户名密码鉴权与明文 HTTP 请求转发），向 `libmpv` 下发本地 HTTP 桥接地址并标记 `mode: 'socks5_bridge'`，同时保留原始 SOCKS5 地址至 `ResolvedStreamProxyInfo.rustProxy`。
-  - Rust [`preload.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/preload.rs) 直接利用 `reqwest`（已开启 `socks` feature）原生直连 SOCKS5/HTTP 上游，因此 [`PlayerPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/PlayerPage.tsx) 与 [`useNextEpisodePreloader.ts`](file:///d:/wade/code/emby-tauri-player/src/player/hooks/useNextEpisodePreloader.ts) 传给 `start_stream_relay`、`diagnose_stream_url` 与 `start_next_episode_preload` 的 `proxyUrl` 必须优先取 `(resolvedProxy.rustProxy ?? resolvedProxy.effectiveProxy) || null`，避免经由桥接二次中转；而 `libmpv` 加载经 `start_stream_relay` 或预加载生成的本机环回流（`options.upstreamUrl && isLoopbackUrl(options.url)`）时，仍强制清空 `http-proxy` 直通本机环回口，避免本地中转流被误送往外部代理。
-- **`nocta-img` 自定义 URI Scheme 海报/背景图代理 ([`image_proxy.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/image_proxy.rs))**：
-  - 原生 `<img src="https://...">` 由 WebView 系统网络栈发出，不遵循应用内手动代理/直连切换与自定义 `User-Agent`。[`lib.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/lib.rs) 注册异步协议 `nocta-img`，后端用 24 并发信号量、`16` 槽 `(proxy, ua)` 复用 `reqwest::Client` 连接池、单图 `20 MiB` 上限、`http/https` 目标校验、代理失败自动直连回退，2xx 响应附带 `Cache-Control: public, max-age=86400`，错误响应强制 `no-store`。
-  - [`embyClient.ts`](file:///d:/wade/code/emby-tauri-player/src/api/embyClient.ts) 统一通过 `wrapEmbyImageUrl` 封装图片 URL（Tauri Windows 下为 `http://nocta-img.localhost/fetch?url=...&v=<rev>`，macOS/Linux 为 `nocta-img://localhost/fetch?url=...&v=<rev>`，纯浏览器环境原样透传）；`stripImageFormatWebp` 在剥离 `&format=webp` 前后需先解包并保留原平台封装标识重新封装。
-  - [`useAuthStore.ts`](file:///d:/wade/code/emby-tauri-player/src/stores/useAuthStore.ts) 在初始化、服务器/代理/UA 变更时自动调用 `sync_runtime_proxy_config` 同步策略与各服 `User-Agent` 至 Rust 内存态并递增 `imageProxyRevision`；内嵌 [`NetworkProxyModal`](file:///d:/wade/code/emby-tauri-player/src/components/settings/NetworkProxyModal.tsx) 且保持挂载的页面（如 [`HomePage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/HomePage.tsx)）需订阅 `s.imageProxyRevision` 以确保切代理/UA 后图片立即重载。
-- **`preload.rs` Keep-Alive 复用与 302/307 短时缓存**：
-  - 本机透明中转与预载 HTTP 服务（`handle_proxy_connection`）采用 HTTP/1.1 Keep-Alive 连接复用；`send_with_cached_redirects` 为 302/307 最终跳转落点提供 90 秒短 TTL 缓存（按需自动失效重解析），`PreloadSession` 跨域跳转同样严格剥离 `authorization` 与 `X-Emby-*` 鉴权头。
-
-### 30. 操作系统媒体控制集成与耳机摘下/断开自动暂停架构 (`media_session.rs` / `souvlaki`)
-- **双层触发联动（兼容蓝牙 AVRCP 入耳检测、耳机断连放回充电盒、有线/USB 拔出与外放切耳机不误停）**：
-  1. **系统媒体会话 (`souvlaki`)**：在 [`lib.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/lib.rs) `.manage(MediaSessionState::default())`（必须在 `.setup(...)` 之前调用以便 `try_state` 获取句柄）后初始化 Windows SMTC / macOS `MPNowPlayingInfoCenter` + `MPRemoteCommandCenter` / Linux MPRIS2。Linux 必须采用 `souvlaki = { default-features = false, features = ["use_zbus"] }` 纯 Rust D-Bus 后端，免除 `libdbus-1-dev` 系统依赖以兼容 Ubuntu CI 构建。前端通过 [`useMediaSessionController.ts`](file:///d:/wade/code/emby-tauri-player/src/player/hooks/useMediaSessionController.ts) 实时同步标题、剧集副标题、播放状态及 5s 进度，接收蓝牙 AVRCP `Pause` / `Play` / `Toggle` / `Next` / `Previous` 指令与 Web `navigator.mediaSession` 兜底。
-  2. **原生音频输出路由与设备断开监测 (`init_audio_output_monitor`)**：
-     - **Windows**：在 [`media_session.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/media_session.rs) 使用 `windows 0.62`（需同时在 `Cargo.toml` 声明 `windows-core = "0.62"` 以支持 `#[implement(IMMNotificationClient)]`，且 `PROPERTYKEY` 位于 `Win32::Foundation::PROPERTYKEY`）于独立线程注册 WASAPI `IMMNotificationClient`（监听 `OnDefaultDeviceChanged` 与 `OnDeviceStateChanged` 并施以 350ms 防抖合帧），向前端派发 `media://audio-output-changed`。
-     - **macOS**：通过 [`audio_route_macos.m`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/audio_route_macos.m)（[`build.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/build.rs) 链接 `CoreAudio` 与 `CoreFoundation`）监听 `kAudioHardwarePropertyDefaultOutputDevice`、蓝牙传输类型与 3.5mm 插孔 `kAudioDevicePropertyDataSource`（`'hdpn'`→`'ispk'`）。
-     - **Linux / 浏览器兜底**：前端监听 `navigator.mediaDevices` `devicechange` 在 `audiooutput` 设备数减少时触发暂停。
-  - **智能路由判定 (`should_pause_on_audio_route_change`)**：原输出设备移除/断开或从耳机切回扬声器时触发自动暂停；外放期间新接入蓝牙耳机（扬声器→耳机）不误暂停；用户可通过 `PlayerPreferences.pauseOnHeadphoneDisconnect`（默认开启，设置页与备份同步全覆盖）自由开关。
-
-### 31. 新剧两阶段自动搜索匹配弹幕与按需触发规范 (`danmuClient.ts` / `useDanmakuSession.ts`)
-- **开启弹幕门控与懒加载机制 ([`useDanmakuSession.ts`](file:///d:/wade/code/emby-tauri-player/src/player/hooks/useDanmakuSession.ts))**：
-  - 自动匹配与弹幕拉取仅在 `danmakuSettings.visible === true` 时触发；若起播时弹幕处于关闭状态，零弹幕网络请求，待用户打开弹幕开关时立即自动触发搜索加载（并通过 `loadedKeyRef` 按 `${item.Id}::${serverKey}` 防重，已加载条目反复开关不重复请求；`triggerDanmakuLoad(true)` 仍支持手动重匹配/解绑穿透）。
-- **四级匹配链路与两阶段自动搜索 ([`danmuClient.ts`](file:///d:/wade/code/emby-tauri-player/src/api/danmuClient.ts))**：
-  1. 单集手动绑定（`danmakuBindings[itemId]`）→ 同剧持久化延续绑定（`seriesDanmakuBindings[SeriesId]`）→ 会话内同剧缓存延续（`autoSeriesCacheRef`，不写入持久化/云同步以免自动猜测污染用户绑定）。
-  2. **`autoSearchAndMatchEpisode` 两阶段回退匹配**：优先调用 `POST /api/v2/match`（`autoMatchEpisode`）；若未命中，**绝不向关键词附加 `@preferredPlatform`**，依次使用原始剧名/文件名及 `cleanDanmuSearchKeyword`（剔除 `(2024)` 年份、季集号后缀）调用 `GET /api/v2/search/anime`，经 `scoreAnimeCandidate`（标题精确/前缀/包含、阿拉伯及中文季数匹配、年份、影/剧类型、首选平台）排序后取前 3 候选，拉取 `GET /api/v2/bangumi/:animeId` 并由 `pickMatchingEpisode` 精准选集并回填会话缓存。
-
-### 32. Emby 多版本片源清晰度自动择优与播放前后切源规范 (`playbackSessionService.ts`)
-- **最高清晰度自动择优排序 ([`playbackSessionService.ts`](file:///d:/wade/code/emby-tauri-player/src/player/playbackSessionService.ts))**：
-  - 所有起播入口统一通过 `fetchAndPreparePlaybackSession` 装配会话；内部禁止直取服务端原生 `pbInfo.MediaSources[0]`，必须先经 `sortMediaSourcesByQuality` 按 `resolutionTier`（含 4K 宽屏 `Width >= 3600` 判定与 `.strm` 文件名关键词兜底解析）→ `pixelArea` → `dynamicRangeRank`（Dolby Vision / HDR / 10-bit）→ `bitrate` → `size` 降序排列，并默认选取第 1 项（同时支持可选 `preferredMediaSourceId` 精确指定版本）。
-- **播放前后多版本切换联动**：
-  - 详情页（[`DetailPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/DetailPage.tsx)）对多版本电影/单集展示起播前版本选择器（默认高亮标注「最高画质」）；播放中通过 [`PlayerOsd.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/PlayerOsd.tsx) 底栏「版本」菜单与 [`EpisodeDrawer.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/EpisodeDrawer.tsx)「原画片源版本」列表经 `formatMediaSourceMeta` 统一展示分辨率/HDR/封装/体积并调用 `switchMediaSource`（内置同 `Id` 防重守卫）保留进度原画热切。
-
-### 33. 一级导航页 Keep-Alive 驻留与按需后台静默刷新规范 (`App.tsx` / `useMediaStore.ts`)
-- **一级页面 Keep-Alive 零重建切换 ([`App.tsx`](file:///d:/wade/code/emby-tauri-player/src/App.tsx))**：
-  - 「首页发现」（`/`）、「继续观看」（`/continue-watching`）与「聚合搜索」（`/search`）通过懒挂载 `KeepAliveTabPane`（独立滚动容器 `#home-scroll-container`、`#continue-scroll-container`、`#search-scroll-container` + `useLayoutEffect` 瞬时恢复滚动偏移）保持 DOM 与海报纹理常驻，切换 Tab 零卸载、零白屏、零图片重解码、零重复请求，完整保留搜索词与筛选状态；退出登录或 `servers.length === 0` 时清空 `visitedTabs` 避免隐藏态拦截跳转；进入 `/player` 时 `<main>` 严格保持 `bg-transparent`，绝不遮挡底层 `libmpv`。
-  - 处于隐藏态的保活页严禁触发全局快捷键劫持（如 [`HomePage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/HomePage.tsx) `/` 搜索热键）或 `inputRef.current.focus()` 抢焦点（如 [`SearchPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/SearchPage.tsx)），须以 `isActive` 门控。
-- **播放进度脏标记按需刷新与批量计数渲染 ([`useMediaStore.ts`](file:///d:/wade/code/emby-tauri-player/src/stores/useMediaStore.ts))**：
-  - 仅当路由从 `/player/*` 离开时由 [`App.tsx`](file:///d:/wade/code/emby-tauri-player/src/App.tsx) 调用 `markPlaybackDirty()` 递增 `playbackDirtyRevision`，[`HomePage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/HomePage.tsx) 与 [`ContinueWatchingPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/ContinueWatchingPage.tsx)（配合 `continueWatchingCache` 持久多服断点列表）仅在自身激活且检测到 `playbackDirtyRevision` 递增或服务器变更时静默后台同步（`items.length > 0` 时禁止回退骨架屏闪烁）。
-  - 首页媒体库条目统计 `fetchCountsForViews` 使用 `Promise.allSettled` 一次性 `setViewCounts` 批量提交（消除逐库多次整页重排）并受 `lastViewCountsSyncAt` 5 分钟 TTL 节流，搭配 `React.memo(MediaCard)` 消除冗余渲染。
-
-### 34. 剧集详情页分集分页、正倒序排列与自动定位当前集规范 (`EpisodeGrid.tsx` / `DetailPage.tsx`)
-- **百集大剧分页与正倒序切换 ([`EpisodeGrid.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/media/EpisodeGrid.tsx))**：
-  - 采用每页 `EPISODES_PER_PAGE = 24`（整除 1/2/3/4 响应式网格列数），生成基于 `IndexNumber`（缺失时按序数兜底）的区间分页胶囊（如 `1-24`、`25-48`，倒序时为 `240-217`），搭配顶部/底部翻页与「正序 / 倒序」切换；切换正倒序主动回到第 0 页，不得被自动定位覆盖。
-- **自动识别与定位当前播放进度所在页 ([`DetailPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/DetailPage.tsx))**：
-  - `DetailPage` 传入 `currentEpisodeId` 时，除单集入口外同时兼容 `cachedPlayerItem?.Type === 'Episode' && cachedPlayerItem.SeriesId === item.Id` 刚播放返回剧集页的场景；
-  - `resolveActiveEpisode` 按「显式 `currentEpisodeId` → 最近断点未完播分集（按 `LastPlayedDate` 取最新）→ 最后已看集下一集（或最后一集）」优先级确定目标集，加载分集或切季时经 `lastAutoLocatedKeyRef` 自动一次跳转至目标集所在页，同时提供「定位当前集」快捷按钮与区间圆点标识。
-
-### 35. 客户端专属默认 User-Agent 标识与服务器管理密码查看/测速规范
-- **全端统一专属默认 UA (`Nocta/${APP_VERSION} (Desktop; EmbyClient)`)**：
-  - 前端 [`embyClient.ts`](file:///d:/wade/code/emby-tauri-player/src/api/embyClient.ts) 将 `DEFAULT_EMBY_USER_AGENT` 设为 ``Nocta/${APP_VERSION} (Desktop; EmbyClient)``（`resolveEmbyClientName` 默认返回 `Nocta`，同时在 `EMBY_USER_AGENT_PRESETS` 保留「默认 (Nocta)」与「Chrome 浏览器」/ Emby / Infuse / VidHub / SenPlayer / Yamby 预设）；
-  - Rust [`preload.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/preload.rs) 与 [`proxy.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/proxy.rs) 使用 `concat!("Nocta/", env!("CARGO_PKG_VERSION"), " (Desktop; EmbyClient)")` 与前端严格对齐，确保 Emby API、流中转、预加载与图片代理默认标识一致。
-- **服务器管理密码可视化与延迟/通断探测 ([`SettingsPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/SettingsPage.tsx) / [`useAuthStore.ts`](file:///d:/wade/code/emby-tauri-player/src/stores/useAuthStore.ts))**：
-  - `SavedServer` 新增 `lastLatencyMs` 记录最近延迟（[`EmbyServerModal.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/settings/EmbyServerModal.tsx) 与设置页同步写入展示）；
-  - 设置页 Emby 服务器列表与新增/编辑表单均支持 `type="button"` 密码明暗切换按钮（列表对未记住密码明确标注「密码: 未保存」），并提供单服测速按钮、顶部「全部测速」并行探测按钮、表单内「测试连接」按钮及分色延迟微标（`<150ms` 绿 / `<400ms` 蓝 / `>=400ms` 琥珀 / `离线`）。
-
-### 36. 全局默认贴底策略与多弹幕节点并发手动搜索规范
-- **宽银幕画面沉浸贴底全局默认开关 (`PlayerPreferences.defaultBottomAlign`)**：
-  - [`usePlayerStore.ts`](file:///d:/wade/code/emby-tauri-player/src/stores/usePlayerStore.ts) 在 `PlayerPreferences` 中新增 `defaultBottomAlign`（默认 `false`，设置页播放设置「宽银幕画面沉浸贴底」提供交互开关）；[`PlayerPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/PlayerPage.tsx)、[`VideoProPanel.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/VideoProPanel.tsx)、[`OsdOverlayPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/OsdOverlayPage.tsx) 与 `setVideoLayout` 初始化均以 `playerPreferences.defaultBottomAlign` 作为未单独覆写剧集/电影的默认回退值，且单剧/单影独立记忆仍优先覆盖全局默认。
-- **多弹幕 API 节点并发搜番与归属节点直连延续 ([`DanmakuDrawer.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/DanmakuDrawer.tsx) / [`useDanmakuSession.ts`](file:///d:/wade/code/emby-tauri-player/src/player/hooks/useDanmakuSession.ts))**：
-  - 配置多个弹幕节点时，手动搜番默认开启「全部节点并发」（可随时一键切回仅当前节点），对各节点并发调用 `searchDanmuAnime`（10s 独立超时 + `searchReqIdRef` 竞态防过期）并流式汇入按 `${server.id}::${animeId}` 隔离的候选列表，支持按节点胶囊实时状态展示与一键筛选；
-  - 拉取分集、拉取弹幕及写入 `DanmakuBinding` / `SeriesDanmakuBinding`（扩展可选 `danmuServerId`、`danmuServerBaseUrl`）时严格路由回番剧所属的源节点 `_server`；后续播放或同剧自动延续由 `resolveBindingServer` 优先按归属节点拉取，即使主切换至其他默认节点也不失效。
-
-### 37. 时长感知两阶段弹幕自动匹配与多节点熔断故障转移规范
-- **纯逻辑时长校验与保底择优策略 ([`danmuMatchPolicy.ts`](file:///d:/wade/code/emby-tauri-player/src/api/danmuMatchPolicy.ts))**：
-  - 混合时长偏差阈值 `getMaxAcceptableDurationDiff = clamp(videoDuration * 12%, 90s, 300s)`；当 Stage 1 (`POST /api/v2/match`) 返回 0 条弹幕或时长偏差超出阈值（`grade === 'mismatch'`）时，`shouldTriggerStage2Fallback` 自动触发 Stage 2 关键词多变体搜索（`buildDanmuSearchKeywords`）与候选分集排序（`rankMatchingEpisodes` 优先正片、降权预告/花絮/加更并对齐副标题）。
-  - 一阶段结果作为保底保留，仅当 Stage 2 或备用节点探测出 `scoreMatchedCandidate` 严格更优（时长契合 + 有效弹幕优先）的结果时才替换，确保绝不越纠偏越差；同时单节点 Stage 1 最多探测 2 个候选、Stage 2 最多有界探测 4 个未探分集，任一候选命中高置信即刻短路。
-- **多弹幕节点硬超时与指数冷却熔断 ([`danmuServerHealth.ts`](file:///d:/wade/code/emby-tauri-player/src/api/danmuServerHealth.ts) / [`danmuClient.ts`](file:///d:/wade/code/emby-tauri-player/src/api/danmuClient.ts))**：
-  - 所有弹幕 HTTP 接口统一接入 `AbortController` 硬超时（`/match` 6s、`/search/anime` 7s、`/bangumi` 6s、`/comment` 10s）；仅传输异常/超时/`401`/`403`/`429`/`5xx` 触发 `recordServerFailure` 指数退避冷却（1 次不熔断 → 2 次 60s → 3 次 180s → 300s），正常 `200 OK` 空结果或 `404` 不惩罚节点健康度；[`useDanmuStore.ts`](file:///d:/wade/code/emby-tauri-player/src/stores/useDanmuStore.ts) 的 `testServerConnection` 与真实响应共用 `recordServerSuccess`/`recordServerFailure` 更新熔断态与 EMA 延迟。
-  - [`autoMatchAndFetchDanmu`](file:///d:/wade/code/emby-tauri-player/src/api/danmuClient.ts) 按 `orderDanmuServersForAutoMatch` 依次最多探测 3 个节点（主节点健康则优先并高置信短路，失效时平滑移交低延迟备用节点），单测见 [`danmu-match-policy.test.mjs`](file:///d:/wade/code/emby-tauri-player/scripts/danmu-match-policy.test.mjs) 与 [`danmu-server-health.test.mjs`](file:///d:/wade/code/emby-tauri-player/scripts/danmu-server-health.test.mjs)。
-- **会话集成避坑 (`effectiveDurationRef`)**：
-  - 在 [`useDanmakuSession.ts`](file:///d:/wade/code/emby-tauri-player/src/player/hooks/useDanmakuSession.ts) 中必须通过 `effectiveDurationRef` 读取运行时片源时长兜底（`ticksToSeconds(item.RunTimeTicks || 0) || effectiveDurationRef.current`），**严禁**将 `effectiveDuration` 直接加入 `triggerDanmakuLoad` 的 `useCallback` 依赖数组，否则底层播放器起播汇报时长更新时会重复触发 `autoMatchAndFetchDanmu` 造成弹幕二次闪刷；同时 `autoSeriesCacheRef` 记录实际获胜节点 `server` 以便同剧续集直接沿用而不改写用户全局主节点。
-
-### 38. 片头/片尾跳过、切集状态隔离与标记持久化规范 (`skipSegmentsUtils.ts` / `MpvPlayerEngine.ts` / `PlayerPage.tsx`)
-- **跳过片尾直切下一集与自然完播兜底**：
-  - 点击/自动触发「跳过片尾」（[`useSkipSegmentsController.ts`](file:///d:/wade/code/emby-tauri-player/src/player/hooks/useSkipSegmentsController.ts)）时，若存在 `nextEpisode`，通过 `onPlayNextEpisode` 直接调用 `switchToEpisode` 切换下一集；仅当无下一集（电影或剧终集）时才 `seek(total - 1)`。禁止使用 `seek(total - 0.25)` 依赖 `Math.ceil(remaining) === 0`（`Math.ceil(0.25) === 1` 会永远卡在片尾）。
-  - [`shouldTriggerAutoNext`](file:///d:/wade/code/emby-tauri-player/src/player/skipSegmentsUtils.ts) 以 `remaining <= 0.5 && currentTime > 10` 触发连播，且 `PlayerPage.tsx` 的 `case 'ended'` 在开启 `autoPlayNext` 且未取消时也触发 `switchToEpisode` 作为自然播放结束兜底。
-- **双层切集竞态与旧流泄漏隔离**：
-  - [`MpvPlayerEngine.ts`](file:///d:/wade/code/emby-tauri-player/src/player/MpvPlayerEngine.ts) 在 `load()` 递增 `loadEpoch` 时同步置位 `awaitingFileLoaded = true`、重置 `_currentTime = 0` / `_duration = 0`、切换状态为 `'loading'`，并拦截直至收到匹配 `loadfileDispatchedEpoch === loadEpoch` 的 `file-loaded`/`playback-restart` 前的旧流 `time-pos`、`duration` 与 `replace` 导致的 `end-file (eof)`；
-  - [`PlayerPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/PlayerPage.tsx) 在 `switchToEpisode` 入口即锁定 `isSwitchingEpisodeRef`、`switchingTargetIdRef`、`autoSwitchedItemIdRef` 并立刻 `pause()` 旧流，同时屏蔽旧流 `unlistenTime` / `unlistenState`，直至新流触发 `engine.load()` 时才释放锁，彻底杜绝「先点跳过卡在片尾，再点下一集时旧集残留进度污染新集导致连跳两集」。
-- **片尾跨集偏移适配与即时落盘 (`usePlayerStore.ts` / `skipSegmentsUtils.ts`)**：
-  - `SkipSegments` 扩展 `outroOffsetFromEnd`（`computeOutroSegmentPatch` 与 `resolveEffectiveOutroStart`），对剧集按「当前总片长 - 距结尾秒数」自动适配每集片长波动；`setSkipSegment`、`clearSkipSegment` 与 `applyRemoteStoreSnapshot` 改用 `saveStorageImmediate` 即时写入 `localStorage` 并覆盖新旧 `instantSyncKey`，避免切集/退播时 200ms 防抖或键值差异导致标记丢失。单测见 [`skip-segments-utils.test.mjs`](file:///d:/wade/code/emby-tauri-player/scripts/skip-segments-utils.test.mjs)。
-
-### 39. 独立 Emby 音乐空间与双空间隔离架构 (`embyMusicClient.ts` / `useMusicPlayerStore.ts` / `MusicAudioController.tsx`)
-- **影视与音乐双空间完全独立**：
-  - 顶部标题栏（[`TitleBar.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/layout/TitleBar.tsx)）中央提供全圆角 `[ 影视 | 音乐 ]` 滑动胶囊切换器；[`HomePage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/HomePage.tsx) 拉取 `getUserViews` 后按 `isMusicLibraryView` 拆分为 `views`（仅影视）与 `musicViews`（音乐），彻底杜绝音乐库被当成剧集/电影渲染；影视搜索（`/search`）与音乐搜索（`/music/search`）完全独立分流。
-- **Emby 音乐库 `ParentId` 强隔离与防混入电影/剧集**：
-  - Emby `/Users/{UserId}/Items/Latest` 在未传 `ParentId` 时可能忽略 `IncludeItemTypes` 导致返回全服最新剧集/电影。[`embyMusicClient.ts`](file:///d:/wade/code/emby-tauri-player/src/api/embyMusicClient.ts) 统一通过 `resolveScopedMusicParentIds` 强制限定在 `CollectionType === 'music'` 视图 `ParentId` 范围内查询（`getLatestMusicAlbums` 改用 `/Items` + `ParentId` + `SortBy=DateCreated`），歌单/歌曲接口显式携带 `MediaTypes=Audio`，并在客户端使用 `isStrictMusicAlbum` / `isStrictAudioTrack` / `isStrictMusicArtist` / `isStrictMusicPlaylist` 严格白名单过滤。
-- **全局 HTML5 音频引擎与多服隔离**：
-  - [`MusicAudioController.tsx`](file:///d:/wade/code/emby-tauri-player/src/music/MusicAudioController.tsx) 挂载于 [`App.tsx`](file:///d:/wade/code/emby-tauri-player/src/App.tsx) 顶层实现跨页不断流后台播放，不干扰 `libmpv` 透明穿透视窗；音频流按「原文件 `static=true` 直出 → Emby `universal` → MP3 320k」三级自动兜底，并在剩余 `< 20s` 时静默预加载下一首；`useMusicPlayerStore` 记录起播时的 `sourceServer` 上下文防止多服切换串台。
-- **视频互斥与系统媒体键接管**：
-  - 进入 `/player/:itemId` 时自动暂停后台音乐；非视频播放路由下由音乐控制器接管 Rust `souvlaki` 媒体会话与耳机断连自动暂停。
-  - 音乐封面寻址 `resolveMusicCoverUrl` 严格校验 `ImageTags.Primary` / `AlbumPrimaryImageTag` 存在性后再拼 URL，避免无图条目触发 Emby 500；歌词加载兼容 `/emby/Audio/{Id}/Lyrics` JSON 与纯 LRC 文本。
-
-### 40. macOS 无边框窗口全屏切换与 WKWebView 键盘焦点恢复 (`mpv_embed_macos.m` / `osd_overlay.rs`)
-- **底层原因 (`tao::set_style_mask` 劫持 `firstResponder`)**：
-  - 主窗口在 [`tauri.conf.json`](file:///d:/wade/code/emby-tauri/tauri.conf.json) 配置了 `"decorations": false`。在 macOS 上 `tao` 执行 `set_fullscreen(true/false)` 及 `windowDidExitFullscreen:` 恢复窗口样式时，会在主队列异步调用 `set_style_mask` 并显式执行 `ns_window.makeFirstResponder(Some(ns_view))`（即 `TaoView`，而非内部的 `WKWebView`）。
-  - 全屏态下 `osd-overlay` 独立浮层窗口（[`OsdOverlayPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/OsdOverlayPage.tsx)）持有自己的 `WKWebView` 焦点，因此按 `F` / `Cmd+F` 可正常退出全屏；但退回窗口态后 `main` 窗口的 `firstResponder` 被 `tao` 重置为 `TaoView`（且 `WebviewWindow::set_focus()` 仅调用 `Window::set_focus` 而非 `Webview::set_focus`），导致主窗口 [`PlayerPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/PlayerPage.tsx) 在用户再次点击页面前无法收到 `F` / `Cmd+F` 等键盘事件。
-- **修复规范**：
-  - 在 [`mpv_embed_macos.m`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/mpv_embed_macos.m) 新增 `nocta_configure_main_window`（由 [`lib.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/lib.rs) `setup` 在 macOS 上调用），为主窗口补齐 `NSWindowCollectionBehaviorFullScreenPrimary` 并监听 `NSWindowDidEnterFullScreenNotification`、`NSWindowDidExitFullScreenNotification` 与 `NSWindowDidBecomeKeyNotification`，在 `dispatch_async(dispatch_get_main_queue(), ...)` 中检查 `[window isKeyWindow]` 后将 `firstResponder` 恢复至 `WKWebView`（若当前 `firstResponder` 已是 `WKWebView` 或其子视图则跳过，避免打断输入框）；
-  - 同时在 `nocta_attach_mpv_window` 与 [`osd_overlay.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/osd_overlay.rs) 的 `close_osd_overlay` 中同步调用 `nocta_focus_webview`，并在 `PlayerPage.tsx` / `OsdOverlayPage.tsx` 的 `KeyF` 分支增加 `if (e.repeat) break;` 防止长按连发。
-
-### 41. Emby 服务器访问域名/IP 收集与分流规则导出规范
-- **纯逻辑归一化、脱敏与规则生成 ([`embyHostCollector.ts`](file:///d:/wade/code/emby-tauri-player/src/services/embyHostCollector.ts) / [`useEmbyHostsStore.ts`](file:///d:/wade/code/emby-tauri-player/src/stores/useEmbyHostsStore.ts))**：
-  - 仅采集 `http:`/`https:` URL（自动忽略 `tauri:`、`blob:`、`file:`），区分 `domain`/`ipv4`/`ipv6` 并通过 `extractRootDomain` 识别常见双段公共后缀（`co.uk`、`com.cn` 等）以及 Mozilla PSL 共享后缀（如 `eu.org`、`us.kg`、`synology.me`、`duckdns.org`、`workers.dev` 等，确保 `vipdc.covh.eu.org` 提取为 `covh.eu.org` 而非公共后缀 `eu.org`）；规则导出、合并与 Store 加载时始终动态重算 `extractRootDomain(host)`，自动自愈旧版持久化缓存；`redactUrlForSample` 自动剥离 URL userinfo 与 `api_key`/`X-Emby-Token`/`sig`/`X-Amz-Signature` 等敏感 query 参数后再存样本；单服上限 200 条、`recordUrl` 500ms 防抖落盘并监听 `beforeunload` 刷盘，增删改与同步导入即时落盘；
-  - `useEmbyHostsStore` 仅通过结构化 `ServerIdentityLike` 与 `embyHostCollector` 交互（禁止直接导入 `useAuthStore` 以免循环依赖）；多端同步通过 `normalizeEmbyServerSyncKey(url, username)`（`url___username`）跨设备映射并通过 [`configBackupService.ts`](file:///d:/wade/code/emby-tauri-player/src/services/configBackupService.ts) 合并 `embyCollectedHosts` 与 `embyHostCollectorSettings`。
-- **全链路 5 处观测点与静默 302 探测**：
-  - **前端 HTTP (`http.ts` / `App.tsx`)**：`registerHttpResponseObserver` 严格按已配置服务器 URL 前缀/主机名匹配归属（避免弹幕、WebDAV/S3、更新检查请求污染 Emby 主机列表），并额外记录跨域 `res.url` 为 `'redirect'`；
-  - **Rust 媒体流与图片代理 (`proxy.rs` / `lib.rs` / `preload.rs` / `image_proxy.rs`)**：`proxy::init_app_handle` 初始化全局 `AppHandle`，`send_with_safe_redirects`、`diagnose_stream_url` 及 `image_proxy` 通过 `emby-hosts-observed` 事件回传多跳重定向链与最终图片主机；
-  - **播放器 (`PlayerPage.tsx`)**：起播时记录直链、`.strm` `Path` 与外挂字幕地址，并在启用 `probePlaybackRedirects` 时延迟 1500ms 静默调用 `diagnose_stream_url`（按 `serverId::itemId::mediaSourceId` 去重）捕获 302 CDN 目标主机并透传 `currentRedirectHosts` 至 [`NetworkProxyPopover.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/NetworkProxyPopover.tsx) 供一键复制。
-- **规则导出与单测**：[`EmbyHostsModal.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/settings/EmbyHostsModal.tsx) 支持按类别/关键字筛选并导出 `Clash / Mihomo (YAML)`、`Surge / Shadowrocket`、`Sing-box (JSON)` 与纯文本列表（默认过滤私网/局域网 IP）；单测见 [`emby-host-collector.test.mjs`](file:///d:/wade/code/emby-tauri-player/scripts/emby-host-collector.test.mjs)。
-
-### 42. Apple TV+ 风格影视墙布局、壳层去冗余与独立媒体库浏览规范
-- **壳层单一入口与纵深层级 ([`TitleBar.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/layout/TitleBar.tsx) / [`Sidebar.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/layout/Sidebar.tsx) / [`App.tsx`](file:///d:/wade/code/emby-tauri-player/src/App.tsx))**：
-  - 品牌 Logo、搜索触发胶囊、服务器切换器统一收敛至 [`TitleBar.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/layout/TitleBar.tsx)（解除非首页切服限制，切服后自动回到对应空间首页），并集成侧边栏折叠开关（持久化至 `nocta_sidebar_collapsed`）与桌面端前进/后退导航；
-  - 侧边栏采用更深一阶底色 `bg-[#080B12]/95` 拉开与主内容区 `#0B0E17` 的空间纵深，移除重复 Logo 与静态服务器卡，快捷键提示按 `isMac` 动态区分 `⌘K` / `Ctrl K`；媒体库列表行高收紧至 `h-9` 并直接路由至 `/library/:libraryId`；收起态采用「外层 `w-0` / `w-56` 占位过渡 + 内层固定 `w-56` `<aside>` 水平滑出（`-translate-x-full`）」实现点击后 0px 完全隐藏且无文字折行闪烁，释放 100% 通栏海报墙视野，同时在 [`TitleBar.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/layout/TitleBar.tsx) 展开按钮上透出 `hasUpdate` 呼吸提示点。
-- **Infuse / Apple TV+ 风格一体化影视详情页 ([`DetailPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/DetailPage.tsx) / [`EpisodeGrid.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/media/EpisodeGrid.tsx))**：
-  - 详情页 Hero 剧照背景必须渲染在 Hero 容器内部 `absolute inset-0`（**禁止使用全屏 `fixed -z-10`**，否则会被 [`App.tsx`](file:///d:/wade/code/emby-tauri-player/src/App.tsx) `<main className="bg-[#0B0E17]">` 遮挡导致纯黑背景），回退竖版海报时自动叠加 `blur-2xl` 柔化；
-  - 严禁在 Hero 与选集网格之间插播独立单集卡片或重复展示 16:9 单集封面与双播放按钮；采用「顶部一体化沉浸 Hero + 下方选集网格」两段结构，点击下方分集卡片时仅在 Hero 内原地切换当前分集标题、紧凑技术规格、简介（提供轻量 `本集简介 / 剧集简介` 切换）、同行紧凑多版本胶囊与唯一主播放按钮（仅当 Hero 已滚出视口时平滑回滚），[`EpisodeGrid.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/media/EpisodeGrid.tsx) 将季切换/选集标题、区间分页、定位与排序合并为单行轻量工具栏。
-- **沉浸式通栏 Hero 轮播与横滑影视墙 ([`HeroCarousel.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/media/HeroCarousel.tsx) / [`MediaRail.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/media/MediaRail.tsx) / [`HomePage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/HomePage.tsx))**：
-  - Hero 采用无圆角无边距通栏融底渐变设计，优先解析透明片名 Logo（`resolveItemLogoUrl`）与真实视频流画质/HDR 标签（`extractVideoQualityBadges`，严禁硬编码假 `4K HEVC`）及 `CommunityRating`；
-  - 首页首行黄金位展示 16:9 横版「继续观看」横滑轨道（含剩余时长与进度条），各媒体库分类采用单行横滑 `MediaRail`（配合 `index.css` `.no-scrollbar`），彻底消除 20+ 行超长网格；
-  - 海报卡片（[`MediaCard.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/media/MediaCard.tsx)）区分 16:9 续看与 2:3 竖版海报的 Hover 态，竖版海报移除遮挡人脸的居中大播放圆圈，展示真实 `CommunityRating` 星级徽章。
-- **独立媒体库完整分页浏览 ([`LibraryPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/LibraryPage.tsx) / [`embyClient.ts`](file:///d:/wade/code/emby-tauri-player/src/api/embyClient.ts))**：
-  - 通过 `getLibraryItems` 与 `getLibraryGenres` 支持 `/library/:libraryId` 吸顶筛选栏（观看状态、排序、流派、年份、库内搜索）与 `IntersectionObserver` 无限滚动分页（每页 48 条）。
+### 8. CI/CD 发版、缓存与自动更新 ([`release.yml`](file:///d:/wade/code/emby-tauri-player/.github/workflows/release.yml) / [`ci.yml`](file:///d:/wade/code/emby-tauri-player/.github/workflows/ci.yml) / [`useUpdaterStore.ts`](file:///d:/wade/code/emby-tauri-player/src/stores/useUpdaterStore.ts))
+- **单一版本源与 `main` 发版**：[`tauri.conf.json`](file:///d:/wade/code/emby-tauri-player/src-tauri/tauri.conf.json) 用 `"version": "../package.json"`，前端注入 `__APP_VERSION__`。`release.yml` 仅监听 `push: branches: [main]` 与 `workflow_dispatch`（禁设 `push.tags`），由 `build-frontend` 检查远端 `v<version>` Tag 决定 `should_release`。仅 `github.ref == 'refs/heads/main'` 写缓存（`save-if`），禁 `sccache` + `rust-cache` 叠加超 10 GB 配额；`ci.yml` 仅手动触发。
+- **多端编译避坑**：`build-frontend` 单次编前端并预创建 `release_id`（防 4 端并发 422）；矩阵用 [`tauri.ci.conf.json`](file:///d:/wade/code/emby-tauri-player/src-tauri/tauri.ci.conf.json) 与预编译 `cargo-tauri`；Windows NSIS 在 `ubuntu-24.04` 用 `cargo-xwin`（**切勿调用 `llvm-rc --version`**）；macOS Intel 在 `macos-15` 交叉编译，仅 `mpv-bundle` 失效时拉起 `prepare-macos-x64-mpv`（**切勿 `rm -f src-tauri/lib/libmpv*.dylib`** 误删 wrapper），改打包脚本须递增 `mpv_cache_version`；`finalize-release` 须显式写 `if: always() && ...` 防上游 `skipped` 误跳过。
+- **自动更新与双通道清单**：`tauri.ci.conf.json` 默认 `"createUpdaterArtifacts": false`，校验 `TAURI_SIGNING_PRIVATE_KEY` 非空后动态开启；矩阵 `includeUpdaterJson: false`，macOS 须 `--bundles app,dmg`；`finalize-release` 清理旧资产豁免 `latest.json`/`*.sig`/`*.tar.gz`，调用 [`generate-updater-manifest.mjs`](file:///d:/wade/code/emby-tauri-player/scripts/generate-updater-manifest.mjs) 与 [`generate-release-notes.mjs`](file:///d:/wade/code/emby-tauri-player/scripts/generate-release-notes.mjs) 推送清单至 `updater-manifests` 分支；`Cargo.toml` 保留 `updater-reqwest-socks` 统一 `reqwest 0.13` SOCKS 特性；发版前优先在 [`CHANGELOG.md`](file:///d:/wade/code/emby-tauri-player/CHANGELOG.md) 补中文更新亮点。

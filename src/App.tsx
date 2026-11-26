@@ -28,25 +28,32 @@ import { useSyncStore } from './stores/useSyncStore';
 import { useUpdaterStore } from './stores/useUpdaterStore';
 import { useMusicPlayerStore } from './stores/useMusicPlayerStore';
 import { useEmbyHostsStore } from './stores/useEmbyHostsStore';
+import { useThemeStore } from './stores/useThemeStore';
 import { isTauriEnvironment, registerHttpResponseObserver } from './api/http';
 import { type EmbyHostCategory } from './services/embyHostCollector';
 import { listen } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
 
 const KeepAliveTabPane: React.FC<{
   id?: string;
   active: boolean;
+  className?: string;
+  onScrollTopChange?: (scrollTop: number) => void;
   children: React.ReactNode;
-}> = ({ id, active, children }) => {
+}> = ({ id, active, className = '', onScrollTopChange, children }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const savedScrollTopRef = useRef(0);
 
   useLayoutEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-    if (active && savedScrollTopRef.current > 0) {
-      el.scrollTop = savedScrollTopRef.current;
+    if (active) {
+      if (savedScrollTopRef.current > 0) {
+        el.scrollTop = savedScrollTopRef.current;
+      }
+      onScrollTopChange?.(el.scrollTop);
     }
-  }, [active]);
+  }, [active, onScrollTopChange]);
 
   return (
     <div
@@ -54,10 +61,12 @@ const KeepAliveTabPane: React.FC<{
       ref={containerRef}
       onScroll={(e) => {
         if (active) {
-          savedScrollTopRef.current = e.currentTarget.scrollTop;
+          const top = e.currentTarget.scrollTop;
+          savedScrollTopRef.current = top;
+          onScrollTopChange?.(top);
         }
       }}
-      className={active ? 'h-full w-full overflow-y-auto overflow-x-hidden' : 'hidden'}
+      className={active ? `h-full w-full overflow-y-auto overflow-x-hidden ${className}` : 'hidden'}
     >
       {children}
     </div>
@@ -72,6 +81,15 @@ export const App: React.FC = () => {
   const serversCount = useAuthStore((s) => s.servers.length);
   const hasMusicTrack = useMusicPlayerStore((s) => Boolean(s.currentTrack));
   const activeSpace = useMusicPlayerStore((s) => s.activeSpace);
+  const resolvedTheme = useThemeStore((s) => s.resolvedTheme);
+  const nativeGlass = useThemeStore((s) => s.nativeGlass);
+
+  // 同步原生窗口毛玻璃材质（播放页强制关闭，确保 libmpv 穿透零干扰）
+  useEffect(() => {
+    if (!isTauriEnvironment()) return;
+    const mode = isPlayerPage || !nativeGlass ? 'off' : resolvedTheme;
+    invoke('set_window_glass_effect', { mode }).catch(() => {});
+  }, [isPlayerPage, nativeGlass, resolvedTheme]);
 
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
     try {
@@ -318,28 +336,53 @@ export const App: React.FC = () => {
   }, []);
 
   const showMusicDock = hasMusicTrack && !isPlayerPage && !isLoginPage;
+  const isDetailPage = location.pathname.startsWith('/detail/');
+  const [homeScrollTop, setHomeScrollTop] = useState(0);
+  const [detailScrollTop, setDetailScrollTop] = useState(0);
+  const detailScrollRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    setDetailScrollTop(0);
+    if (detailScrollRef.current) {
+      detailScrollRef.current.scrollTop = 0;
+    }
+  }, [location.pathname]);
+
+  const hasHomeSpotlight = useMediaStore((s) => {
+    if (s.resumeItems.length > 0 || s.nextUpItems.length > 0 || s.recentlyPlayedItems.length > 0) {
+      return true;
+    }
+    return Object.values(s.latestMap).some((list) => list.length > 0);
+  });
+
+  const isHeroRoute = (isHomeTab && serversCount > 0 && hasHomeSpotlight) || isDetailPage;
+  const activeHeroScrollTop = isHomeTab ? homeScrollTop : detailScrollTop;
+  const heroScrollProgress = isHeroRoute
+    ? Math.min(1, Math.max(0, activeHeroScrollTop / 200))
+    : 1;
 
   return (
     <ErrorBoundary fallbackTitle="应用发生意外错误">
       <div
-        className={`h-screen w-screen ${
-          isPlayerPage ? 'bg-transparent' : 'bg-[#0B0E17]'
+        className={`relative h-screen w-screen ${
+          isPlayerPage ? 'bg-transparent' : 'nocta-theme-scope bg-canvas'
         } select-none overflow-hidden flex flex-col`}
       >
         {/* 全局音乐音频后台控制器 */}
         <MusicAudioController />
 
-        {/* Native-style TitleBar for non-player routes */}
+        {/* Native-style Floating TitleBar for non-player routes */}
         {!isPlayerPage && (
           <TitleBar
-            title="Nocta · 夜幕"
+            title="Nocta · 诺塔"
             sidebarCollapsed={sidebarCollapsed}
             onToggleSidebar={handleToggleSidebar}
+            scrollProgress={heroScrollProgress}
           />
         )}
 
-        {/* Frameless Shell Body */}
-        <div className="flex-1 min-h-0 w-full flex overflow-hidden">
+        {/* Frameless Shell Body (full-bleed from y=0) */}
+        <div className="relative z-10 flex-1 min-h-0 w-full flex overflow-hidden">
           {/* Desktop Left Sidebar (Non-player & Non-login routes) */}
           {!isPlayerPage && !isLoginPage && (
             <Sidebar collapsed={sidebarCollapsed} onToggleCollapse={handleToggleSidebar} />
@@ -349,29 +392,45 @@ export const App: React.FC = () => {
           <main
             id="main-scroll-container"
             className={`flex-1 min-h-0 w-full overflow-hidden flex flex-col ${
-              isPlayerPage ? 'bg-transparent' : 'bg-[#0B0E17]'
+              isPlayerPage ? 'bg-transparent' : 'bg-canvas'
             }`}
           >
             <div className="flex-1 min-h-0 w-full overflow-hidden">
               {!isLoginPage && serversCount > 0 && (
                 <>
                   {visitedTabs.home && (
-                    <KeepAliveTabPane id="home-scroll-container" active={isHomeTab}>
+                    <KeepAliveTabPane
+                      id="home-scroll-container"
+                      active={isHomeTab}
+                      onScrollTopChange={setHomeScrollTop}
+                    >
                       <HomePage isActive={isHomeTab} />
                     </KeepAliveTabPane>
                   )}
                   {visitedTabs.continue && (
-                    <KeepAliveTabPane id="continue-scroll-container" active={isContinueTab}>
+                    <KeepAliveTabPane
+                      id="continue-scroll-container"
+                      active={isContinueTab}
+                      className="pt-12"
+                    >
                       <ContinueWatchingPage isActive={isContinueTab} />
                     </KeepAliveTabPane>
                   )}
                   {visitedTabs.search && (
-                    <KeepAliveTabPane id="search-scroll-container" active={isSearchTab}>
+                    <KeepAliveTabPane
+                      id="search-scroll-container"
+                      active={isSearchTab}
+                      className="pt-12"
+                    >
                       <SearchPage isActive={isSearchTab} />
                     </KeepAliveTabPane>
                   )}
                   {visitedTabs.musicHome && (
-                    <KeepAliveTabPane id="music-home-scroll-container" active={isMusicHomeTab}>
+                    <KeepAliveTabPane
+                      id="music-home-scroll-container"
+                      active={isMusicHomeTab}
+                      className="pt-12"
+                    >
                       <MusicHomePage isActive={isMusicHomeTab} />
                     </KeepAliveTabPane>
                   )}
@@ -379,12 +438,20 @@ export const App: React.FC = () => {
               )}
 
               <div
+                ref={detailScrollRef}
+                onScroll={(e) => {
+                  if (isDetailPage) {
+                    setDetailScrollTop(e.currentTarget.scrollTop);
+                  }
+                }}
                 className={
                   isPrimaryTab
                     ? 'hidden'
                     : isPlayerPage
                     ? 'h-full w-full overflow-hidden bg-transparent'
-                    : 'h-full w-full overflow-y-auto overflow-x-hidden'
+                    : isDetailPage
+                    ? 'h-full w-full overflow-y-auto overflow-x-hidden'
+                    : 'h-full w-full overflow-y-auto overflow-x-hidden pt-12'
                 }
               >
                 <Routes>
@@ -432,7 +499,9 @@ export const App: React.FC = () => {
         {/* 沉浸式全屏正在播放浮层与队列抽屉 */}
         {!isPlayerPage && !isLoginPage && (
           <>
-            <NowPlayingOverlay />
+            <div className="preserve-dark">
+              <NowPlayingOverlay />
+            </div>
             <MusicQueueDrawer />
           </>
         )}

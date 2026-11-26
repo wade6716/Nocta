@@ -1,6 +1,6 @@
 # 更新日志 (Changelog)
 
-本文件记录 **Nocta · 夜幕** 各正式版本与里程碑的主要功能变更，并在发版时由 [generate-release-notes.mjs](scripts/generate-release-notes.mjs) 自动同步至 GitHub Release 说明与客户端内「检查更新」弹窗。
+本文件记录 **Nocta · 诺塔** 各正式版本与里程碑的主要功能变更，并在发版时由 [generate-release-notes.mjs](scripts/generate-release-notes.mjs) 自动同步至 GitHub Release 说明与客户端内「检查更新」弹窗。
 
 ## [v0.3.3] - 2026-11-26
 

@@ -1421,7 +1421,7 @@ export const PlayerPage: React.FC = () => {
     applyPlaybackPaused(true, false);
   }, [applyPlaybackPaused]);
 
-  const mediaSessionTitle = item?.Name || 'Nocta · 夜幕';
+  const mediaSessionTitle = item?.Name || 'Nocta · 诺塔';
   const mediaSessionSubtitle = item?.SeriesName
     ? `${item.SeriesName} · 第 ${item.IndexNumber || 1} 集`
     : item?.ProductionYear

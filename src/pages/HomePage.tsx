@@ -1,11 +1,6 @@
 import React, { useEffect, useState, useCallback, useLayoutEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import {
-  Film,
-  Tv,
-  Play,
-  TriangleAlert,
-} from 'lucide-react';
+import { TriangleAlert } from 'lucide-react';
 import { useAuthStore, SavedServer } from '../stores/useAuthStore';
 import { useMediaStore } from '../stores/useMediaStore';
 import { usePlayerStore } from '../stores/usePlayerStore';
@@ -31,34 +26,56 @@ import { MediaCard } from '../components/media/MediaCard';
 import { HeroCarousel } from '../components/media/HeroCarousel';
 import { MediaRail } from '../components/media/MediaRail';
 
+function scoreHeroCandidate(item: EmbyItem): number {
+  let score = 0;
+  if (
+    item.BackdropImageTags?.length ||
+    item.ImageTags?.Backdrop ||
+    item.ParentBackdropImageTags?.length
+  ) {
+    score += 40;
+  }
+  if (item.ImageTags?.Logo || item.ParentLogoImageTag) {
+    score += 25;
+  }
+  if (item.Overview && item.Overview.trim().length > 12) {
+    score += 20;
+  }
+  if (typeof item.CommunityRating === 'number' && item.CommunityRating >= 7.0) {
+    score += 15;
+  } else if (typeof item.CommunityRating === 'number' && item.CommunityRating > 0) {
+    score += 5;
+  }
+  if ((item.ProductionYear || item.PremiereDate) && item.Genres?.length) {
+    score += 10;
+  }
+  return score;
+}
+
 const HomeSkeleton: React.FC = () => (
   <div className="w-full select-none animate-pulse">
-    <div className="w-full h-[440px] md:h-[490px] xl:h-[540px] bg-white/[0.03] relative">
-      <div className="absolute bottom-14 left-6 lg:left-10 space-y-4 max-w-xl">
-        <div className="flex space-x-2">
-          <div className="h-5 w-16 rounded-md bg-white/[0.08]" />
-          <div className="h-5 w-12 rounded-md bg-white/[0.06]" />
-          <div className="h-5 w-16 rounded-md bg-white/[0.06]" />
-        </div>
-        <div className="h-10 w-72 rounded-lg bg-white/[0.08]" />
-        <div className="h-4 w-96 rounded bg-white/[0.05]" />
+    <div className="w-full h-[clamp(400px,58vh,560px)] bg-black/[0.06] dark:bg-white/[0.04] relative">
+      <div className="absolute bottom-12 left-8 lg:left-12 space-y-4 max-w-xl">
+        <div className="h-3.5 w-16 rounded bg-black/10 dark:bg-white/10" />
+        <div className="h-10 w-72 rounded-lg bg-black/10 dark:bg-white/10" />
+        <div className="h-4 w-96 rounded bg-black/[0.07] dark:bg-white/[0.06]" />
         <div className="flex space-x-3 pt-2">
-          <div className="h-10 w-32 rounded-full bg-white/[0.1]" />
-          <div className="h-10 w-28 rounded-full bg-white/[0.06]" />
+          <div className="h-10 w-32 rounded-full bg-black/15 dark:bg-white/15" />
+          <div className="h-10 w-28 rounded-full bg-black/[0.08] dark:bg-white/[0.08]" />
         </div>
       </div>
     </div>
 
-    <div className="px-6 lg:px-10 py-8 space-y-10">
+    <div className="px-8 lg:px-12 py-8 space-y-11">
       {[0, 1].map((row) => (
         <div key={row} className="space-y-4">
-          <div className="h-6 w-36 rounded-md bg-white/[0.07]" />
+          <div className="h-6 w-36 rounded-md bg-black/[0.08] dark:bg-white/[0.07]" />
           <div className="flex gap-4 overflow-hidden">
             {Array.from({ length: 7 }).map((_, idx) => (
               <div key={idx} className="w-[152px] sm:w-[168px] lg:w-[180px] flex-shrink-0 space-y-2.5">
-                <div className="aspect-[2/3] rounded-xl bg-white/[0.05]" />
-                <div className="h-4 w-4/5 rounded bg-white/[0.06]" />
-                <div className="h-3 w-1/2 rounded bg-white/[0.04]" />
+                <div className="aspect-[2/3] rounded-[14px] bg-black/[0.06] dark:bg-white/[0.05]" />
+                <div className="h-4 w-4/5 rounded bg-black/[0.07] dark:bg-white/[0.06]" />
+                <div className="h-3 w-1/2 rounded bg-black/[0.05] dark:bg-white/[0.04]" />
               </div>
             ))}
           </div>
@@ -67,28 +84,6 @@ const HomeSkeleton: React.FC = () => (
     </div>
   </div>
 );
-
-function renderViewCountBadge(counts?: ViewCounts) {
-  if (!counts) return null;
-  const parts: string[] = [];
-  if (typeof counts.movieCount === 'number' && counts.movieCount > 0) {
-    parts.push(`${counts.movieCount.toLocaleString()} 部电影`);
-  }
-  if (typeof counts.seriesCount === 'number' && counts.seriesCount > 0) {
-    if (typeof counts.episodeCount === 'number' && counts.episodeCount > 0) {
-      parts.push(`${counts.seriesCount.toLocaleString()} 部剧集 · ${counts.episodeCount.toLocaleString()} 集`);
-    } else {
-      parts.push(`${counts.seriesCount.toLocaleString()} 部剧集`);
-    }
-  }
-  if (parts.length === 0) return null;
-
-  return (
-    <span className="text-[11px] px-2 py-0.5 rounded-full bg-white/5 border border-white/10 text-gray-400 font-normal tracking-normal select-none">
-      {parts.join(' · ')}
-    </span>
-  );
-}
 
 const VIEW_COUNTS_TTL_MS = 5 * 60 * 1000;
 
@@ -112,7 +107,6 @@ export const HomePage: React.FC<{ isActive?: boolean }> = ({ isActive = true }) 
     recentlyPlayedItems,
     views,
     latestMap,
-    viewCounts,
     playbackDirtyRevision,
     isLoaded,
     isRefreshing,
@@ -395,7 +389,7 @@ export const HomePage: React.FC<{ isActive?: boolean }> = ({ isActive = true }) 
     return mergeMediaBySeries(videoOnly);
   }, [resumeItems, nextUpItems, recentlyPlayedItems]);
 
-  // Hero Spotlight 轮播候选（最多 6 部：优先续看首位，再从各分类最新入库中轮流挑选）
+  // Hero Spotlight 轮播候选（最多 6 部：优先续看首位，其余按视觉质量评分择优挑选）
   const spotlightItems = useMemo(() => {
     const picked: EmbyItem[] = [];
     const seenIds = new Set<string>();
@@ -411,25 +405,25 @@ export const HomePage: React.FC<{ isActive?: boolean }> = ({ isActive = true }) 
     }
 
     for (const v of views) {
-      const list = latestMap[v.Id] || [];
+      if (picked.length >= 6) break;
+      const list = [...(latestMap[v.Id] || [])].sort(
+        (a, b) => scoreHeroCandidate(b) - scoreHeroCandidate(a)
+      );
       for (const item of list) {
-        if (picked.length >= 6) break;
         if (item.BackdropImageTags?.length || item.ImageTags?.Backdrop || item.ImageTags?.Primary) {
           tryPush(item);
           break;
         }
       }
-      if (picked.length >= 6) break;
     }
 
     if (picked.length < 6) {
-      for (const v of views) {
-        const list = latestMap[v.Id] || [];
-        for (const item of list) {
-          if (picked.length >= 6) break;
-          tryPush(item);
-        }
+      const globalRanked = views
+        .flatMap((v) => latestMap[v.Id] || [])
+        .sort((a, b) => scoreHeroCandidate(b) - scoreHeroCandidate(a));
+      for (const item of globalRanked) {
         if (picked.length >= 6) break;
+        tryPush(item);
       }
     }
 
@@ -440,7 +434,11 @@ export const HomePage: React.FC<{ isActive?: boolean }> = ({ isActive = true }) 
     <div className="w-full select-none">
       {/* 当前服务器上次连接失败：明确提示，避免媒体库空白被误认为无内容 */}
       {currentServer && currentServer.lastTestOk === false && (
-        <div className="mx-6 lg:mx-10 mt-4 mb-2 p-3.5 bg-amber-500/10 border border-amber-500/25 rounded-xl flex items-start justify-between space-x-3">
+        <div
+          className={`mx-8 lg:mx-12 ${
+            spotlightItems.length > 0 ? 'mt-16' : 'mt-16'
+          } mb-2 p-3.5 bg-amber-500/10 border border-amber-500/25 rounded-xl flex items-start justify-between space-x-3`}
+        >
           <div className="flex items-start space-x-2.5 text-xs text-amber-200/90 leading-relaxed">
             <TriangleAlert className="w-4 h-4 flex-shrink-0 mt-0.5" />
             <span>
@@ -477,20 +475,14 @@ export const HomePage: React.FC<{ isActive?: boolean }> = ({ isActive = true }) 
 
           {/* 2. 影视墙横向发现轨道区 */}
           <div
-            className={`relative z-10 px-6 lg:px-10 pb-12 space-y-10 ${
-              spotlightItems.length > 0 ? '-mt-6' : 'pt-6'
+            className={`relative z-10 px-8 lg:px-12 pb-16 space-y-9 ${
+              spotlightItems.length > 0 ? 'pt-7' : 'pt-20'
             }`}
           >
             {/* 黄金首行：继续观看 (16:9 横版剧照轨道) */}
             {continueWatchingItems.length > 0 && currentServer && (
               <MediaRail
                 title="继续观看"
-                icon={<Play className="w-4 h-4 text-[#38BDF8] fill-[#38BDF8]" />}
-                badge={
-                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-white/5 border border-white/10 text-gray-400 font-normal tabular-nums">
-                    {continueWatchingItems.length}
-                  </span>
-                }
                 actionLabel="查看全部"
                 onActionClick={() => navigate('/continue-watching')}
               >
@@ -500,13 +492,26 @@ export const HomePage: React.FC<{ isActive?: boolean }> = ({ isActive = true }) 
                   const remainMin =
                     totalSec > posSec ? Math.max(1, Math.ceil((totalSec - posSec) / 60)) : 0;
 
+                  const epPrefix =
+                    item.ParentIndexNumber !== undefined && item.IndexNumber !== undefined
+                      ? `S${item.ParentIndexNumber}E${item.IndexNumber}`
+                      : item.IndexNumber !== undefined
+                      ? `第 ${item.IndexNumber} 集`
+                      : '';
+                  const continueSubtitle = epPrefix
+                    ? `${epPrefix}${item.Name ? ` · ${item.Name}` : ''}`
+                    : item.ProductionYear
+                    ? String(item.ProductionYear)
+                    : undefined;
+
                   return (
-                    <div key={item.Id} className="w-[250px] sm:w-[280px] flex-shrink-0">
+                    <div key={item.Id} className="w-[296px] sm:w-[324px] lg:w-[348px] flex-shrink-0">
                       <MediaCard
                         item={item}
                         serverUrl={currentServer.url}
                         onClick={handleSpotlightPlay}
                         aspectRatio="backdrop"
+                        subtitle={continueSubtitle}
                         remainingLabel={remainMin > 0 ? `剩余 ${remainMin} 分钟` : undefined}
                       />
                     </div>
@@ -516,42 +521,44 @@ export const HomePage: React.FC<{ isActive?: boolean }> = ({ isActive = true }) 
             )}
 
             {/* 各媒体库分类单行横滑轨道 (2:3 竖版海报) */}
-            {views.map((v) => {
-              const items = latestMap[v.Id] || [];
-              if (items.length === 0) return null;
+            {views
+              .filter((v) => (latestMap[v.Id] || []).length > 0)
+              .map((v, visibleIdx) => {
+                const items = latestMap[v.Id] || [];
+                const showDivider = continueWatchingItems.length > 0 || visibleIdx > 0;
 
-              return (
-                <div key={v.Id} id={`view-${v.Id}`}>
-                  <MediaRail
-                    title={v.Name}
-                    icon={
-                      v.CollectionType === 'tvshows' ? (
-                        <Tv className="w-4 h-4 text-[#38BDF8]" />
-                      ) : (
-                        <Film className="w-4 h-4 text-[#38BDF8]" />
-                      )
+                return (
+                  <div
+                    key={v.Id}
+                    id={`view-${v.Id}`}
+                    className={
+                      showDivider
+                        ? 'pt-9 border-t border-black/[0.06] dark:border-white/[0.07]'
+                        : ''
                     }
-                    badge={renderViewCountBadge(viewCounts[v.Id])}
-                    actionLabel="查看全部"
-                    onActionClick={() => navigate(`/library/${v.Id}`)}
                   >
-                    {items.map((item) => (
-                      <div
-                        key={item.Id}
-                        className="w-[148px] sm:w-[164px] lg:w-[176px] flex-shrink-0"
-                      >
-                        <MediaCard
-                          item={item}
-                          serverUrl={currentServer!.url}
-                          onClick={handleCardClick}
-                          aspectRatio="poster"
-                        />
-                      </div>
-                    ))}
-                  </MediaRail>
-                </div>
-              );
-            })}
+                    <MediaRail
+                      title={v.Name}
+                      actionLabel="查看全部"
+                      onActionClick={() => navigate(`/library/${v.Id}`)}
+                    >
+                      {items.map((item) => (
+                        <div
+                          key={item.Id}
+                          className="w-[164px] sm:w-[178px] lg:w-[192px] flex-shrink-0"
+                        >
+                          <MediaCard
+                            item={item}
+                            serverUrl={currentServer!.url}
+                            onClick={handleCardClick}
+                            aspectRatio="poster"
+                          />
+                        </div>
+                      ))}
+                    </MediaRail>
+                  </div>
+                );
+              })}
           </div>
         </div>
       )}

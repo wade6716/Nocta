@@ -44,11 +44,15 @@ import {
   RotateCcw,
   Sparkles,
   Headphones,
+  Sun,
+  Moon,
+  Monitor,
 } from 'lucide-react';
 import { useAuthStore, SavedServer } from '../stores/useAuthStore';
 import { useDanmuStore, DanmuServerEntry } from '../stores/useDanmuStore';
 import { usePlayerStore, DanmakuColorMode } from '../stores/usePlayerStore';
 import { useEmbyHostsStore } from '../stores/useEmbyHostsStore';
+import { useThemeStore, ThemeMode } from '../stores/useThemeStore';
 import { EmbyHostsModal } from '../components/settings/EmbyHostsModal';
 import {
   BUFFER_DURATION_PRESETS_SEC,
@@ -90,17 +94,17 @@ import {
 import { ProxyConfig, ProxyType } from '../api/http';
 import { ReleaseNotesContent } from '../components/common/UpdateBannerModal';
 
-type TabKey = 'servers' | 'danmu' | 'danmaku_pref' | 'playback' | 'network' | 'sync' | 'about';
+type TabKey = 'appearance' | 'servers' | 'danmu' | 'danmaku_pref' | 'playback' | 'network' | 'sync' | 'about';
 
 export const SettingsPage: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const initialTab = (searchParams.get('tab') as TabKey) || 'servers';
+  const initialTab = (searchParams.get('tab') as TabKey) || 'appearance';
   const [activeTab, setActiveTab] = useState<TabKey>(initialTab);
 
   useEffect(() => {
     const tabParam = searchParams.get('tab') as TabKey;
-    if (tabParam && ['servers', 'danmu', 'danmaku_pref', 'playback', 'network', 'sync', 'about'].includes(tabParam)) {
+    if (tabParam && ['appearance', 'servers', 'danmu', 'danmaku_pref', 'playback', 'network', 'sync', 'about'].includes(tabParam)) {
       setActiveTab(tabParam);
     }
   }, [searchParams]);
@@ -127,6 +131,11 @@ export const SettingsPage: React.FC = () => {
   const [hostsModalServer, setHostsModalServer] = useState<SavedServer | null>(null);
   const updater = useUpdaterStore();
   const hasPendingUpdateBadge = useUpdaterStore(hasUnignoredUpdate);
+  const themeMode = useThemeStore((s) => s.mode);
+  const resolvedTheme = useThemeStore((s) => s.resolvedTheme);
+  const setThemeMode = useThemeStore((s) => s.setMode);
+  const nativeGlass = useThemeStore((s) => s.nativeGlass);
+  const setNativeGlass = useThemeStore((s) => s.setNativeGlass);
 
   const {
     servers: danmuServers,
@@ -669,6 +678,7 @@ export const SettingsPage: React.FC = () => {
         {/* 左侧导航栏 */}
         <div className="w-full md:w-60 flex-shrink-0 space-y-1">
           {[
+            { id: 'appearance', label: '外观与主题', icon: Palette },
             { id: 'servers', label: 'Emby 服务器', icon: Server },
             { id: 'danmu', label: '弹幕 API 节点', icon: MessagesSquare },
             { id: 'danmaku_pref', label: '弹幕偏好', icon: Sliders },
@@ -706,7 +716,143 @@ export const SettingsPage: React.FC = () => {
         </div>
 
         {/* 右侧面板容器 */}
-        <div className="flex-1 bg-surface/70 border border-white/10 rounded-2xl p-6 min-h-[520px]">
+        <div className="flex-1 glass-surface rounded-2xl p-6 min-h-[520px]">
+          {/* 0. 外观与主题设置面板 */}
+          {activeTab === 'appearance' && (
+            <div className="space-y-6">
+              <div>
+                <h2 className="text-lg font-bold text-white flex items-center space-x-2">
+                  <Palette className="w-5 h-5 text-primary" />
+                  <span>外观与玻璃材质</span>
+                </h2>
+                <p className="text-xs text-gray-400 mt-1">
+                  自由切换亮色 / 暗色 / 跟随系统外观，支持 macOS 液态毛玻璃与原生桌面透视质感（视频播放页始终保持暗色纯净画布）。
+                </p>
+              </div>
+
+              {/* 三选一主题模式卡片 */}
+              <div className="space-y-3">
+                <div className="text-xs font-semibold text-gray-300">主题模式</div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  {(
+                    [
+                      {
+                        id: 'light',
+                        title: '亮色模式',
+                        desc: 'Apple 中性银白 #F5F5F7 + 高对比墨黑',
+                        icon: Sun,
+                        previewBg: 'bg-gradient-to-br from-[#F5F5F7] via-[#FFFFFF] to-[#EAEAEF]',
+                        previewCard: 'bg-white/95 border-black/10',
+                        previewBar: 'bg-[#1D1D1F]',
+                      },
+                      {
+                        id: 'dark',
+                        title: '暗色模式',
+                        desc: '深邃影院黑 #0A0A0C + 纯白对比沉浸',
+                        icon: Moon,
+                        previewBg: 'bg-gradient-to-br from-[#0A0A0C] via-[#161618] to-[#0A0A0C]',
+                        previewCard: 'bg-[#1C1C1E]/95 border-white/15',
+                        previewBar: 'bg-[#F5F5F7]',
+                      },
+                      {
+                        id: 'system',
+                        title: '跟随系统',
+                        desc: `自动匹配系统偏好（当前：${resolvedTheme === 'light' ? '亮色' : '暗色'}）`,
+                        icon: Monitor,
+                        previewBg:
+                          'bg-gradient-to-r from-[#F5F5F7] via-[#F5F5F7] 50% to-[#0A0A0C] 50%',
+                        previewCard: 'bg-white/50 border-black/15',
+                        previewBar: 'bg-[#1D1D1F]',
+                      },
+                    ] as Array<{
+                      id: ThemeMode;
+                      title: string;
+                      desc: string;
+                      icon: typeof Sun;
+                      previewBg: string;
+                      previewCard: string;
+                      previewBar: string;
+                    }>
+                  ).map((opt) => {
+                    const Icon = opt.icon;
+                    const isSelected = themeMode === opt.id;
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => setThemeMode(opt.id)}
+                        className={`text-left p-3.5 rounded-2xl border transition-all cursor-pointer flex flex-col gap-3 ${
+                          isSelected
+                            ? 'bg-primary/15 border-primary ring-2 ring-primary/25 shadow-lg shadow-primary/10'
+                            : 'bg-white/[0.04] border-white/[0.08] hover:bg-white/[0.08] hover:border-white/20'
+                        }`}
+                      >
+                        <div
+                          className={`preserve-dark w-full h-20 rounded-xl border border-black/10 dark:border-white/10 overflow-hidden p-2.5 flex flex-col justify-between ${opt.previewBg}`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className={`w-8 h-1.5 rounded-full ${opt.previewBar}`} />
+                            <span className="w-2 h-2 rounded-full bg-emerald-400" />
+                          </div>
+                          <div className={`h-8 rounded-lg border px-2 flex items-center gap-1.5 ${opt.previewCard}`}>
+                            <span className="w-4 h-4 rounded bg-sky-400/40" />
+                            <span className="w-12 h-1.5 rounded-full bg-slate-400/50" />
+                          </div>
+                        </div>
+
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <div className="flex items-center gap-1.5 text-sm font-bold text-white">
+                              <Icon className="w-4 h-4 text-primary" />
+                              <span>{opt.title}</span>
+                            </div>
+                            <p className="text-[11px] text-gray-400 mt-1 leading-relaxed">
+                              {opt.desc}
+                            </p>
+                          </div>
+                          {isSelected && (
+                            <span className="w-5 h-5 rounded-full bg-primary text-white flex items-center justify-center shrink-0">
+                              <Check className="w-3 h-3 stroke-[3]" />
+                            </span>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* 系统桌面透视毛玻璃开关 */}
+              <div className="p-4 rounded-2xl bg-white/[0.04] border border-white/[0.08] flex items-center justify-between gap-4">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-white">
+                    <Sparkles className="w-4 h-4 text-primary" />
+                    <span>系统桌面透视毛玻璃</span>
+                  </div>
+                  <p className="text-xs text-gray-400 leading-relaxed">
+                    在 macOS 上启用原生 NSVisualEffectView 透视材质、Windows 11 上启用 Acrylic 亚克力透明，令侧边栏与顶栏柔和透出桌面壁纸；进入视频播放页时自动关闭以保障硬件硬解画质与性能。
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={nativeGlass}
+                  onClick={() => setNativeGlass(!nativeGlass)}
+                  className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                    nativeGlass ? 'bg-primary' : 'bg-white/20'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                      nativeGlass ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* 1. Emby 服务器设置面板 */}
           {activeTab === 'servers' && (
             <div className="space-y-6">
@@ -3005,7 +3151,7 @@ export const SettingsPage: React.FC = () => {
                   />
                   <div>
                     <h2 className="text-xl font-bold text-white flex flex-wrap items-center gap-2">
-                      <span>Nocta · 夜幕</span>
+                      <span>Nocta · 诺塔</span>
                       <span className="text-xs px-2 py-0.5 rounded-full bg-white/10 text-gray-200 font-mono font-normal">
                         v{updater.runtimeVersion}
                       </span>
@@ -3016,7 +3162,7 @@ export const SettingsPage: React.FC = () => {
                       )}
                     </h2>
                     <p className="text-xs text-gray-400 mt-1">
-                      沉浸式暗色私人影院客户端 · 深度集成 Emby/Jellyfin 与高性能全网弹幕
+                      沉浸式私人影院客户端 · 深度集成 Emby/Jellyfin 与高性能全网弹幕
                     </p>
                     <p className="text-[11px] text-gray-500 mt-1 flex items-center space-x-1.5">
                       <Clock className="w-3 h-3" />

@@ -218,7 +218,7 @@ export function parseCommitsToMarkdown(commits, options = {}) {
   let markdown =
     sections.length > 0
       ? sections.join('\n\n')
-      : `Nocta · 夜幕 ${options.currentTag || ''} 版本更新发布。`.trim();
+      : `Nocta · 诺塔 ${options.currentTag || ''} 版本更新发布。`.trim();
 
   if (options.includeCompareLink && options.repo && options.prevTag && options.currentTag) {
     markdown += `\n\n**完整变更对比**：https://github.com/${options.repo}/compare/${options.prevTag}...${options.currentTag}`;

@@ -1,7 +1,7 @@
 <div align="center">
   <img src="public/app-icon.svg" width="128" height="128" alt="Nocta Logo" />
-  <h1>Nocta · 夜幕</h1>
-  <p><strong>暗色沉浸式私人影院 · 银幕与弹幕的双重盛宴</strong></p>
+  <h1>Nocta · 诺塔</h1>
+  <p><strong>沉浸式私人影院 · 银幕与弹幕的双重盛宴</strong></p>
   <p>基于 Tauri 2.0 + Rust + libmpv 构建的现代化 Emby / Jellyfin 桌面客户端，集成 4K HDR 零转码硬解、全网弹幕彩色渲染、纯内存下一集预加载与端到端加密多端同步</p>
 
   <p>
@@ -20,9 +20,9 @@
 
 ## 📖 简介 (Introduction)
 
-**Nocta**（/ˈnɒktə/，拉丁语 *Nox*，意为“夜晚”；中文名 **“夜幕”**）是一款专为追求极致视听与沉浸观影体验的影迷打造的开源跨平台桌面播放器客户端。
+**Nocta**（/ˈnɒktə/，中文名 **“诺塔”**）是一款专为追求极致视听与沉浸观影体验的影迷打造的开源跨平台桌面播放器客户端。
 
-中文“夜幕”一语双关——既是专为深夜观影调校的暗色私人影院，又将**“银幕”与“弹幕”**深度融合。相比传统基于浏览器的 Emby/Jellyfin 客户端，Nocta 通过 **Tauri 2.0 + Rust + `libmpv` 双层透明穿透视窗**实现了真正的全格式零转码硬件直解，并将高帧率 Canvas 弹幕、多服务器跨库搜索、纯内存剧集预加载与多端加密同步整合进轻量极速的原生桌面体验中。
+Nocta 支持明暗双主题自由切换，将**“银幕”与“弹幕”**深度融合。相比传统基于浏览器的 Emby/Jellyfin 客户端，Nocta 通过 **Tauri 2.0 + Rust + `libmpv` 双层透明穿透视窗**实现了真正的全格式零转码硬件直解，并将高帧率 Canvas 弹幕、多服务器跨库搜索、纯内存剧集预加载与多端加密同步整合进轻量极速的原生桌面体验中。
 
 ---
 
@@ -69,7 +69,7 @@
 | **桌面壳层与后端** | [Tauri 2.0](https://tauri.app/) + [Rust](https://www.rust-lang.org/) | 原生窗口穿透、纯内存预加载、L4 SOCKS5 隧道、图片代理、`WNet` SMB、自动更新 |
 | **前端框架** | [React 19](https://react.dev/) + [TypeScript 5](https://www.typescriptlang.org/) + React Router 7 | 强类型组件架构与客户端路由 |
 | **构建工具** | [Vite 6](https://vitejs.dev/) + [pnpm](https://pnpm.io/) | 极速开发热更新与单一版本号注入 |
-| **界面样式** | [TailwindCSS 3](https://tailwindcss.com/) + [Lucide Icons](https://lucide.dev/) | 暗色沉浸主题、毛玻璃 HUD 与自适应布局 |
+| **界面样式** | [TailwindCSS 3](https://tailwindcss.com/) + [Lucide Icons](https://lucide.dev/) | 明暗双主题、毛玻璃 HUD 与自适应布局 |
 | **状态与请求** | [Zustand 5](https://zustand-demo.pmnd.rs/) + TanStack Query 5 | 模块化持久化状态与统一代理请求层 |
 | **播放内核** | [`libmpv`](https://mpv.io/) (`tauri-plugin-libmpv`) + HTML5 Video | GPU 硬件硬解、双层穿透、色调映射、外挂/双语字幕与音画调校 |
 | **弹幕引擎** | [`wade6716/Danmaku`](https://github.com/wade6716/Danmaku) | 120Hz 高性能 Canvas 弹幕渲染器（支持显示区域、行数上限与防遮挡边距） |

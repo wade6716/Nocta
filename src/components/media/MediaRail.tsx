@@ -50,25 +50,30 @@ export const MediaRail: React.FC<MediaRailProps> = ({
 
   return (
     <section className="space-y-3.5 group/rail">
-      {/* 分区头部 */}
+      {/* 分区头部（Apple TV 风格：标题本身可点击，后缀轻盈右箭头） */}
       <div className="flex items-center justify-between">
-        <div className="flex items-center space-x-2.5 min-w-0">
-          {icon && <span className="flex-shrink-0">{icon}</span>}
-          <h2 className="text-lg font-bold tracking-tight text-slate-100 truncate">
-            {title}
-          </h2>
-          {badge}
-        </div>
-
-        {actionLabel && onActionClick && (
+        {onActionClick ? (
           <button
             type="button"
             onClick={onActionClick}
-            className="inline-flex items-center space-x-1 text-xs font-medium text-slate-400 hover:text-[#38BDF8] transition cursor-pointer flex-shrink-0"
+            title={actionLabel || '查看全部'}
+            className="group/title inline-flex items-center space-x-1.5 text-left cursor-pointer min-w-0"
           >
-            <span>{actionLabel}</span>
-            <ChevronRight className="w-3.5 h-3.5" />
+            {icon && <span className="flex-shrink-0">{icon}</span>}
+            <h2 className="text-[20px] sm:text-[22px] font-semibold tracking-[-0.015em] text-[#1D1D1F] dark:text-[#F5F5F7] truncate">
+              {title}
+            </h2>
+            <ChevronRight className="w-4 h-4 text-[#86868B] dark:text-white/50 group-hover/title:text-[#1D1D1F] dark:group-hover/title:text-white group-hover/title:translate-x-0.5 transition-all flex-shrink-0" />
+            {badge}
           </button>
+        ) : (
+          <div className="flex items-center space-x-2 min-w-0">
+            {icon && <span className="flex-shrink-0">{icon}</span>}
+            <h2 className="text-[20px] sm:text-[22px] font-semibold tracking-[-0.015em] text-[#1D1D1F] dark:text-[#F5F5F7] truncate">
+              {title}
+            </h2>
+            {badge}
+          </div>
         )}
       </div>
 
@@ -77,7 +82,7 @@ export const MediaRail: React.FC<MediaRailProps> = ({
         <div
           ref={scrollRef}
           onScroll={updateScrollButtons}
-          className="flex items-stretch overflow-x-auto scroll-smooth gap-4 lg:gap-5 pb-1 no-scrollbar"
+          className="flex items-stretch overflow-x-auto scroll-smooth gap-4 lg:gap-5 pb-3 no-scrollbar"
         >
           {children}
         </div>
@@ -87,7 +92,7 @@ export const MediaRail: React.FC<MediaRailProps> = ({
           <button
             type="button"
             onClick={() => scrollByPage('left')}
-            className="absolute left-2 top-[40%] -translate-y-1/2 z-20 w-9 h-9 rounded-full bg-[#0B0E17]/85 hover:bg-[#0B0E17] text-white border border-white/15 backdrop-blur-xl shadow-lg flex items-center justify-center opacity-0 group-hover/rail:opacity-100 transition-opacity cursor-pointer"
+            className="absolute left-2.5 top-[42%] -translate-y-1/2 z-20 w-9 h-9 rounded-full bg-white/92 dark:bg-[#1C1C1E]/92 text-[#1D1D1F] dark:text-white border border-black/[0.06] dark:border-white/[0.12] backdrop-blur-xl shadow-lg flex items-center justify-center opacity-0 group-hover/rail:opacity-100 hover:scale-105 transition-all cursor-pointer"
             title="向左滚动"
           >
             <ChevronLeft className="w-5 h-5" />
@@ -99,7 +104,7 @@ export const MediaRail: React.FC<MediaRailProps> = ({
           <button
             type="button"
             onClick={() => scrollByPage('right')}
-            className="absolute right-2 top-[40%] -translate-y-1/2 z-20 w-9 h-9 rounded-full bg-[#0B0E17]/85 hover:bg-[#0B0E17] text-white border border-white/15 backdrop-blur-xl shadow-lg flex items-center justify-center opacity-0 group-hover/rail:opacity-100 transition-opacity cursor-pointer"
+            className="absolute right-2.5 top-[42%] -translate-y-1/2 z-20 w-9 h-9 rounded-full bg-white/92 dark:bg-[#1C1C1E]/92 text-[#1D1D1F] dark:text-white border border-black/[0.06] dark:border-white/[0.12] backdrop-blur-xl shadow-lg flex items-center justify-center opacity-0 group-hover/rail:opacity-100 hover:scale-105 transition-all cursor-pointer"
             title="向右滚动"
           >
             <ChevronRight className="w-5 h-5" />

@@ -363,7 +363,7 @@ export const UpdateBannerModal: React.FC = () => {
                 <div>
                   <div className="flex items-center gap-2">
                     <h3 className="text-sm font-bold text-white">
-                      Nocta · 夜幕 v{updateInfo.version}
+                      Nocta · 诺塔 v{updateInfo.version}
                     </h3>
                     <span
                       className={`px-1.5 py-0.5 rounded text-[10px] font-semibold border ${

@@ -90,13 +90,13 @@ export const Sidebar: React.FC<SidebarProps> = ({ collapsed: controlledCollapsed
       aria-hidden={isCollapsed}
     >
       <aside
-        className={`absolute inset-y-0 left-0 w-56 h-full select-none bg-[#080B12]/95 backdrop-blur-2xl border-r border-white/[0.06] transition-transform duration-300 ease-out flex flex-col justify-between ${
+        className={`absolute inset-y-0 left-0 w-56 h-full pt-12 select-none glass-sidebar transition-transform duration-300 ease-out flex flex-col justify-between ${
           isCollapsed ? '-translate-x-full pointer-events-none' : 'translate-x-0'
         }`}
       >
         {/* 导航菜单列表 */}
         <div className="relative flex flex-col flex-1 min-h-0">
-          <div className="flex-1 overflow-y-auto overflow-x-hidden py-3 px-2 space-y-1 custom-scrollbar">
+          <div className="flex-1 overflow-y-auto overflow-x-hidden py-3 px-2.5 space-y-1 custom-scrollbar">
             {!isMusicSpace ? (
               <>
                 {/* 影视主导航区 */}
@@ -105,14 +105,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ collapsed: controlledCollapsed
                     onClick={() => handleNavClick('/')}
                     className={`w-full h-9 px-3 gap-3 rounded-xl flex items-center text-sm transition-all cursor-pointer relative group ${
                       currentPath === '/'
-                        ? 'bg-[#38BDF8]/15 text-[#38BDF8] font-medium'
-                        : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.04]'
+                        ? 'glass-sidebar-active text-[#1D1D1F] dark:text-white font-semibold'
+                        : 'text-[#515154] dark:text-white/65 hover:text-[#1D1D1F] dark:hover:text-white hover:bg-black/[0.04] dark:hover:bg-white/[0.06]'
                     }`}
                     title="首页发现"
                   >
-                    {currentPath === '/' && (
-                      <span className="absolute left-0 w-1 h-5 rounded-full bg-[#38BDF8]" />
-                    )}
                     <Compass className="w-4 h-4 flex-shrink-0" />
                     <span>首页发现</span>
                   </button>
@@ -121,14 +118,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ collapsed: controlledCollapsed
                     onClick={() => handleNavClick('/continue-watching')}
                     className={`w-full h-9 px-3 gap-3 rounded-xl flex items-center text-sm transition-all cursor-pointer relative group ${
                       currentPath === '/continue-watching'
-                        ? 'bg-[#38BDF8]/15 text-[#38BDF8] font-medium'
-                        : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.04]'
+                        ? 'glass-sidebar-active text-[#1D1D1F] dark:text-white font-semibold'
+                        : 'text-[#515154] dark:text-white/65 hover:text-[#1D1D1F] dark:hover:text-white hover:bg-black/[0.04] dark:hover:bg-white/[0.06]'
                     }`}
                     title="继续观看与最近播放"
                   >
-                    {currentPath === '/continue-watching' && (
-                      <span className="absolute left-0 w-1 h-5 rounded-full bg-[#38BDF8]" />
-                    )}
                     <Play className="w-4 h-4 flex-shrink-0" />
                     <span>继续观看</span>
                   </button>
@@ -137,7 +131,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ collapsed: controlledCollapsed
                 {/* 影视媒体库分类区 */}
                 {views.length > 0 && (
                   <div className="pt-3 space-y-0.5">
-                    <div className="px-3 pb-1 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+                    <div className="px-3 pb-1 text-[11px] font-semibold text-[#86868B] dark:text-white/45 uppercase tracking-wider">
                       媒体库
                     </div>
 
@@ -153,21 +147,18 @@ export const Sidebar: React.FC<SidebarProps> = ({ collapsed: controlledCollapsed
                           onClick={() => navigate(targetPath)}
                           className={`w-full h-9 px-3 rounded-xl flex items-center justify-between text-sm transition-all cursor-pointer relative group ${
                             isSelected
-                              ? 'bg-[#38BDF8]/15 text-[#38BDF8] font-medium'
-                              : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.04]'
+                              ? 'glass-sidebar-active text-[#1D1D1F] dark:text-white font-semibold'
+                              : 'text-[#515154] dark:text-white/65 hover:text-[#1D1D1F] dark:hover:text-white hover:bg-black/[0.04] dark:hover:bg-white/[0.06]'
                           }`}
                           title={v.Name}
                         >
-                          {isSelected && (
-                            <span className="absolute left-0 w-1 h-5 rounded-full bg-[#38BDF8]" />
-                          )}
                           <div className="flex items-center gap-3 truncate">
                             {renderViewIcon(v.CollectionType)}
                             <span className="truncate">{v.Name}</span>
                           </div>
 
                           {typeof countNum === 'number' && countNum > 0 && (
-                            <span className="text-[11px] font-mono text-slate-500 tabular-nums">
+                            <span className="text-[11px] font-mono text-[#86868B] dark:text-white/40 tabular-nums">
                               {countNum}
                             </span>
                           )}
@@ -196,14 +187,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ collapsed: controlledCollapsed
                         onClick={() => navigate(nav.path)}
                         className={`w-full h-9 px-3 gap-3 rounded-xl flex items-center text-sm transition-all cursor-pointer relative group ${
                           active
-                            ? 'bg-purple-500/15 text-purple-300 font-medium'
-                            : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.04]'
+                            ? 'glass-sidebar-active-music text-[#1D1D1F] dark:text-white font-semibold'
+                            : 'text-[#515154] dark:text-white/65 hover:text-[#1D1D1F] dark:hover:text-white hover:bg-black/[0.04] dark:hover:bg-white/[0.06]'
                         }`}
                         title={nav.label}
                       >
-                        {active && (
-                          <span className="absolute left-0 w-1 h-5 rounded-full bg-purple-400" />
-                        )}
                         <Icon className="w-4 h-4 flex-shrink-0" />
                         <span>{nav.label}</span>
                       </button>
@@ -214,19 +202,16 @@ export const Sidebar: React.FC<SidebarProps> = ({ collapsed: controlledCollapsed
                     onClick={() => navigate('/music/search')}
                     className={`w-full h-9 px-3 rounded-xl flex items-center justify-between text-sm transition-all cursor-pointer relative group ${
                       currentPath === '/music/search'
-                        ? 'bg-purple-500/15 text-purple-300 font-medium'
-                        : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.04]'
+                        ? 'glass-sidebar-active-music text-[#1D1D1F] dark:text-white font-semibold'
+                        : 'text-[#515154] dark:text-white/65 hover:text-[#1D1D1F] dark:hover:text-white hover:bg-black/[0.04] dark:hover:bg-white/[0.06]'
                     }`}
                     title={`音乐搜索 (${isMac ? '⌘K' : 'Ctrl+K'})`}
                   >
-                    {currentPath === '/music/search' && (
-                      <span className="absolute left-0 w-1 h-5 rounded-full bg-purple-400" />
-                    )}
                     <div className="flex items-center gap-3">
                       <Search className="w-4 h-4 flex-shrink-0" />
                       <span>音乐搜索</span>
                     </div>
-                    <kbd className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white/[0.06] text-slate-400 border border-white/[0.08]">
+                    <kbd className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-black/[0.05] dark:bg-white/[0.08] text-[#6E6E73] dark:text-white/60 border border-black/[0.06] dark:border-white/[0.08]">
                       {isMac ? '⌘K' : 'Ctrl K'}
                     </kbd>
                   </button>
@@ -235,7 +220,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ collapsed: controlledCollapsed
                 {/* 音乐库分区 */}
                 {musicViews.length > 0 && (
                   <div className="pt-3 space-y-0.5">
-                    <div className="px-3 pb-1 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+                    <div className="px-3 pb-1 text-[11px] font-semibold text-[#86868B] dark:text-white/45 uppercase tracking-wider">
                       音乐库
                     </div>
 
@@ -251,20 +236,17 @@ export const Sidebar: React.FC<SidebarProps> = ({ collapsed: controlledCollapsed
                           onClick={() => navigate(targetPath)}
                           className={`w-full h-9 px-3 rounded-xl flex items-center justify-between text-sm transition-all cursor-pointer relative group ${
                             isSelected
-                              ? 'bg-purple-500/15 text-purple-300 font-medium'
-                              : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.04]'
+                              ? 'glass-sidebar-active-music text-[#1D1D1F] dark:text-white font-semibold'
+                              : 'text-[#515154] dark:text-white/65 hover:text-[#1D1D1F] dark:hover:text-white hover:bg-black/[0.04] dark:hover:bg-white/[0.06]'
                           }`}
                           title={v.Name}
                         >
-                          {isSelected && (
-                            <span className="absolute left-0 w-1 h-5 rounded-full bg-purple-400" />
-                          )}
                           <div className="flex items-center gap-3 truncate">
                             <Music className="w-4 h-4 flex-shrink-0" />
                             <span className="truncate">{v.Name}</span>
                           </div>
                           {typeof countNum === 'number' && countNum > 0 && (
-                            <span className="text-[11px] font-mono text-slate-500 tabular-nums">
+                            <span className="text-[11px] font-mono text-[#86868B] dark:text-white/40 tabular-nums">
                               {countNum}
                             </span>
                           )}
@@ -276,30 +258,27 @@ export const Sidebar: React.FC<SidebarProps> = ({ collapsed: controlledCollapsed
               </>
             )}
           </div>
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-6 bg-gradient-to-t from-[#080B12] to-transparent" />
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-6 bg-gradient-to-t from-[#F5F5F7]/70 dark:from-[#0E0E10] to-transparent" />
         </div>
 
         {/* 底部系统配置区 */}
-        <div className="p-2 border-t border-white/[0.06] space-y-1">
+        <div className="p-2.5 border-t border-black/[0.06] dark:border-white/[0.08] space-y-1">
           {/* 系统设置 */}
           <button
             onClick={() => handleNavClick('/settings', hasUpdate ? 'about' : undefined)}
             className={`w-full h-9 px-3 rounded-xl flex items-center justify-between text-sm transition-all cursor-pointer relative ${
               currentPath === '/settings'
-                ? 'bg-[#38BDF8]/15 text-[#38BDF8] font-medium'
-                : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.04]'
+                ? 'glass-sidebar-active text-[#1D1D1F] dark:text-white font-semibold'
+                : 'text-[#515154] dark:text-white/65 hover:text-[#1D1D1F] dark:hover:text-white hover:bg-black/[0.04] dark:hover:bg-white/[0.06]'
             }`}
             title={hasUpdate ? '系统设置 · 发现新版本' : '系统设置'}
           >
-            {currentPath === '/settings' && (
-              <span className="absolute left-0 w-1 h-5 rounded-full bg-[#38BDF8]" />
-            )}
             <div className="flex items-center gap-3">
               <Settings className="w-4 h-4 flex-shrink-0" />
               <span>系统设置</span>
             </div>
             {hasUpdate && (
-              <span className="px-1.5 py-0.5 rounded-full bg-[#38BDF8]/20 border border-[#38BDF8]/40 text-[#38BDF8] text-[10px] font-semibold">
+              <span className="px-1.5 py-0.5 rounded-full bg-black/[0.07] dark:bg-white/15 text-[#1D1D1F] dark:text-white text-[10px] font-semibold">
                 新版本
               </span>
             )}

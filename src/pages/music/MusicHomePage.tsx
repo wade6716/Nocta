@@ -235,7 +235,7 @@ export const MusicHomePage: React.FC<{ isActive?: boolean }> = ({ isActive = tru
         <>
           {/* Hero 精选音乐横幅 */}
           {heroAlbum && (
-            <div className="relative h-64 sm:h-72 rounded-3xl overflow-hidden border border-white/[0.08] bg-[#141828] shadow-2xl flex items-center p-7 sm:p-9 group">
+            <div className="preserve-dark relative h-64 sm:h-72 rounded-3xl overflow-hidden border border-white/[0.08] bg-[#141828] shadow-2xl flex items-center p-7 sm:p-9 group">
               {heroCover && (
                 <img
                   src={heroCover}

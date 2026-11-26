@@ -1,5 +1,6 @@
 /** @type {import('tailwindcss').Config} */
 export default {
+  darkMode: 'class',
   content: [
     "./index.html",
     "./src/**/*.{js,ts,jsx,tsx}",
@@ -7,15 +8,15 @@ export default {
   theme: {
     extend: {
       colors: {
-        canvas: '#0B0E17',
-        background: '#0B0E17',
-        surface: '#131826',
-        'surface-elevated': '#131826',
-        card: '#131826',
+        canvas: 'rgb(var(--nocta-canvas) / <alpha-value>)',
+        background: 'rgb(var(--nocta-canvas) / <alpha-value>)',
+        surface: 'rgb(var(--nocta-surface) / <alpha-value>)',
+        'surface-elevated': 'rgb(var(--nocta-elevated) / <alpha-value>)',
+        card: 'rgb(var(--nocta-surface) / <alpha-value>)',
         border: 'rgba(255, 255, 255, 0.08)',
         primary: {
-          DEFAULT: '#38BDF8', // 极光青 Primary
-          hover: '#0ea5e9',
+          DEFAULT: 'rgb(var(--nocta-primary) / <alpha-value>)', // 极光青 Primary
+          hover: 'rgb(var(--nocta-primary-hover) / <alpha-value>)',
         },
         secondary: {
           DEFAULT: '#818CF8', // 流光紫 Secondary
@@ -30,11 +31,14 @@ export default {
       },
       fontFamily: {
         sans: [
-          'Inter',
           '-apple-system',
           'BlinkMacSystemFont',
+          '"SF Pro Display"',
+          '"SF Pro Text"',
+          '"Segoe UI Variable Display"',
+          '"Segoe UI Variable Text"',
           '"PingFang SC"',
-          '"Microsoft YaHei"',
+          '"Microsoft YaHei UI"',
           'sans-serif',
         ],
       },

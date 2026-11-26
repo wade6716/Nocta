@@ -89,9 +89,9 @@ export function useMediaSessionController({
     if (typeof navigator !== 'undefined' && 'mediaSession' in navigator && typeof MediaMetadata !== 'undefined') {
       try {
         navigator.mediaSession.metadata = new MediaMetadata({
-          title: title || 'Nocta · 夜幕',
+          title: title || 'Nocta · 诺塔',
           artist: subtitle || '',
-          album: 'Nocta · 夜幕',
+          album: 'Nocta · 诺塔',
         });
       } catch {
         // 忽略不受支持的 WebView 环境
@@ -100,7 +100,7 @@ export function useMediaSessionController({
 
     if (isTauri) {
       invoke('sync_media_session_metadata', {
-        title: title || 'Nocta · 夜幕',
+        title: title || 'Nocta · 诺塔',
         subtitle: subtitle || null,
         durationSecs: Number.isFinite(duration) && duration > 0 ? duration : null,
       }).catch(() => {});

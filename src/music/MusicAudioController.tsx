@@ -240,7 +240,7 @@ export const MusicAudioController: React.FC = () => {
         navigator.mediaSession.metadata = new MediaMetadata({
           title,
           artist,
-          album: currentTrack.Album || 'Nocta · 夜幕音乐',
+          album: currentTrack.Album || 'Nocta · 诺塔音乐',
         });
       } catch {
         // ignore

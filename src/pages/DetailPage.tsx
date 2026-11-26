@@ -521,38 +521,61 @@ export const DetailPage: React.FC = () => {
   }
 
   return (
-    <div className="w-full text-slate-100 select-none pb-24 relative min-h-full">
-      {/* 1. 一体化全宽沉浸 Hero（Infuse / Apple TV+ 风格：无中间卡片、无重复封面、唯一主播放行） */}
-      <section ref={heroRef} className="relative w-full overflow-hidden">
-        {/* 真实剧照背景层 */}
+    <div className="w-full text-[#1D1D1F] dark:text-[#F5F5F7] select-none pb-24 relative min-h-full">
+      {/* 1. 全出血 Apple TV+ / Infuse 一体化沉浸 Hero */}
+      <div className="relative w-full">
+        {/* 动态剧照环境色柔光过渡带 */}
         {effectiveBackdropUrl && (
-          <img
-            key={effectiveBackdropUrl}
-            src={effectiveBackdropUrl}
-            alt=""
+          <div
             aria-hidden="true"
-            onError={() => setBackdropStage((prev) => prev + 1)}
-            className={`absolute inset-0 w-full h-full object-cover object-center pointer-events-none transition-opacity duration-500 ${
-              isPosterBackdropFallback
-                ? 'opacity-30 blur-2xl scale-110'
-                : 'opacity-50 scale-[1.02]'
-            }`}
-          />
+            className="pointer-events-none absolute -bottom-20 inset-x-0 h-32 overflow-hidden z-0"
+            style={{
+              maskImage: 'linear-gradient(to bottom, rgba(0,0,0,1) 0%, rgba(0,0,0,0) 100%)',
+              WebkitMaskImage:
+                'linear-gradient(to bottom, rgba(0,0,0,1) 0%, rgba(0,0,0,0) 100%)',
+            }}
+          >
+            <img
+              src={effectiveBackdropUrl}
+              alt=""
+              className="w-full h-full object-cover object-bottom scale-110 blur-[48px] saturate-150 opacity-[0.20] dark:opacity-[0.32]"
+            />
+          </div>
         )}
 
-        {/* Apple TV+ 三层电影院级羽化渐变融底遮罩 */}
-        <div className="absolute inset-0 bg-gradient-to-t from-[#0B0E17] via-[#0B0E17]/78 via-35% to-[#0B0E17]/25 pointer-events-none" />
-        <div className="absolute inset-0 bg-gradient-to-r from-[#0B0E17]/95 via-[#0B0E17]/65 via-55% to-transparent pointer-events-none" />
-        <div className="absolute inset-0 bg-gradient-to-b from-[#0B0E17]/45 via-transparent to-transparent pointer-events-none" />
+        <section
+          ref={heroRef}
+          className="preserve-dark relative z-10 w-full overflow-hidden bg-[#0A0A0C]"
+        >
+          {/* 真实剧照背景层 */}
+          {effectiveBackdropUrl && (
+            <img
+              key={effectiveBackdropUrl}
+              src={effectiveBackdropUrl}
+              alt=""
+              aria-hidden="true"
+              onError={() => setBackdropStage((prev) => prev + 1)}
+              className={`absolute inset-0 w-full h-full object-cover object-center pointer-events-none transition-opacity duration-500 ${
+                isPosterBackdropFallback
+                  ? 'opacity-30 blur-2xl scale-110'
+                  : 'opacity-58 scale-[1.02]'
+              }`}
+            />
+          )}
 
-        {/* Hero 前景内容 */}
-        <div className="relative z-10 max-w-[1440px] mx-auto px-6 lg:px-10 pt-5 pb-7">
+          {/* 光学三层暗角遮罩 */}
+          <div className="absolute inset-x-0 top-0 h-28 bg-gradient-to-b from-black/55 via-black/18 to-transparent pointer-events-none" />
+          <div className="absolute inset-0 bg-gradient-to-t from-black/88 via-black/48 via-42% to-transparent dark:from-[#0A0A0C] dark:via-[#0A0A0C]/55 dark:via-42% dark:to-transparent pointer-events-none" />
+          <div className="absolute inset-0 bg-gradient-to-r from-black/85 via-black/52 via-55% to-transparent pointer-events-none" />
+
+          {/* Hero 前景内容（顶部留白避让悬浮顶栏） */}
+          <div className="relative z-10 max-w-[1440px] mx-auto px-8 lg:px-12 pt-16 pb-9">
           {/* 顶部导航与极简弹幕状态微标 */}
-          <div className="flex items-center justify-between gap-4 mb-5">
+          <div className="flex items-center justify-between gap-4 mb-6">
             <button
               type="button"
               onClick={() => navigate(-1)}
-              className="px-3.5 py-1.5 rounded-full bg-black/35 hover:bg-white/[0.12] backdrop-blur-md border border-white/[0.12] text-slate-200 hover:text-white transition cursor-pointer inline-flex items-center gap-1.5 text-xs font-medium group"
+              className="px-3.5 py-1.5 rounded-full bg-black/30 hover:bg-white/15 backdrop-blur-xl border border-white/[0.15] text-white/90 hover:text-white transition cursor-pointer inline-flex items-center gap-1.5 text-xs font-medium group"
               title="返回上一页"
             >
               <ArrowLeft className="w-3.5 h-3.5 group-hover:-translate-x-0.5 transition-transform" />
@@ -560,10 +583,10 @@ export const DetailPage: React.FC = () => {
             </button>
 
             <div
-              className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-black/35 backdrop-blur-md border border-white/[0.08] text-[11px] text-slate-300"
+              className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-black/30 backdrop-blur-xl border border-white/[0.12] text-[11px] text-white/80"
               title="支持 Bilibili / 优爱腾全域弹幕自动匹配与时间轴微调"
             >
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
               <span>弹幕引擎就绪</span>
             </div>
           </div>
@@ -571,7 +594,7 @@ export const DetailPage: React.FC = () => {
           {/* 均衡双栏 Hero：左海报定锚 + 右侧一体化信息流 */}
           <div className="flex flex-col md:flex-row items-start md:items-end gap-7">
             {/* 左侧：剧集/电影竖版海报（稳定锚点，不重复显示单集封面图） */}
-            <div className="w-40 sm:w-44 lg:w-48 aspect-[2/3] rounded-2xl overflow-hidden shadow-2xl shadow-black/70 border border-white/[0.14] shrink-0 bg-[#131826]">
+            <div className="w-40 sm:w-44 lg:w-48 aspect-[2/3] rounded-[14px] overflow-hidden shadow-[0_16px_40px_rgba(0,0,0,0.68)] ring-1 ring-inset ring-white/[0.16] shrink-0 bg-[#1C1C1E]">
               {posterUrl ? (
                 <img
                   key={posterUrl}
@@ -593,12 +616,12 @@ export const DetailPage: React.FC = () => {
 
                     target.dataset.fallbackStep = 'done';
                     target.src =
-                      'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="400" height="600" viewBox="0 0 400 600"><rect width="100%" height="100%" fill="%23131826"/><text x="50%" y="50%" fill="%2364748B" font-family="sans-serif" font-size="18" text-anchor="middle" dominant-baseline="middle">暂无海报</text></svg>';
+                      'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="400" height="600" viewBox="0 0 400 600"><rect width="100%" height="100%" fill="%231C1C1E"/><text x="50%" y="50%" fill="%2386868B" font-family="sans-serif" font-size="18" text-anchor="middle" dominant-baseline="middle">暂无海报</text></svg>';
                   }}
                   className="w-full h-full object-cover"
                 />
               ) : (
-                <div className="w-full h-full bg-[#131826] flex items-center justify-center text-sm text-slate-500">
+                <div className="w-full h-full bg-[#1C1C1E] flex items-center justify-center text-sm text-white/50">
                   暂无海报
                 </div>
               )}
@@ -609,17 +632,17 @@ export const DetailPage: React.FC = () => {
               {/* Row 1: 剧集/电影主体标题 + 评分 + 轻量点分隔元信息 */}
               <div className="space-y-1.5">
                 <div className="flex flex-wrap items-center gap-2.5">
-                  <h1 className="text-3xl sm:text-4xl font-extrabold text-white tracking-tight drop-shadow-md">
+                  <h1 className="text-3xl sm:text-4xl font-bold text-white tracking-[-0.02em] drop-shadow-md">
                     {displayTitle}
                   </h1>
                   {heroRating && (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-400/30 text-amber-300 text-xs font-mono font-bold tabular-nums">
-                      <Star className="w-3 h-3 fill-current" />
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-white/[0.12] border border-white/[0.18] text-white/95 text-xs font-mono font-semibold tabular-nums">
+                      <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
                       <span>{heroRating}</span>
                     </span>
                   )}
                   {heroOfficialRating && (
-                    <span className="px-1.5 py-0.5 rounded border border-white/[0.15] text-[10px] font-mono text-slate-300">
+                    <span className="px-1.5 py-[1px] rounded-[4px] border border-white/30 text-[10px] font-semibold font-mono text-white/85">
                       {heroOfficialRating}
                     </span>
                   )}
@@ -627,18 +650,18 @@ export const DetailPage: React.FC = () => {
 
                 {/* 轻量主体元信息行（点分隔，无沉重边框堆叠） */}
                 {(seriesMetaParts.length > 0 || seasonTotalSizeSummary) && (
-                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-300/85">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-white/80">
                     {seriesMetaParts.map((part, idx) => (
                       <React.Fragment key={`${part}-${idx}`}>
-                        {idx > 0 && <span className="text-slate-500">·</span>}
+                        {idx > 0 && <span className="text-white/40">·</span>}
                         <span>{part}</span>
                       </React.Fragment>
                     ))}
                     {seasonTotalSizeSummary && (
                       <>
-                        {seriesMetaParts.length > 0 && <span className="text-slate-500">·</span>}
+                        {seriesMetaParts.length > 0 && <span className="text-white/40">·</span>}
                         <span
-                          className="font-mono tabular-nums text-slate-400"
+                          className="font-mono tabular-nums text-white/65"
                           title={seasonTotalSizeSummary.tooltip}
                         >
                           {seasonTotalSizeSummary.label}
@@ -652,55 +675,55 @@ export const DetailPage: React.FC = () => {
               {/* Row 2: 剧集当前聚焦分集行（点击下方分集时平滑切换） */}
               {hasSeriesContext && selectedEpisode && (
                 <div className="flex flex-wrap items-center gap-2 pt-0.5">
-                  <span className="px-2 py-0.5 rounded-md bg-[#38BDF8]/15 border border-[#38BDF8]/35 text-[#38BDF8] text-xs font-mono font-bold tabular-nums">
+                  <span className="px-2 py-0.5 rounded-md bg-white/[0.14] border border-white/[0.22] text-white text-xs font-mono font-semibold tabular-nums">
                     {activeEpCode}
                   </span>
-                  <h2 className="text-base sm:text-lg font-bold text-slate-50 truncate max-w-2xl">
+                  <h2 className="text-base sm:text-lg font-semibold text-white truncate max-w-2xl">
                     {selectedEpisode.Name}
                   </h2>
                   {selectedEpisode.UserData?.Played ? (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-400/30 text-emerald-300 text-[11px] font-medium">
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/[0.12] border border-white/[0.18] text-white/90 text-[11px] font-medium">
                       <Check className="w-3 h-3" />
                       <span>已看</span>
                     </span>
                   ) : activePlayableProgress > 0 ? (
-                    <span className="px-2 py-0.5 rounded-md bg-sky-500/15 border border-sky-400/30 text-sky-300 text-[11px] font-mono tabular-nums">
+                    <span className="px-2 py-0.5 rounded-md bg-white/[0.12] border border-white/[0.18] text-white/90 text-[11px] font-mono tabular-nums">
                       已播 {activePlayableProgress}%
                     </span>
                   ) : null}
                   {selectedEpisode.PremiereDate && (
-                    <span className="text-[11px] font-mono text-slate-400">
+                    <span className="text-[11px] font-mono text-white/60">
                       {selectedEpisode.PremiereDate.slice(0, 10)}
                     </span>
                   )}
                   {loadingEpisodeDetail && (
-                    <Loader2 className="w-3.5 h-3.5 text-[#38BDF8] animate-spin shrink-0" />
+                    <Loader2 className="w-3.5 h-3.5 text-white/80 animate-spin shrink-0" />
                   )}
                 </div>
               )}
 
-              {/* Row 3: Infuse 风格单行紧凑媒体技术规格标（跟随当前分集或电影实时切换） */}
+              {/* Row 3: Infuse 风格单行紧凑媒体技术规格标（极简半透黑白微标） */}
               {activePlayableItem && (
                 <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-mono">
                   {activePlayableItem.RunTimeTicks && (
-                    <span className="px-2 py-0.5 rounded-md bg-white/[0.07] border border-white/[0.08] text-slate-200 tabular-nums">
+                    <span className="px-2 py-0.5 rounded-md bg-white/[0.08] border border-white/[0.12] text-white/90 tabular-nums">
                       {Math.round(ticksToSeconds(activePlayableItem.RunTimeTicks) / 60)} 分钟
                     </span>
                   )}
                   {activeSpecs.resolution && (
-                    <span className="px-2 py-0.5 rounded-md bg-[#38BDF8]/15 border border-[#38BDF8]/35 text-[#38BDF8] font-bold">
+                    <span className="px-2 py-0.5 rounded-md bg-white/[0.14] border border-white/[0.22] text-white font-semibold">
                       {activeSpecs.resolution}
                       {activeSpecs.dimensions ? ` (${activeSpecs.dimensions})` : ''}
                     </span>
                   )}
                   {(activeSpecs.hdr || activeSpecs.bitDepth) && (
-                    <span className="px-2 py-0.5 rounded-md bg-amber-500/15 border border-amber-400/30 text-amber-300">
+                    <span className="px-2 py-0.5 rounded-md bg-white/[0.08] border border-white/[0.12] text-white/90">
                       {[activeSpecs.hdr, activeSpecs.bitDepth].filter(Boolean).join(' · ')}
                     </span>
                   )}
                   {(activeSpecs.videoCodec || activeSpecs.fps || activeSpecs.bitrate) && (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/[0.06] border border-white/[0.08] text-slate-300">
-                      <Film className="w-3 h-3 text-slate-400" />
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/[0.08] border border-white/[0.12] text-white/85">
+                      <Film className="w-3 h-3 text-white/65" />
                       <span>
                         {[activeSpecs.videoCodec, activeSpecs.fps, activeSpecs.bitrate]
                           .filter(Boolean)
@@ -709,22 +732,22 @@ export const DetailPage: React.FC = () => {
                     </span>
                   )}
                   {(activeSpecs.container || activeSpecs.size) && (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/[0.06] border border-white/[0.08] text-slate-300 tabular-nums">
-                      <HardDrive className="w-3 h-3 text-[#38BDF8]" />
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/[0.08] border border-white/[0.12] text-white/85 tabular-nums">
+                      <HardDrive className="w-3 h-3 text-white/65" />
                       <span>
                         {[activeSpecs.container, activeSpecs.size].filter(Boolean).join(' · ')}
                       </span>
                     </span>
                   )}
                   {activeSpecs.audioSummary && (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/[0.06] border border-white/[0.08] text-slate-300">
-                      <Volume2 className="w-3 h-3 text-slate-400" />
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/[0.08] border border-white/[0.12] text-white/85">
+                      <Volume2 className="w-3 h-3 text-white/65" />
                       <span>{activeSpecs.audioSummary}</span>
                     </span>
                   )}
                   {activeSpecs.subtitleCount > 0 && (
-                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/[0.06] border border-white/[0.08] text-slate-300">
-                      <Subtitles className="w-3 h-3 text-slate-400" />
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/[0.08] border border-white/[0.12] text-white/85">
+                      <Subtitles className="w-3 h-3 text-white/65" />
                       <span>{activeSpecs.subtitleCount} 条字幕</span>
                     </span>
                   )}
@@ -736,7 +759,7 @@ export const DetailPage: React.FC = () => {
                 <div className="max-w-3xl space-y-1">
                   {activeOverviewText && (
                     <p
-                      className={`text-sm text-slate-200/90 leading-relaxed whitespace-pre-line ${
+                      className={`text-sm text-white/85 leading-relaxed whitespace-pre-line ${
                         overviewExpanded ? '' : 'line-clamp-3'
                       }`}
                     >
@@ -749,7 +772,7 @@ export const DetailPage: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => setOverviewExpanded((v) => !v)}
-                        className="font-medium text-[#38BDF8] hover:text-sky-300 transition cursor-pointer"
+                        className="font-medium text-white/90 hover:text-white underline-offset-2 hover:underline transition cursor-pointer"
                       >
                         {overviewExpanded ? '收起' : '展开全部'}
                       </button>
@@ -765,8 +788,8 @@ export const DetailPage: React.FC = () => {
                           }}
                           className={`px-2 py-0.5 rounded-md transition cursor-pointer ${
                             effectiveOverviewMode === 'episode'
-                              ? 'bg-white/[0.12] text-white font-medium'
-                              : 'text-slate-400 hover:text-slate-200'
+                              ? 'bg-white/[0.16] text-white font-medium'
+                              : 'text-white/60 hover:text-white/90'
                           }`}
                         >
                           本集简介
@@ -779,8 +802,8 @@ export const DetailPage: React.FC = () => {
                           }}
                           className={`px-2 py-0.5 rounded-md transition cursor-pointer ${
                             effectiveOverviewMode === 'series'
-                              ? 'bg-white/[0.12] text-white font-medium'
-                              : 'text-slate-400 hover:text-slate-200'
+                              ? 'bg-white/[0.16] text-white font-medium'
+                              : 'text-white/60 hover:text-white/90'
                           }`}
                         >
                           剧集简介
@@ -791,8 +814,8 @@ export const DetailPage: React.FC = () => {
                 </div>
               )}
 
-              {/* Row 5: 唯一主行动行（主播放按钮 + 同行紧凑多清晰度版本切换胶囊） */}
-              <div className="pt-1.5 flex flex-wrap items-center gap-3">
+              {/* Row 5: 唯一主行动行（实心纯白主播放胶囊 + 同行紧凑多清晰度版本切换胶囊） */}
+              <div className="pt-2 flex flex-wrap items-center gap-3">
                 <button
                   type="button"
                   onClick={() => {
@@ -800,7 +823,7 @@ export const DetailPage: React.FC = () => {
                     startPlayback(activePlayableItem, selectedMediaSourceId);
                   }}
                   disabled={startingPlay || !activePlayableItem}
-                  className="px-7 py-2.5 rounded-full bg-[#38BDF8] hover:bg-[#0ea5e9] text-slate-950 font-bold text-sm shadow-lg shadow-sky-500/25 transition cursor-pointer inline-flex items-center gap-2 disabled:opacity-50 shrink-0"
+                  className="px-8 py-2.5 rounded-full bg-white hover:bg-white/90 text-[#1D1D1F] font-semibold text-sm shadow-[0_8px_24px_rgba(0,0,0,0.3)] transition cursor-pointer inline-flex items-center gap-2 disabled:opacity-50 shrink-0"
                 >
                   <Play className="w-4 h-4 fill-current" />
                   <span>{primaryPlayLabel}</span>
@@ -809,10 +832,10 @@ export const DetailPage: React.FC = () => {
                 {sortedItemMediaSources.length > 1 && (
                   <div className="flex flex-wrap items-center gap-1.5 min-w-0">
                     <span
-                      className="inline-flex items-center gap-1 text-[11px] text-slate-400 mr-0.5"
+                      className="inline-flex items-center gap-1 text-[11px] text-white/60 mr-0.5"
                       title="切换清晰度 / 封装版本"
                     >
-                      <Layers className="w-3.5 h-3.5 text-[#38BDF8]" />
+                      <Layers className="w-3.5 h-3.5 text-white/75" />
                     </span>
                     {sortedItemMediaSources.map((ms, idx) => {
                       const isSelected =
@@ -841,13 +864,19 @@ export const DetailPage: React.FC = () => {
                           title={tooltipText}
                           className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-mono transition cursor-pointer ${
                             isSelected
-                              ? 'bg-[#38BDF8]/18 border-[#38BDF8] text-white font-semibold'
-                              : 'bg-white/[0.05] border-white/[0.1] text-slate-300 hover:bg-white/[0.1] hover:text-white'
+                              ? 'bg-white border-white text-[#1D1D1F] font-semibold shadow-sm'
+                              : 'bg-white/[0.08] border-white/[0.15] text-white/85 hover:bg-white/[0.16] hover:text-white'
                           }`}
                         >
                           <span>{compactLabel}</span>
                           {idx === 0 && (
-                            <span className="px-1.5 py-0.2 rounded-full bg-[#38BDF8]/25 text-[#38BDF8] text-[10px] font-sans font-bold leading-4">
+                            <span
+                              className={`px-1.5 py-0.2 rounded-full text-[10px] font-sans font-bold leading-4 ${
+                                isSelected
+                                  ? 'bg-[#1D1D1F]/10 text-[#1D1D1F]'
+                                  : 'bg-white/15 text-white'
+                              }`}
+                            >
                               最高
                             </span>
                           )}
@@ -860,11 +889,12 @@ export const DetailPage: React.FC = () => {
             </div>
           </div>
         </div>
-      </section>
+        </section>
+      </div>
 
       {/* 2. 剧集选集网格（紧贴 Hero 下方直接占据首屏） */}
       {hasSeriesContext && (
-        <div className="max-w-[1440px] mx-auto px-6 lg:px-10 mt-2">
+        <div className="max-w-[1440px] mx-auto px-8 lg:px-12 mt-8">
           {episodesLoading ? (
             <div className="py-16 text-center text-xs text-slate-400">正在同步分集列表...</div>
           ) : (

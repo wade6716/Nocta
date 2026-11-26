@@ -505,7 +505,7 @@ export async function getUserViews(
  * 支持双重降级兜底，兼容所有 Emby 服务器版本
  */
 const PLAYBACK_MEDIA_FIELDS =
-  'PrimaryImageAspectRatio,BasicSyncInfo,MediaSources,Path,Overview,UserData,SeriesPrimaryImageTag,SeriesThumbImageTag,ParentThumbImageTag,ParentBackdropImageTags,ImageTags,BackdropImageTags,SeriesInfo,ChildCount,RecursiveItemCount,Status,CommunityRating,ParentLogoItemId,ParentLogoImageTag';
+  'PrimaryImageAspectRatio,BasicSyncInfo,MediaSources,Path,Overview,UserData,SeriesPrimaryImageTag,SeriesThumbImageTag,ParentThumbImageTag,ParentBackdropImageTags,ImageTags,BackdropImageTags,SeriesInfo,ChildCount,RecursiveItemCount,Status,CommunityRating,ParentLogoItemId,ParentLogoImageTag,ProductionYear,PremiereDate,Genres,OfficialRating,RunTimeTicks,Taglines';
 
 /**
  * 获取继续观看列表 (GET /emby/Users/{UserId}/Items/Resume)
@@ -716,7 +716,7 @@ export async function getLatestItems(
   limit = 16
 ): Promise<EmbyItem[]> {
   const base = normalizeServerUrl(serverUrl);
-  const url = `${base}/emby/Users/${userId}/Items/Latest?ParentId=${parentId}&Limit=${limit}&Fields=PrimaryImageAspectRatio,BasicSyncInfo,Overview,ChildCount,RecursiveItemCount,Status,CommunityRating,MediaSources,ImageTags,BackdropImageTags,ParentLogoItemId,ParentLogoImageTag`;
+  const url = `${base}/emby/Users/${userId}/Items/Latest?ParentId=${parentId}&Limit=${limit}&Fields=PrimaryImageAspectRatio,BasicSyncInfo,Overview,ChildCount,RecursiveItemCount,Status,CommunityRating,MediaSources,ImageTags,BackdropImageTags,ParentLogoItemId,ParentLogoImageTag,ProductionYear,PremiereDate,Genres,OfficialRating,RunTimeTicks,Taglines`;
   const res = await httpClient(url, {
     method: 'GET',
     headers: buildEmbyHeaders(userId, accessToken, { serverUrl: base }),

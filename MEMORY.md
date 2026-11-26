@@ -1,4 +1,4 @@
-# Nocta (夜幕) · 项目核心架构与上下文记忆 (Project Memory)
+# Nocta (诺塔) · 项目核心架构与上下文记忆 (Project Memory)
 
 > 本文件持久记录 Nocta 播放器项目的核心架构、关键业务规则、排坑指南与配置约束，供后续所有 AI 会话与协同开发使用。
 
@@ -6,9 +6,9 @@
 
 ## 1. 项目基本概况与命名
 
-- **应用名称**：`Nocta` · `夜幕`
+- **应用名称**：`Nocta` · `诺塔`
   - 英文名：Nocta（源自拉丁语 Nox 夜晚，发音 /ˈnɒktə/）
-  - 中文名：夜幕（一语双关：暗色沉浸私人影院，银幕与弹幕的双重盛宴）
+  - 中文名：诺塔（Nocta 音译，简洁通透，适配明暗双主题私人影院定位；原中文名为“夜幕”）
 - **Git 仓库**：`git@github.com:wade6716/Nocta.git`（分支 `main`）
 - **Git 提交身份约束**（**至关重要**）：
   - 邮箱：`59910348+wade6716@users.noreply.github.com`
@@ -125,7 +125,7 @@
 
 ## 4. 应用图标（App Icons）规范与存放指南
 
-- **矢量母版文件**：[`app-icon.svg`](file:///d:/wade/code/emby-tauri-player/app-icon.svg)（位于项目根目录，夜幕主题渐变、播放棱镜与三色弹幕光轨设计）。
+- **矢量母版文件**：[`app-icon.svg`](file:///d:/wade/code/emby-tauri-player/app-icon.svg)（位于项目根目录，深空渐变、播放棱镜与三色弹幕光轨设计）。
 - **Tauri 打包与系统图标**：存放在 [`src-tauri/icons/`](file:///d:/wade/code/emby-tauri-player/src-tauri/icons/)：
   - `icon.ico`：Windows 客户端与安装程序图标
   - `icon.png`：512x512 高清启动图标
@@ -140,7 +140,7 @@
 
 ## 5. 项目窗口与标题规范
 
-- **桌面窗口标题**：统一为 `Nocta · 夜幕`（[`tauri.conf.json`](file:///d:/wade/code/emby-tauri-player/src-tauri/tauri.conf.json)、[`index.html`](file:///d:/wade/code/emby-tauri-player/index.html)、[`App.tsx`](file:///d:/wade/code/emby-tauri-player/src/App.tsx)）。
+- **桌面窗口标题**：统一为 `Nocta · 诺塔`（[`tauri.conf.json`](file:///d:/wade/code/emby-tauri-player/src-tauri/tauri.conf.json)、[`index.html`](file:///d:/wade/code/emby-tauri-player/index.html)、[`App.tsx`](file:///d:/wade/code/emby-tauri-player/src/App.tsx)）。
 - **无边框窗口控制与播放页交互规范**：
   - 非播放页：展示统一自定义标题栏 [`TitleBar.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/layout/TitleBar.tsx)，左上角包含 Nocta App Logo 与应用标题，右上角包含最小化、最大化/还原、关闭。
   - 播放页（交互与布局参考哔哩哔哩）：

@@ -398,16 +398,16 @@ const EpisodeGridComponent: React.FC<EpisodeGridProps> = ({
             <div
               key={ep.Id}
               onClick={() => onSelectEpisode(ep)}
-              className={`group relative flex flex-col bg-[#131826]/85 hover:bg-[#161c2e] rounded-2xl overflow-hidden border cursor-pointer transition-all duration-200 ${
+              className={`group relative flex flex-col glass-surface rounded-2xl overflow-hidden border cursor-pointer transition-all duration-200 ${
                 isSelected
                   ? 'border-[#38BDF8] ring-2 ring-[#38BDF8]/40 shadow-lg shadow-sky-500/15'
                   : isCurrent
                   ? 'border-[#38BDF8]/65 ring-1 ring-[#38BDF8]/25 shadow-lg shadow-sky-500/10'
-                  : 'border-white/[0.08] hover:border-[#38BDF8]/45 hover:-translate-y-0.5 shadow-md shadow-black/30'
+                  : 'border-white/[0.08] hover:border-[#38BDF8]/45 hover:-translate-y-0.5'
               }`}
             >
-              {/* Top 16:9 Wide Thumbnail */}
-              <div className="relative w-full aspect-video bg-black/60 overflow-hidden shrink-0">
+              {/* Top 16:9 Wide Thumbnail (preserve-dark keeps frosted overlays crisp over stills) */}
+              <div className="preserve-dark relative w-full aspect-video bg-black/60 overflow-hidden shrink-0">
                 {imageUrl ? (
                   <img
                     key={imageUrl}

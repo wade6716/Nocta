@@ -113,7 +113,7 @@ jobs:
               console.log(`macOS Intel mpv cache (${cacheKey}) on main: ${macosX64MpvCached}`);
             }
 
-            const releaseName = "Nocta · 夜幕 " + tagName;
+            const releaseName = "Nocta · 诺塔 " + tagName;
             const isPrerelease = (process.env.INPUT_PRERELEASE === "true" || /(alpha|beta|rc)/i.test(tagName)) ? "true" : "false";
             const releaseDraft = process.env.INPUT_RELEASE_DRAFT === "true" ? "true" : "false";
             const rawCli = (pkg.devDependencies && pkg.devDependencies["@tauri-apps/cli"]) || "2.12.2";
@@ -810,7 +810,7 @@ jobs:
             --out-updater updater_notes.md
 
           # 2. 强制覆盖更新已有的 Release 正文与标题 (避免因 Release 已存在而漏更)
-          gh release edit "$TAG_NAME" -F release_notes.md --title "Nocta · 夜幕 $TAG_NAME"
+          gh release edit "$TAG_NAME" -F release_notes.md --title "Nocta · 诺塔 $TAG_NAME"
 
           # 4. 自动清理旧格式遗留资产文件 (保留跨端安装包、.sig 签名、.tar.gz 与 latest.json)
           OLD_ASSETS=$(gh release view "$TAG_NAME" --json assets --jq '.assets[] | select(.name | test("(windows|macos|linux|^latest\\.json$|\\.sig$|\\.tar\\.gz$)") | not) | .name' 2>/dev/null || true)

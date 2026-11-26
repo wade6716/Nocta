@@ -133,7 +133,7 @@ export const MusicPlayerDock: React.FC = () => {
   const PlayModeIcon = playModeMeta.icon;
 
   return (
-    <div className="relative h-[76px] flex-shrink-0 w-full bg-[#0F1422]/95 backdrop-blur-2xl border-t border-white/[0.08] px-4 flex items-center justify-between gap-4 z-30 select-none">
+    <div className="relative h-[76px] flex-shrink-0 w-full glass-dock px-4 flex items-center justify-between gap-4 z-30 select-none">
       {/* 顶部微光可拖拽进度条 */}
       <div
         ref={progressBarRef}

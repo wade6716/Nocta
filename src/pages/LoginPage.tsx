@@ -100,10 +100,10 @@ export const LoginPage: React.FC = () => {
           <h1 className="text-2xl font-bold tracking-tight text-white flex items-center justify-center space-x-2">
             <span>Nocta</span>
             <span className="text-sm px-2.5 py-0.5 rounded-full bg-primary/20 text-primary font-medium tracking-normal">
-              夜幕
+              诺塔
             </span>
           </h1>
-          <p className="text-xs text-gray-400">暗色沉浸式私人影院 · 银幕与弹幕的双重盛宴</p>
+          <p className="text-xs text-gray-400">沉浸式私人影院 · 银幕与弹幕的双重盛宴</p>
         </div>
 
         {/* 顶部快捷操作栏：即使未添加任何服务器，也可直接进入设置或导入配置 */}

@@ -3,7 +3,23 @@
 @tailwind utilities;
 
 :root {
+  color-scheme: light;
+  --nocta-canvas: 255 255 255;
+  --nocta-surface: 255 255 255;
+  --nocta-elevated: 245 245 247;
+  --nocta-primary: 29 29 31;
+  --nocta-primary-hover: 0 0 0;
+  --nocta-text: 29 29 31;
+}
+
+html.dark {
   color-scheme: dark;
+  --nocta-canvas: 10 10 12;
+  --nocta-surface: 22 22 24;
+  --nocta-elevated: 28 28 30;
+  --nocta-primary: 56 189 248;
+  --nocta-primary-hover: 14 165 233;
+  --nocta-text: 245 245 247;
 }
 
 html,
@@ -15,18 +31,18 @@ body,
   padding: 0;
   overflow: hidden;
   background-color: transparent;
-  color: #F8FAFC;
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+  color: rgb(var(--nocta-text));
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI Variable Display", "Segoe UI Variable Text", "PingFang SC", "Microsoft YaHei UI", sans-serif;
   user-select: none;
   -webkit-user-select: none;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Custom smooth specular dark scrollbar */
+/* Custom smooth specular scrollbar */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
 }
 
 ::-webkit-scrollbar-track {
@@ -34,18 +50,26 @@ body,
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.12);
+  background: rgba(29, 29, 31, 0.16);
   border-radius: 9999px;
   transition: background-color 0.2s ease;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(56, 189, 248, 0.4);
+  background: rgba(29, 29, 31, 0.34);
+}
+
+html.dark ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+html.dark ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
 }
 
 /* Range slider styling */
 input[type="range"] {
-  accent-color: #38BDF8;
+  accent-color: rgb(var(--nocta-primary));
 }
 
 /* Numeric Discipline utility */
@@ -60,6 +84,408 @@ input[type="range"] {
 }
 .no-scrollbar::-webkit-scrollbar {
   display: none;
+}
+
+/* ============================================================================
+ * Apple TV+ Neutral Liquid Glass Material System (Light & Dark Vibrancy)
+ * ============================================================================ */
+
+.glass-titlebar {
+  background: rgba(255, 255, 255, 0.86);
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  box-shadow: none;
+}
+
+html.dark .glass-titlebar {
+  background: rgba(10, 10, 12, 0.84);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: none;
+}
+
+.glass-sidebar {
+  background: rgba(245, 245, 247, 0.92);
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  border-right: 1px solid rgba(0, 0, 0, 0.06);
+  box-shadow: none;
+}
+
+html.dark .glass-sidebar {
+  background: rgba(14, 14, 16, 0.82);
+  border-right: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow: none;
+}
+
+.glass-pill {
+  background: rgba(255, 255, 255, 0.76);
+  border: 1px solid rgba(0, 0, 0, 0.07);
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.04),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(20px) saturate(170%);
+  -webkit-backdrop-filter: blur(20px) saturate(170%);
+}
+
+.glass-pill:hover {
+  background: rgba(255, 255, 255, 0.96);
+  border-color: rgba(0, 0, 0, 0.12);
+}
+
+html.dark .glass-pill {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: none;
+}
+
+html.dark .glass-pill:hover {
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.glass-segmented-track {
+  background: rgba(0, 0, 0, 0.06);
+  border: 1px solid rgba(0, 0, 0, 0.04);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+html.dark .glass-segmented-track {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: none;
+}
+
+.glass-segmented-thumb {
+  background: #ffffff;
+  border: 1px solid rgba(0, 0, 0, 0.04);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
+}
+
+html.dark .glass-segmented-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.3);
+}
+
+.glass-sidebar-active {
+  background: rgba(0, 0, 0, 0.075);
+  border: 1px solid transparent;
+  box-shadow: none;
+}
+
+html.dark .glass-sidebar-active {
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid transparent;
+  box-shadow: none;
+}
+
+.glass-sidebar-active-music {
+  background: rgba(0, 0, 0, 0.075);
+  border: 1px solid transparent;
+  box-shadow: none;
+}
+
+html.dark .glass-sidebar-active-music {
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid transparent;
+  box-shadow: none;
+}
+
+.glass-surface {
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.92),
+    0 10px 30px rgba(0, 0, 0, 0.08);
+}
+
+html.dark .glass-surface {
+  background: rgba(28, 28, 30, 0.86);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.5);
+}
+
+.glass-dock {
+  background: rgba(245, 245, 247, 0.86);
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  border-top: 1px solid rgba(0, 0, 0, 0.07);
+  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.04);
+}
+
+html.dark .glass-dock {
+  background: rgba(18, 18, 20, 0.88);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: none;
+}
+
+/* ============================================================================
+ * Light-Mode Glass Token Bridge (scoped to .nocta-theme-scope, excluding .preserve-dark)
+ * ============================================================================ */
+
+html.light .nocta-theme-scope :where(
+  .bg-\[\#0B0E17\],
+  .bg-\[\#0B0E17\]\/95,
+  .bg-\[\#0B0E17\]\/90,
+  .bg-\[\#0B0E17\]\/85,
+  .bg-\[\#080B12\],
+  .bg-\[\#080B12\]\/95,
+  .bg-\[\#080B13\],
+  .bg-\[\#0F1115\],
+  .bg-\[\#0F1422\],
+  .bg-\[\#0F1422\]\/95,
+  .bg-\[\#12141a\],
+  .bg-\[\#121622\],
+  .bg-\[\#131826\],
+  .bg-\[\#131826\]\/85,
+  .bg-\[\#131826\]\/90,
+  .bg-\[\#141828\],
+  .bg-\[\#141828\]\/95,
+  .bg-\[\#141A29\],
+  .bg-\[\#161821\]\/95,
+  .bg-\[\#161922\],
+  .bg-\[\#161c2e\],
+  .bg-\[\#161D2F\],
+  .bg-gray-900,
+  .bg-gray-950,
+  .bg-slate-900,
+  .bg-slate-950,
+  .bg-zinc-900
+):not(.preserve-dark):not(.preserve-dark *) {
+  background-color: rgba(255, 255, 255, 0.78);
+  backdrop-filter: blur(22px) saturate(185%);
+  -webkit-backdrop-filter: blur(22px) saturate(185%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 6px 24px rgba(15, 23, 42, 0.05);
+}
+
+html.light .nocta-theme-scope :where(
+  .hover\:bg-\[\#161c2e\]:hover,
+  .hover\:bg-\[\#0B0E17\]:hover
+):not(.preserve-dark):not(.preserve-dark *) {
+  background-color: rgba(255, 255, 255, 0.92);
+}
+
+/* Modal backdrops stay translucent dark scrim */
+html.light .nocta-theme-scope :where(.fixed.inset-0):not(.preserve-dark) {
+  background-color: rgba(15, 23, 42, 0.28);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  box-shadow: none;
+}
+
+/* Non-overlay black translucent fills (inputs, sub-cards, pills) */
+html.light .nocta-theme-scope :where(
+  .bg-black\/20,
+  .bg-black\/25,
+  .bg-black\/30,
+  .bg-black\/35,
+  .bg-black\/40,
+  .bg-black\/45,
+  .bg-black\/50,
+  .bg-black\/60
+):not(.fixed):not(.preserve-dark):not(.preserve-dark *) {
+  background-color: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(16px) saturate(170%);
+  -webkit-backdrop-filter: blur(16px) saturate(170%);
+}
+
+html.light .nocta-theme-scope :where(
+  .bg-white\/\[0\.02\],
+  .bg-white\/\[0\.03\],
+  .bg-white\/\[0\.04\],
+  .bg-white\/\[0\.05\],
+  .bg-white\/5
+):not(.preserve-dark):not(.preserve-dark *) {
+  background-color: rgba(15, 23, 42, 0.04);
+}
+
+html.light .nocta-theme-scope :where(
+  .bg-white\/\[0\.06\],
+  .bg-white\/\[0\.07\],
+  .bg-white\/\[0\.08\],
+  .bg-white\/\[0\.09\],
+  .bg-white\/\[0\.1\],
+  .bg-white\/10,
+  .bg-white\/15,
+  .bg-white\/20
+):not(.preserve-dark):not(.preserve-dark *) {
+  background-color: rgba(15, 23, 42, 0.07);
+}
+
+html.light .nocta-theme-scope :where(
+  .hover\:bg-white\/5:hover,
+  .hover\:bg-white\/\[0\.04\]:hover,
+  .hover\:bg-white\/\[0\.06\]:hover,
+  .hover\:bg-white\/\[0\.08\]:hover,
+  .hover\:bg-white\/\[0\.09\]:hover,
+  .hover\:bg-white\/\[0\.1\]:hover,
+  .hover\:bg-white\/\[0\.12\]:hover,
+  .hover\:bg-white\/\[0\.14\]:hover,
+  .hover\:bg-white\/10:hover,
+  .hover\:bg-white\/15:hover,
+  .hover\:bg-white\/20:hover
+):not(.preserve-dark):not(.preserve-dark *) {
+  background-color: rgba(15, 23, 42, 0.11);
+}
+
+/* Crisp light glass borders */
+html.light .nocta-theme-scope :where(
+  .border-white\/5,
+  .border-white\/\[0\.05\],
+  .border-white\/\[0\.06\],
+  .border-white\/\[0\.07\],
+  .border-white\/\[0\.08\],
+  .border-white\/\[0\.09\],
+  .border-white\/10,
+  .border-white\/\[0\.1\],
+  .border-white\/\[0\.12\],
+  .border-white\/\[0\.14\],
+  .border-white\/15,
+  .border-white\/20
+):not(.preserve-dark):not(.preserve-dark *) {
+  border-color: rgba(15, 23, 42, 0.1);
+}
+
+html.light .nocta-theme-scope :where(
+  .hover\:border-white\/10:hover,
+  .hover\:border-white\/15:hover,
+  .hover\:border-white\/20:hover,
+  .hover\:border-white\/30:hover
+):not(.preserve-dark):not(.preserve-dark *) {
+  border-color: rgba(15, 23, 42, 0.2);
+}
+
+/* Light-mode ink hierarchy */
+html.light .nocta-theme-scope :where(.text-white):not(.preserve-dark):not(.preserve-dark *):not(.bg-primary):not(.bg-sky-500):not(.bg-sky-600):not(.bg-emerald-500):not(.bg-emerald-600):not(.bg-green-600):not(.bg-red-500):not(.bg-red-600):not(.bg-rose-500):not(.bg-rose-600):not(.bg-purple-500):not(.bg-purple-600):not(.bg-indigo-500):not(.bg-indigo-600):not(.bg-amber-500):not(.bg-amber-600):not(.bg-blue-500):not(.bg-blue-600):not(.bg-\[\#38BDF8\]):not([class*="bg-primary"] *):not([class*="bg-sky-500"] *):not([class*="bg-sky-600"] *):not([class*="bg-emerald-500"] *):not([class*="bg-emerald-600"] *):not([class*="bg-green-600"] *):not([class*="bg-red-500"] *):not([class*="bg-red-600"] *):not([class*="bg-rose-500"] *):not([class*="bg-rose-600"] *):not([class*="bg-purple-500"] *):not([class*="bg-purple-600"] *):not([class*="bg-indigo-500"] *):not([class*="bg-amber-500"] *):not([class*="bg-blue-500"] *):not([class*="bg-gradient-to"] *) {
+  color: #1D1D1F;
+}
+
+html.light .nocta-theme-scope :where(
+  .text-slate-50,
+  .text-slate-100,
+  .text-gray-100
+):not(.preserve-dark):not(.preserve-dark *) {
+  color: #1D1D1F;
+}
+
+html.light .nocta-theme-scope :where(
+  .text-slate-200,
+  .text-gray-200,
+  .text-slate-200\/95,
+  .text-slate-200\/90
+):not(.preserve-dark):not(.preserve-dark *) {
+  color: #2C2C2E;
+}
+
+html.light .nocta-theme-scope :where(
+  .text-slate-300,
+  .text-gray-300,
+  .text-slate-300\/95,
+  .text-slate-300\/90
+):not(.preserve-dark):not(.preserve-dark *) {
+  color: #48484A;
+}
+
+html.light .nocta-theme-scope :where(
+  .text-slate-400,
+  .text-gray-400
+):not(.preserve-dark):not(.preserve-dark *) {
+  color: #6E6E73;
+}
+
+html.light .nocta-theme-scope :where(
+  .text-slate-500,
+  .text-gray-500
+):not(.preserve-dark):not(.preserve-dark *) {
+  color: #86868B;
+}
+
+html.light .nocta-theme-scope :where(
+  .hover\:text-white:hover,
+  .hover\:text-slate-100:hover,
+  .hover\:text-slate-200:hover
+):not(.preserve-dark):not(.preserve-dark *):not(.hover\:bg-red-600:hover):not(.hover\:bg-red-500:hover):not(.hover\:bg-primary:hover) {
+  color: #1D1D1F;
+}
+
+/* Monochrome ink accent calibration on light surfaces */
+html.light .nocta-theme-scope :where(
+  .text-\[\#38BDF8\],
+  .text-sky-300,
+  .text-sky-400,
+  .hover\:text-\[\#38BDF8\]:hover,
+  .group:hover .group-hover\:text-\[\#38BDF8\]
+):not(.preserve-dark):not(.preserve-dark *) {
+  color: #1D1D1F;
+}
+
+html.light .nocta-theme-scope :where(
+  .bg-\[\#38BDF8\]
+):not(.preserve-dark):not(.preserve-dark *) {
+  background-color: #1D1D1F;
+}
+
+html.light .nocta-theme-scope :where(
+  .bg-\[\#38BDF8\].text-slate-950,
+  .bg-primary.text-slate-950,
+  .bg-emerald-500.text-slate-950,
+  .hover\:bg-\[\#38BDF8\]:hover.hover\:text-slate-950
+):not(.preserve-dark):not(.preserve-dark *) {
+  color: #FFFFFF;
+}
+
+html.light .nocta-theme-scope :where(
+  .hover\:bg-\[\#0ea5e9\]:hover
+):not(.preserve-dark):not(.preserve-dark *) {
+  background-color: #000000;
+}
+
+html.light .nocta-theme-scope :where(
+  .bg-\[\#38BDF8\]\/15,
+  .bg-\[\#38BDF8\]\/20,
+  .bg-sky-500\/15,
+  .bg-sky-500\/20
+):not(.preserve-dark):not(.preserve-dark *) {
+  background-color: rgba(29, 29, 31, 0.08);
+}
+
+html.light .nocta-theme-scope :where(
+  .border-\[\#38BDF8\],
+  .border-\[\#38BDF8\]\/30,
+  .border-\[\#38BDF8\]\/35,
+  .border-\[\#38BDF8\]\/40
+):not(.preserve-dark):not(.preserve-dark *) {
+  border-color: rgba(29, 29, 31, 0.28);
+}
+
+html.light .nocta-theme-scope :where(.text-purple-200, .text-purple-300, .text-purple-400):not(.preserve-dark):not(.preserve-dark *) {
+  color: #7C3AED;
+}
+
+html.light .nocta-theme-scope :where(.text-emerald-300, .text-emerald-400):not(.preserve-dark):not(.preserve-dark *) {
+  color: #047857;
+}
+
+html.light .nocta-theme-scope :where(.text-amber-300, .text-amber-400):not(.preserve-dark):not(.preserve-dark *) {
+  color: #B45309;
+}
+
+html.light .nocta-theme-scope :where(.text-rose-300, .text-rose-400, .text-red-300, .text-red-400):not(.preserve-dark):not(.preserve-dark *) {
+  color: #BE123C;
+}
+
+/* Light-mode form controls */
+html.light .nocta-theme-scope :where(input, select, textarea):not(.preserve-dark):not(.preserve-dark *) {
+  color: #0F172A;
+}
+
+html.light .nocta-theme-scope :where(input, select, textarea)::placeholder {
+  color: #64748B;
 }
 
 /* Music Player GPU-accelerated animations */
@@ -150,6 +576,20 @@ input[type="range"] {
   animation: music-overlay-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
 
+@keyframes hero-pill-progress {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+.animate-hero-pill-progress {
+  transform-origin: left center;
+  animation: hero-pill-progress 8s linear forwards;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .music-eq-bar-1,
   .music-eq-bar-2,
@@ -157,9 +597,8 @@ input[type="range"] {
   .animate-vinyl-spin,
   .animate-ambient-drift,
   .animate-heart-pop,
-  .animate-music-overlay-in {
+  .animate-music-overlay-in,
+  .animate-hero-pill-progress {
     animation: none !important;
   }
 }
-
-

@@ -54,6 +54,48 @@ fn detach_mpv_window(window: tauri::WebviewWindow) {
     }
 }
 
+#[tauri::command]
+fn set_window_glass_effect(window: tauri::WebviewWindow, mode: String) -> Result<(), String> {
+    if mode == "off" {
+        let _ = window.set_effects(None);
+        return Ok(());
+    }
+
+    let is_dark = mode == "dark";
+    let _ = window.set_theme(Some(if is_dark {
+        tauri::Theme::Dark
+    } else {
+        tauri::Theme::Light
+    }));
+
+    #[cfg(target_os = "macos")]
+    {
+        use tauri::window::{Effect, EffectState, EffectsBuilder};
+        let effects = EffectsBuilder::new()
+            .effect(Effect::UnderWindowBackground)
+            .state(EffectState::Active)
+            .build();
+        let _ = window.set_effects(Some(effects));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use tauri::window::{Color, Effect, EffectsBuilder};
+        let tint = if is_dark {
+            Color(10, 10, 12, 205)
+        } else {
+            Color(250, 250, 252, 215)
+        };
+        let effects = EffectsBuilder::new()
+            .effect(Effect::Acrylic)
+            .color(tint)
+            .build();
+        let _ = window.set_effects(Some(effects));
+    }
+
+    Ok(())
+}
+
 #[cfg(windows)]
 fn init_windows_dll_directories() {
     use std::os::windows::ffi::OsStrExt;
@@ -308,6 +350,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             attach_mpv_window,
             detach_mpv_window,
+            set_window_glass_effect,
             osd_overlay::open_osd_overlay,
             osd_overlay::show_osd_overlay,
             osd_overlay::close_osd_overlay,

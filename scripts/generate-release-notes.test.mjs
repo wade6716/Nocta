@@ -91,7 +91,7 @@ test('parseCommitsToMarkdown provides fallback notice when no effective commits 
   const md = parseCommitsToMarkdown([{ subject: 'release: v0.2.1' }], {
     currentTag: 'v0.2.1',
   });
-  assert.equal(md, 'Nocta · 夜幕 v0.2.1 版本更新发布。');
+  assert.equal(md, 'Nocta · 诺塔 v0.2.1 版本更新发布。');
 });
 
 test('buildReleaseOutputs prioritizes CHANGELOG.md over git log and keeps updaterNotes concise without template', () => {

@@ -89,6 +89,7 @@ interface PlayerOsdProps {
   isEpisodeDrawerOpen?: boolean;
   isNetworkPopoverOpen?: boolean;
   isPlaybackInfoOpen?: boolean;
+  disableCenterClick?: boolean;
 
   onBack: () => void;
   onHome?: () => void;
@@ -276,6 +277,7 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
   isEpisodeDrawerOpen = false,
   isNetworkPopoverOpen = false,
   isPlaybackInfoOpen = false,
+  disableCenterClick = false,
   skipSegments,
   onBack,
   onHome,
@@ -591,12 +593,18 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
 
       {/* 画面中间透明交互区 */}
       <div
-        className="flex-1 w-full pointer-events-auto cursor-pointer"
-        onClick={() => {
-          closeAllDropdowns();
-          onVideoClick?.();
-        }}
-        onDoubleClick={onVideoDoubleClick}
+        className={`flex-1 w-full ${
+          disableCenterClick ? 'pointer-events-none' : 'pointer-events-auto cursor-pointer'
+        }`}
+        onClick={
+          disableCenterClick
+            ? undefined
+            : () => {
+                closeAllDropdowns();
+                onVideoClick?.();
+              }
+        }
+        onDoubleClick={disableCenterClick ? undefined : onVideoDoubleClick}
       />
 
       {/* 底部悬浮毛玻璃胶囊控制舱 */}

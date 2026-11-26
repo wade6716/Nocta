@@ -4,6 +4,7 @@ import {
   listenEvents,
   command,
   setProperty,
+  getProperty,
   MpvConfig,
   MpvObservableProperty,
 } from 'tauri-plugin-libmpv-api';
@@ -28,6 +29,11 @@ import {
   resolveEffectiveProxyDetailed,
   shouldBypassProxy,
 } from '../api/http';
+import {
+  computeStreamPosSpeed,
+  shouldExitInitialLoading,
+  shouldUseKeyframeSeek,
+} from './playbackStateGuard';
 
 const IS_MACOS = /Macintosh|Mac OS X/i.test(navigator.userAgent);
 const MPV_EMBED_WINDOW_TITLE = 'Nocta Video Surface';
@@ -45,13 +51,20 @@ const OBSERVED_PROPERTIES = [
   ['track-list', 'node', 'none'],
   ['cache-speed', 'int64', 'none'],
   ['demuxer-cache-state', 'node', 'none'],
-  // 真实硬件解码状态与缓冲/帧率标量遥测（全部通过事件推送，严禁调用 getProperty(..., 'node')）
+  // 真实硬件解码状态与缓冲/帧率/寻址/首帧标量遥测（全部通过事件推送，严禁调用 getProperty(..., 'node')）
   ['hwdec-current', 'string', 'none'],
   ['video-codec', 'string', 'none'],
   ['estimated-vf-fps', 'double', 'none'],
   ['frame-drop-count', 'int64', 'none'],
   ['demuxer-cache-duration', 'double', 'none'],
   ['demuxer-cache-time', 'double', 'none'],
+  ['vo-configured', 'flag', 'none'],
+  ['seekable', 'flag', 'none'],
+  ['partially-seekable', 'flag', 'none'],
+  ['stream-pos', 'int64', 'none'],
+  ['file-size', 'int64', 'none'],
+  ['current-demuxer', 'string', 'none'],
+  ['demuxer-via-network', 'flag', 'none'],
 ] as const satisfies readonly MpvObservableProperty[];
 
 export async function resolveMpvProxyDetailed(
@@ -193,6 +206,16 @@ export class MpvPlayerEngine implements IPlayerEngine {
   private loadfileDispatchedEpoch = 0;
   private awaitingFileLoaded = false;
   private macWindowAttachPromise: Promise<void> | null = null;
+  private initialTargetTime = 0;
+  private _voConfigured = false;
+  private _hasPlaybackRestarted = false;
+  private _firstFrameReady = false;
+  private _seekable: boolean | undefined = undefined;
+  private _partiallySeekable = false;
+  private _lastTimePos: number | null = null;
+  private _timeAdvanced = false;
+  private _lastStreamPosSample: { pos: number; at: number } | null = null;
+  private _lastCacheSpeedAt = 0;
 
   private _state: PlayerState = 'idle';
   private _currentTime = 0;
@@ -337,14 +360,19 @@ export class MpvPlayerEngine implements IPlayerEngine {
         await setProperty('http-proxy', effectiveProxy).catch(() => {});
       }
 
-      // 网络流与远端 MKV/MP4 高速 Seek 关键参数配置
-      await setProperty('force-seekable', 'yes').catch(() => {});
+      // 网络流与远端 MKV/MP4 寻址与重连参数配置（严禁强制开启 force-seekable，避免非 Range 流从头线性读取整文件）
+      await setProperty('force-seekable', 'no').catch(() => {});
       await setProperty('cache', 'yes').catch(() => {});
       await setProperty('demuxer-seekable-cache', 'yes').catch(() => {});
       await this.applyBufferConfigToMpv();
-      await setProperty('hr-seek', 'default').catch(() => {});
+      await setProperty('hr-seek', 'no').catch(() => {});
       await setProperty('hr-seek-framedrop', 'yes').catch(() => {}); // 4K 60fps HEVC HDR 跳转避免解码器拥塞黑屏
       await setProperty('demuxer-mkv-subtitle-preroll', 'no').catch(() => {}); // 杜绝 MKV 内嵌字幕反向扫描拖垮网络流
+      await setProperty('demuxer-mkv-probe-start-time', 'no').catch(() => {}); // 避免开播探测首帧时间触发额外跨流 Seek
+      await setProperty(
+        'stream-lavf-o',
+        'reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=5'
+      ).catch(() => {});
       if (IS_MACOS) {
         await setProperty('title', MPV_EMBED_WINDOW_TITLE).catch(() => {});
       }
@@ -398,6 +426,8 @@ export class MpvPlayerEngine implements IPlayerEngine {
           case 'paused-for-cache': {
             this._pausedForCache = Boolean(data);
             this.bufferingFreezeTimePos = this._pausedForCache ? this._currentTime : null;
+            this._telemetry.pausedForCache = this._pausedForCache;
+            this.emitTelemetryThrottled();
             if (this._state !== 'loading' && !this.awaitingFileLoaded) {
               this.updateCurrentState();
             }
@@ -405,6 +435,8 @@ export class MpvPlayerEngine implements IPlayerEngine {
           }
           case 'seeking': {
             this._isSeeking = Boolean(data);
+            this._telemetry.isSeeking = this._isSeeking;
+            this.emitTelemetryThrottled();
             if (this._isSeeking) {
               if (
                 this._state !== 'loading' &&
@@ -430,6 +462,8 @@ export class MpvPlayerEngine implements IPlayerEngine {
               this._isSeekBuffering = false;
               if (this._state !== 'loading' && !this.awaitingFileLoaded) {
                 this.updateCurrentState();
+              } else if (this._state === 'loading' && !this.awaitingFileLoaded) {
+                this.tryExitInitialLoading();
               }
             }
             break;
@@ -439,6 +473,14 @@ export class MpvPlayerEngine implements IPlayerEngine {
               break;
             }
             if (typeof data === 'number' && !Number.isNaN(data)) {
+              if (
+                this._lastTimePos !== null &&
+                data - this._lastTimePos > 0.05 &&
+                data - this._lastTimePos < 3.0
+              ) {
+                this._timeAdvanced = true;
+              }
+              this._lastTimePos = data;
               this._currentTime = data;
               if (
                 this._pausedForCache &&
@@ -450,13 +492,17 @@ export class MpvPlayerEngine implements IPlayerEngine {
               ) {
                 this._pausedForCache = false;
                 this.bufferingFreezeTimePos = null;
+                this._telemetry.pausedForCache = false;
+                this.emitTelemetryThrottled();
                 if (this._state !== 'loading') {
                   this.updateCurrentState();
                 }
               } else if (this._state === 'loading') {
-                this.updateCurrentState();
+                this.tryExitInitialLoading();
               }
-              this.timeUpdateListeners.forEach((cb) => cb(this._currentTime, this._duration));
+              if (this._firstFrameReady || this._state !== 'loading') {
+                this.timeUpdateListeners.forEach((cb) => cb(this._currentTime, this._duration));
+              }
             }
             break;
           }
@@ -466,7 +512,9 @@ export class MpvPlayerEngine implements IPlayerEngine {
             }
             if (typeof data === 'number' && !Number.isNaN(data) && data > 0) {
               this._duration = data;
-              this.timeUpdateListeners.forEach((cb) => cb(this._currentTime, this._duration));
+              if (this._firstFrameReady || this._state !== 'loading') {
+                this.timeUpdateListeners.forEach((cb) => cb(this._currentTime, this._duration));
+              }
             }
             break;
           }
@@ -508,10 +556,25 @@ export class MpvPlayerEngine implements IPlayerEngine {
           }
           case 'cache-speed': {
             if (typeof data === 'number' && !Number.isNaN(data) && data >= 0) {
-              this.lastSpeedUpdateAt = Date.now();
-              if (this._networkSpeed !== data) {
-                this._networkSpeed = data;
-                this.networkSpeedListeners.forEach((cb) => cb(this._networkSpeed));
+              const now = Date.now();
+              if (data > 0) {
+                this._lastCacheSpeedAt = now;
+                this.lastSpeedUpdateAt = now;
+                if (this._networkSpeed !== data) {
+                  this._networkSpeed = data;
+                  this.networkSpeedListeners.forEach((cb) => cb(this._networkSpeed));
+                }
+              } else if (
+                (!this._firstFrameReady || this._isSeeking) &&
+                now - this.lastSpeedUpdateAt < 1500
+              ) {
+                // 正在开播扫流或寻址且 stream-pos 刚有推进时，避免 0 cache-speed 立即覆盖真实网速
+              } else {
+                this.lastSpeedUpdateAt = now;
+                if (this._networkSpeed !== 0) {
+                  this._networkSpeed = 0;
+                  this.networkSpeedListeners.forEach((cb) => cb(0));
+                }
               }
             }
             break;
@@ -520,10 +583,25 @@ export class MpvPlayerEngine implements IPlayerEngine {
             if (data && typeof data === 'object') {
               const rawRate = (data as any)['raw-input-rate'];
               if (typeof rawRate === 'number' && !Number.isNaN(rawRate) && rawRate >= 0) {
-                this.lastSpeedUpdateAt = Date.now();
-                if (this._networkSpeed !== rawRate) {
-                  this._networkSpeed = rawRate;
-                  this.networkSpeedListeners.forEach((cb) => cb(this._networkSpeed));
+                const now = Date.now();
+                if (rawRate > 0) {
+                  this._lastCacheSpeedAt = now;
+                  this.lastSpeedUpdateAt = now;
+                  if (this._networkSpeed !== rawRate) {
+                    this._networkSpeed = rawRate;
+                    this.networkSpeedListeners.forEach((cb) => cb(this._networkSpeed));
+                  }
+                } else if (
+                  (!this._firstFrameReady || this._isSeeking) &&
+                  now - this.lastSpeedUpdateAt < 1500
+                ) {
+                  // 保留 stream-pos 估算速率
+                } else {
+                  this.lastSpeedUpdateAt = now;
+                  if (this._networkSpeed !== 0) {
+                    this._networkSpeed = 0;
+                    this.networkSpeedListeners.forEach((cb) => cb(0));
+                  }
                 }
               }
               const fwBytes = (data as any)['fw-bytes'];
@@ -574,6 +652,69 @@ export class MpvPlayerEngine implements IPlayerEngine {
             }
             break;
           }
+          case 'vo-configured': {
+            this._voConfigured = Boolean(data);
+            this._telemetry.voConfigured = this._voConfigured;
+            if (this._voConfigured && !this.awaitingFileLoaded && this._state === 'loading') {
+              this.tryExitInitialLoading();
+            }
+            this.emitTelemetryThrottled();
+            break;
+          }
+          case 'seekable': {
+            if (typeof data === 'boolean') {
+              this._seekable = data;
+              this._telemetry.seekable = data;
+              this.emitTelemetryThrottled();
+            }
+            break;
+          }
+          case 'partially-seekable': {
+            this._partiallySeekable = Boolean(data);
+            this._telemetry.partiallySeekable = this._partiallySeekable;
+            this.emitTelemetryThrottled();
+            break;
+          }
+          case 'current-demuxer': {
+            if (typeof data === 'string' && data) {
+              this._telemetry.currentDemuxer = data;
+              this.emitTelemetryThrottled();
+            }
+            break;
+          }
+          case 'file-size': {
+            if (typeof data === 'number' && !Number.isNaN(data) && data > 0) {
+              this._telemetry.fileSize = data;
+              this.emitTelemetryThrottled();
+            }
+            break;
+          }
+          case 'stream-pos': {
+            if (typeof data === 'number' && !Number.isNaN(data) && data >= 0) {
+              this._telemetry.streamPos = data;
+              this.emitTelemetryThrottled();
+              const now = Date.now();
+              if (!this._lastStreamPosSample) {
+                this._lastStreamPosSample = { pos: data, at: now };
+              } else if (now - this._lastStreamPosSample.at >= 250) {
+                const derivedSpeed = computeStreamPosSpeed(
+                  this._lastStreamPosSample.pos,
+                  this._lastStreamPosSample.at,
+                  data,
+                  now
+                );
+                this._lastStreamPosSample = { pos: data, at: now };
+                if (derivedSpeed !== null && now - this._lastCacheSpeedAt > 1500) {
+                  this.lastSpeedUpdateAt = now;
+                  if (this._networkSpeed !== derivedSpeed) {
+                    this._networkSpeed = derivedSpeed;
+                    this.networkSpeedListeners.forEach((cb) => cb(this._networkSpeed));
+                  }
+                }
+              }
+            }
+            break;
+          }
         }
       });
 
@@ -586,24 +727,31 @@ export class MpvPlayerEngine implements IPlayerEngine {
             return;
           }
           this.awaitingFileLoaded = false;
-          // 媒体文件头部已成功解析打开
-          if (this.pendingSeekTime && this.pendingSeekTime > 0) {
-            const targetSeek = this.pendingSeekTime;
-            this.pendingSeekTime = null;
-            // 媒体文件头打开后执行明确的绝对定点 seek，确保通过 HTTP Range 直达目标片区，
-            // 且不会阻断后续播放或向上层抛错
-            try {
-              await command('seek', [targetSeek, 'absolute']);
-            } catch (seekErr) {
-              console.warn('[MpvEngine Deferred Seek Warning]', seekErr);
-            }
-          }
+          // 不在 file-loaded 中无条件二次 seek，避免打断 start 预设的首次 Range 请求并触发从头扫流
           this.attachMacWindow();
         } else if (evName === 'playback-restart') {
           if (this.loadfileDispatchedEpoch !== this.loadEpoch) {
             return;
           }
           this.awaitingFileLoaded = false;
+          this._hasPlaybackRestarted = true;
+
+          // 仅当 start 属性未生效且流支持分段寻址时，才以关键帧模式兜底纠偏一次
+          if (this.pendingSeekTime && this.pendingSeekTime > 0) {
+            const targetSeek = this.pendingSeekTime;
+            this.pendingSeekTime = null;
+            if (
+              !this._partiallySeekable &&
+              this._seekable !== false &&
+              Math.abs(this._currentTime - targetSeek) > 3
+            ) {
+              command('seek', [targetSeek, 'absolute+keyframes']).catch((seekErr) => {
+                console.warn('[MpvEngine Deferred Seek Warning]', seekErr);
+              });
+              return;
+            }
+          }
+
           // 首帧或定点跳转后音视频解码恢复就绪，重置 start 属性以免影响后续切片
           setProperty('start', 'none').catch(() => {});
           this._pausedForCache = false;
@@ -611,6 +759,11 @@ export class MpvPlayerEngine implements IPlayerEngine {
           this._isSeekBuffering = false;
           this.bufferingFreezeTimePos = null;
           this.clearSeekBufferTimer();
+          this._firstFrameReady = true;
+          this._telemetry.firstFrameReady = true;
+          this._telemetry.isSeeking = false;
+          this._telemetry.pausedForCache = false;
+          this.emitTelemetryThrottled();
           this.updateCurrentState();
           this.timeUpdateListeners.forEach((cb) => cb(this._currentTime, this._duration));
           this.attachMacWindow();
@@ -673,6 +826,8 @@ export class MpvPlayerEngine implements IPlayerEngine {
    * 导致 Windows/macOS 下 100% 发生栈缓冲区溢出崩溃 (STATUS_ACCESS_VIOLATION / CrashSender.exe)。
    * 因此实时网速完全通过 observeProperties 事件推送获取，此处仅用纯 JS 定时器做闲置归零衰减。
    */
+  private pollingStreamPos = false;
+
   private startSpeedPolling() {
     if (this.speedPollTimer !== null) return;
     this.speedPollTimer = window.setInterval(() => {
@@ -683,6 +838,55 @@ export class MpvPlayerEngine implements IPlayerEngine {
         }
         return;
       }
+
+      // 在开播解复用前或 Seek/缓冲期间，libmpv 的 observeProperties 可能不推 stream-pos 且 cache-speed 为 0；
+      // 此处仅用安全标量 'int64' 轮询 stream-pos / file-size（严禁使用 'node'）补齐真实读取速率。
+      const now = Date.now();
+      const needsStreamPosFallback =
+        (this._state === 'loading' || this._isSeeking || this._pausedForCache) &&
+        now - this._lastCacheSpeedAt > 1500;
+      if (needsStreamPosFallback && !this.pollingStreamPos) {
+        this.pollingStreamPos = true;
+        void (async () => {
+          try {
+            const posRaw = await getProperty('stream-pos', 'int64').catch(() => null);
+            const pos = typeof posRaw === 'number' ? posRaw : Number(posRaw);
+            if (!this.isDestroyed && Number.isFinite(pos) && pos >= 0) {
+              this._telemetry.streamPos = pos;
+              const sampledAt = Date.now();
+              if (!this._lastStreamPosSample) {
+                this._lastStreamPosSample = { pos, at: sampledAt };
+              } else if (sampledAt - this._lastStreamPosSample.at >= 250) {
+                const derivedSpeed = computeStreamPosSpeed(
+                  this._lastStreamPosSample.pos,
+                  this._lastStreamPosSample.at,
+                  pos,
+                  sampledAt
+                );
+                this._lastStreamPosSample = { pos, at: sampledAt };
+                if (derivedSpeed !== null) {
+                  this.lastSpeedUpdateAt = sampledAt;
+                  if (this._networkSpeed !== derivedSpeed) {
+                    this._networkSpeed = derivedSpeed;
+                    this.networkSpeedListeners.forEach((cb) => cb(this._networkSpeed));
+                  }
+                }
+              }
+              if (!this._telemetry.fileSize) {
+                const fzRaw = await getProperty('file-size', 'int64').catch(() => null);
+                const fz = typeof fzRaw === 'number' ? fzRaw : Number(fzRaw);
+                if (!this.isDestroyed && Number.isFinite(fz) && fz > 0) {
+                  this._telemetry.fileSize = fz;
+                }
+              }
+              this.emitTelemetryThrottled();
+            }
+          } finally {
+            this.pollingStreamPos = false;
+          }
+        })();
+      }
+
       // 当缓冲填满暂停拉流、超过 2.5 秒未收到新的速率更新事件时，自动平滑归零
       if (this._networkSpeed > 0 && Date.now() - this.lastSpeedUpdateAt > 2500) {
         this._networkSpeed = 0;
@@ -742,6 +946,26 @@ export class MpvPlayerEngine implements IPlayerEngine {
     }
   }
 
+  private tryExitInitialLoading() {
+    if (this._state !== 'loading' || this.awaitingFileLoaded) return;
+    if (
+      shouldExitInitialLoading({
+        hasPlaybackRestarted: this._hasPlaybackRestarted,
+        voConfigured: this._voConfigured,
+        isSeeking: this._isSeeking,
+        pausedForCache: this._pausedForCache,
+        currentTime: this._currentTime,
+        targetInitialTime: this.initialTargetTime,
+        timeAdvanced: this._timeAdvanced,
+      })
+    ) {
+      this._firstFrameReady = true;
+      this._telemetry.firstFrameReady = true;
+      this.emitTelemetryThrottled();
+      this.updateCurrentState();
+    }
+  }
+
   private updateCurrentState() {
     if (this._isSeekBuffering) {
       this.setState('buffering');
@@ -761,6 +985,16 @@ export class MpvPlayerEngine implements IPlayerEngine {
     this.awaitingFileLoaded = true;
     this._currentTime = 0;
     this._duration = 0;
+    this.initialTargetTime = options.initialTime && options.initialTime > 0 ? options.initialTime : 0;
+    this._voConfigured = false;
+    this._hasPlaybackRestarted = false;
+    this._firstFrameReady = false;
+    this._seekable = undefined;
+    this._partiallySeekable = false;
+    this._lastTimePos = null;
+    this._timeAdvanced = false;
+    this._lastStreamPosSample = null;
+    this._lastCacheSpeedAt = 0;
     this.setState('loading');
 
     try {
@@ -776,6 +1010,12 @@ export class MpvPlayerEngine implements IPlayerEngine {
     }
 
     if (this.isDestroyed || currentEpoch !== this.loadEpoch) return;
+
+    // 切流/切换中转或 FFmpeg 解复用器前先显式中止上一个卡滞流，防止旧的扫流或锁死状态阻塞新流加载
+    if (currentEpoch > 1) {
+      await command('stop').catch(() => {});
+      if (this.isDestroyed || currentEpoch !== this.loadEpoch) return;
+    }
 
     if (options.bufferConfig) {
       this.bufferConfig = { ...options.bufferConfig };
@@ -804,20 +1044,32 @@ export class MpvPlayerEngine implements IPlayerEngine {
       console.warn('[MpvEngine Sync Proxy Warning]', e);
     }
 
-    // 重置流级别遥测数据（保留硬解器名称，待新流事件刷新）
+    // 重置流级别遥测数据（含 hwdecCurrent，避免新流首帧前误显示上一集的硬解徽章）
     this._telemetry = {
-      hwdecCurrent: this._telemetry.hwdecCurrent,
+      hwdecCurrent: undefined,
       droppedFrames: 0,
       cacheDuration: 0,
       bufferedEnd: 0,
       cacheForwardBytes: 0,
+      voConfigured: false,
+      isSeeking: false,
+      pausedForCache: false,
+      firstFrameReady: false,
+      streamPos: 0,
     };
     this.emitTelemetryThrottled();
 
-    // 每次加载媒体流时，显式保证流可定点 Seek、范围检索 (HTTP Range) 与解码器跳转丢帧保护
-    await setProperty('force-seekable', 'yes').catch(() => {});
+    // 每次加载媒体流时，按当前策略配置解复用器、寻址模式与网络重连参数
+    await setProperty('demuxer', options.demuxer === 'lavf' ? 'lavf' : '').catch(() => {});
+    await setProperty('force-seekable', 'no').catch(() => {});
+    await setProperty('hr-seek', 'no').catch(() => {});
     await setProperty('hr-seek-framedrop', 'yes').catch(() => {});
     await setProperty('demuxer-mkv-subtitle-preroll', 'no').catch(() => {});
+    await setProperty('demuxer-mkv-probe-start-time', 'no').catch(() => {});
+    await setProperty(
+      'stream-lavf-o',
+      'reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=5'
+    ).catch(() => {});
     await this.applyNetworkHeadersToMpv(options.userAgent, options.headers);
 
     this._pausedForCache = false;
@@ -826,14 +1078,13 @@ export class MpvPlayerEngine implements IPlayerEngine {
     this.bufferingFreezeTimePos = null;
     this.clearSeekBufferTimer();
     this.setState('loading');
-    this.pendingSeekTime = options.initialTime && options.initialTime > 0 ? options.initialTime : null;
+    this.pendingSeekTime = this.initialTargetTime > 0 ? this.initialTargetTime : null;
     this._currentTime = 0;
     this._duration = 0;
 
     try {
-      // 关键修复：切勿在 loadfile 后同步调用 command('seek')，因为文件尚未完成 demux 打开，
-      // 同步调用 seek 会直接抛出 "mpv command failed: error running command" 导致误判流失败！
-      // 正确做法：通过 mpv 原生 start 属性预设起播秒数，并在 file-loaded 事件中安全兜底定位。
+      // 关键修复：切勿在 loadfile 后同步或 file-loaded 时无条件调用 command('seek')，
+      // 必须通过 mpv 原生 start 属性预设起播秒数一次到位；仅在 playback-restart 确认位置仍偏差 > 3s 且支持 Range 时才兜底。
       if (this.pendingSeekTime && this.pendingSeekTime > 0) {
         await setProperty('start', `+${Math.floor(this.pendingSeekTime)}`).catch(() => {});
       } else {
@@ -853,6 +1104,7 @@ export class MpvPlayerEngine implements IPlayerEngine {
           MpvPlayerEngine.mpvInstanceCreated = false;
           await this.init(null);
           await this.applyBufferConfigToMpv();
+          await setProperty('demuxer', options.demuxer === 'lavf' ? 'lavf' : '').catch(() => {});
           await setProperty('http-proxy', mpvEffectiveProxy).catch(() => {});
           await this.applyNetworkHeadersToMpv(options.userAgent, options.headers);
           if (this.pendingSeekTime && this.pendingSeekTime > 0) {
@@ -913,12 +1165,20 @@ export class MpvPlayerEngine implements IPlayerEngine {
   async seek(targetSeconds: number): Promise<void> {
     if (!this.isInitialized || this.isDestroyed) return;
     try {
-      await command('seek', [targetSeconds, 'absolute']);
+      const seekMode = shouldUseKeyframeSeek({
+        currentTime: this._currentTime,
+        targetSeconds,
+      })
+        ? 'absolute+keyframes'
+        : 'absolute';
+      await command('seek', [targetSeconds, seekMode]);
       this._currentTime = targetSeconds;
       if (this._pausedForCache) {
         this.bufferingFreezeTimePos = targetSeconds;
       }
-      this.timeUpdateListeners.forEach((cb) => cb(targetSeconds, this._duration));
+      if (this._firstFrameReady) {
+        this.timeUpdateListeners.forEach((cb) => cb(targetSeconds, this._duration));
+      }
     } catch (err) {
       console.warn('[MpvEngine Seek Error]', err);
     }
@@ -1211,10 +1471,21 @@ export class MpvPlayerEngine implements IPlayerEngine {
     }
 
     this.stopSpeedPolling();
+    this.pollingStreamPos = false;
     this.clearSeekBufferTimer();
     this._pausedForCache = false;
     this._isSeeking = false;
     this._isSeekBuffering = false;
+    this._voConfigured = false;
+    this._hasPlaybackRestarted = false;
+    this._firstFrameReady = false;
+    this._seekable = undefined;
+    this._partiallySeekable = false;
+    this._lastTimePos = null;
+    this._timeAdvanced = false;
+    this._lastStreamPosSample = null;
+    this._lastCacheSpeedAt = 0;
+    this.initialTargetTime = 0;
     this.bufferingFreezeTimePos = null;
     this.timeUpdateListeners.clear();
     this.stateChangeListeners.clear();

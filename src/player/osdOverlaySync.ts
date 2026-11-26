@@ -73,6 +73,8 @@ export interface OsdSyncPayload {
   danmakuStyle: OsdDanmakuStyle;
   isLoading: boolean;
   isBuffering?: boolean;
+  bufferingHint?: string | null;
+  hasFirstFrame?: boolean;
   skipSegments?: SkipSegments | null;
   outroToast?: {
     visible: boolean;

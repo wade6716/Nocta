@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { emit, listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { AlertCircle, Pause, Play, X } from 'lucide-react';
+import { shouldDanmakuRun } from '../player/playbackStateGuard';
 import { PlayerOsd } from '../components/player/PlayerOsd';
 import { DanmakuLayer } from '../components/player/DanmakuLayer';
 import { MpvDanmakuBridge } from '../components/player/MpvDanmakuBridge';
@@ -175,7 +176,14 @@ export const OsdOverlayPage: React.FC = () => {
 
       const bridge = bridgeRef.current;
       bridge.onMpvTimePos(payload.currentTime);
-      bridge.onMpvPauseChange(payload.paused || payload.isLoading || Boolean(payload.isBuffering));
+      const canRunDanmaku = shouldDanmakuRun({
+        paused: payload.paused,
+        isLoadingVideo: payload.isLoading,
+        isBuffering: Boolean(payload.isBuffering),
+        hasFirstFrame: payload.hasFirstFrame !== false,
+        hasError: false,
+      });
+      bridge.onMpvPauseChange(!canRunDanmaku);
       bridge.onMpvSpeedChange(payload.playbackRate);
       if (bridge.offset !== payload.danmakuOffset) {
         bridge.offset = payload.danmakuOffset;
@@ -561,6 +569,7 @@ export const OsdOverlayPage: React.FC = () => {
       <BufferingIndicator
         visible={Boolean(sync.isBuffering) && !sync.isLoading && !sync.centerIcon}
         networkSpeed={sync.networkSpeed}
+        hint={sync.bufferingHint || undefined}
       />
 
       <DanmakuLayer

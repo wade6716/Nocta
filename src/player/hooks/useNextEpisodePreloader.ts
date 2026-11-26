@@ -43,6 +43,8 @@ interface UseNextEpisodePreloaderParams {
   duration: number;
   paused: boolean;
   isLoadingVideo: boolean;
+  isBuffering: boolean;
+  hasFirstFrame: boolean;
   videoError: string | null;
   telemetry: PlayerTelemetry;
   proxyOverride: StreamProxyOverride;
@@ -125,6 +127,8 @@ export function useNextEpisodePreloader({
   duration,
   paused,
   isLoadingVideo,
+  isBuffering,
+  hasFirstFrame,
   videoError,
   telemetry,
   proxyOverride,
@@ -192,18 +196,42 @@ export function useNextEpisodePreloader({
     nextIntroHint?.startSec,
   ]);
 
-  // 统计当前集有效连续播放秒数
+  // 统计当前集有效连续播放秒数（未出首帧或缓冲卡顿时不计入稳定播放）
   useEffect(() => {
     stablePlaySecRef.current = 0;
   }, [currentItem?.Id]);
 
   useEffect(() => {
-    if (isLoadingVideo || videoError || paused) return;
+    if (isLoadingVideo || isBuffering || !hasFirstFrame || videoError || paused) return;
     const timer = window.setInterval(() => {
       stablePlaySecRef.current += 1;
     }, 1000);
     return () => window.clearInterval(timer);
-  }, [isLoadingVideo, videoError, paused, currentItem?.Id]);
+  }, [isLoadingVideo, isBuffering, hasFirstFrame, videoError, paused, currentItem?.Id]);
+
+  // 当前集进入持续缓冲（> 2.5s）且后台仍在下载下一集时，立即中止预加载释放全部带宽
+  useEffect(() => {
+    if (
+      !isBuffering ||
+      !isTauriEnvironment() ||
+      !preloadStatus?.token ||
+      (preloadStatus.status !== 'probing' && preloadStatus.status !== 'downloading')
+    ) {
+      return;
+    }
+
+    const token = preloadStatus.token;
+    const timer = window.setTimeout(() => {
+      inFlightKeyRef.current = null;
+      completedKeyRef.current = null;
+      preparedRef.current = null;
+      requestSeqRef.current += 1;
+      setPreloadStatus(null);
+      void invoke('cancel_next_episode_preload', { token }).catch(() => {});
+    }, 2500);
+
+    return () => window.clearTimeout(timer);
+  }, [isBuffering, preloadStatus?.token, preloadStatus?.status]);
 
   // 当播放稳定于新集后，自动释放已切集会话的内存分块（保留透明代理回源能力）
   useEffect(() => {
@@ -263,7 +291,9 @@ export function useNextEpisodePreloader({
     if (
       !configKey ||
       !isTauriEnvironment() ||
+      !hasFirstFrame ||
       isLoadingVideo ||
+      isBuffering ||
       videoError ||
       !currentItem ||
       !nextEpisode
@@ -304,7 +334,9 @@ export function useNextEpisodePreloader({
     }
   }, [
     configKey,
+    hasFirstFrame,
     isLoadingVideo,
+    isBuffering,
     videoError,
     currentItem?.Id,
     nextEpisode?.Id,

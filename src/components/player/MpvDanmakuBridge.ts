@@ -1,10 +1,11 @@
 import { DanmakuMediaAdapter } from 'danmaku';
+import { computeClampedBridgeElapsed } from '../../player/playbackStateGuard';
 
 /**
  * 120Hz 高刷新率线性插值时钟适配器
  * 将 libmpv 较低频（50ms~200ms）推送的 time-pos 与播放状态，
  * 转换为与显示器刷新率（60/120/144Hz）同步的平滑单调时钟，
- * 彻底消除弹幕微卡顿与跳跃感。
+ * 彻底消除弹幕微卡顿与跳跃感，并在失去底层心跳时钳制最大外推时间防止脱轨漂移。
  */
 export class MpvDanmakuBridge extends EventTarget implements DanmakuMediaAdapter {
   private _baseTime = 0;
@@ -17,7 +18,8 @@ export class MpvDanmakuBridge extends EventTarget implements DanmakuMediaAdapter
     if (this._paused) {
       return Math.max(0, this._baseTime + this._offset);
     }
-    const elapsed = ((performance.now() - this._lastSyncPerf) / 1000) * this._playbackRate;
+    const rawElapsed = ((performance.now() - this._lastSyncPerf) / 1000) * this._playbackRate;
+    const elapsed = computeClampedBridgeElapsed(rawElapsed, 1.5);
     return Math.max(0, this._baseTime + elapsed + this._offset);
   }
 

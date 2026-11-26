@@ -35,14 +35,15 @@
   - **严禁调用 `getProperty(..., 'node')`**（`nini22P/libmpv-wrapper` 栈指针 8 字节而 C API 写 16 字节 `mpv_node` 必现栈溢出崩溃），复杂/数值属性一律通过 `observeProperties` 获取。
   - **严禁调用 `tauri-plugin-libmpv` 的 `destroy()`**（存在 UAF 竞态）。`'main'` 实例进程级复用，离页仅解绑监听并 `setProperty('pause', true)` + `command('stop')`。
 - **MPV 参数与起播生命周期 ([`MpvPlayerEngine.ts`](file:///d:/wade/code/emby-tauri-player/src/player/MpvPlayerEngine.ts))**：
-  - `X-Emby-Authorization` 含逗号，**严禁 `setProperty('http-header-fields', ...)`**，须用 `command('change-list', ['http-header-fields', 'clr', ''])` 后逐条 `append`；`demuxer-max-bytes` 与 `demuxer-max-back-bytes` 须以 `String(bytes)` 字符串下发。
-  - **严禁在 `loadfile` 后同步调用 `command('seek')`**：须在 `loadfile` 前预设 `start`、`this._currentTime = 0`，在 `file-loaded` 后执行带 `try/catch` 绝对寻址，在 `playback-restart` 后重置 `start='none'`。保留 `force-seekable: 'yes'`、`demuxer-seekable-cache: 'yes'`、`hr-seek-framedrop: 'yes'`、`demuxer-mkv-subtitle-preroll: 'no'` 防 MKV 远端顺序下载死锁；`lifecycleQueue` 串行化 `init`/`destroy`。
-- **进度保护、片头/片尾跳过与切集隔离**：
-  - 用 `hasInitialSeekedRef` 拦截首跳前 0 秒 `onTimeUpdate`；停播/切集上报读现场秒数或 `lastValidTimeRef.current` 并以 `reportedStoppedSessionRef` 防覆盖，禁读旧闭包 `currentTime`；距片尾 `< 15s` 或 `> 98%` 视作完播。
-  - 跳过片尾（[`useSkipSegmentsController.ts`](file:///d:/wade/code/emby-tauri-player/src/player/hooks/useSkipSegmentsController.ts)）有 `nextEpisode` 时直接 `switchToEpisode`，无下一集时 `seek(total - 1)`（**严禁 `seek(total - 0.25)`** 导致 `Math.ceil` 卡死片尾）；切集通过 `loadEpoch`（拦截非当前 epoch 的 `time-pos`/`duration`/`end-file`）与 [`PlayerPage.tsx`](file:///d:/wade/code/emby-tauri-player/src/pages/PlayerPage.tsx) `isSwitchingEpisodeRef` + 立即 `pause()` 隔离旧流；`SkipSegments` 变更走 `saveStorageImmediate` 即时落盘。
+  - `X-Emby-Authorization` 含逗号，**严禁 `setProperty('http-header-fields', ...)`**，须用 `change-list clr/append`；`demuxer-max-bytes` 须传 `String(bytes)`。
+  - **严禁 `file-loaded` 重复下发 `seek` 与强设 `force-seekable: 'yes'`**：起播仅靠 `loadfile` 前预设 `start`；置 `force-seekable: 'no'`、`hr-seek: 'no'`、`demuxer-mkv-probe-start-time: 'no'`、`demuxer-mkv-subtitle-preroll: 'no'`，防 302/MKV 续播废除 Range 从 byte 0 狂拖。仅在 `playback-restart` 且 `!partiallySeekable && seekable !== false && Δ>3s` 时补救 `absolute+keyframes`；切勿使用 `getProperty(..., 'node')`。
+  - **首帧与测速守卫 ([`playbackStateGuard.ts`](file:///d:/wade/code/emby-tauri-player/src/player/playbackStateGuard.ts))**：仅当 `voConfigured || playbackRestart` 才退出 `isLoadingVideo`（`hasFirstFrame`）；`shouldDanmakuRun` 在加载/缓冲/`!hasFirstFrame` 时暂停弹幕，[`MpvDanmakuBridge.ts`](file:///d:/wade/code/emby-tauri-player/src/components/player/MpvDanmakuBridge.ts) 外推限 `1.5s`；`cache-speed` 为 `0` 时用安全 `'int64'` 轮询 `stream-pos` 及中转 `get_stream_relay_stats` 补齐网速；Loading 遮罩用 `z-[15]` 配合 [`PlayerOsd.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/PlayerOsd.tsx) `disableCenterClick` 防 `z-20` 透明交互层吞掉居中按钮点击。
+- **进度保护、跳过与 0 帧看门狗**：
+  - 用 `hasInitialSeekedRef` 拦截首跳前 0 秒 `onTimeUpdate`；停播/切集读现场秒数或 `lastValidTimeRef.current` 并以 `reportedStoppedSessionRef` 防覆盖；距片尾 `< 15s` 或 `> 98%` 视作完播；跳过片尾无下一集时 `seek(total - 1)`；`loadEpoch` 与 `isSwitchingEpisodeRef` 隔离切集旧流。
+  - 首帧前 8s 0 帧看门狗：`diagnose_stream_url` 探测中段 Range 与 MKV `Cues`；无 `Cues` MKV 由 [`mkv_cues.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/mkv_cues.rs) 在 `start_stream_relay` 零转码拼装虚拟索引；中段不支持 Range（200）时禁止反复掐断并引导从 `00:00` 播放。
 - **动态时长缓冲与纯内存预加载 ([`preload.rs`](file:///d:/wade/code/emby-tauri-player/src-tauri/src/preload.rs) / [`useNextEpisodePreloader.ts`](file:///d:/wade/code/emby-tauri-player/src/player/hooks/useNextEpisodePreloader.ts))**：
-  - `setBufferConfig` 协同下发 `demuxer-readahead-secs`（默认 5 分钟）与受 `cacheMemoryCapMB` 约束的 `demuxer-max-bytes` 防 OOM。
-  - 预加载用 1 MiB 内存分块（零磁盘 IO），**严禁持 `RwLock` 跨越 `.await`**；文件大小用 `GET Range: bytes=0-0` 探测；302 跨域必须剥离 `authorization`/`X-Emby-*`；切入预载集立即 `abort()` 下载，稳定起播后调用 `release_active_preload_memory` 释分块保透传；`-13` 自动 `diagnose_stream_url` 逐跳排查并在 Rust 可达时单次降级零内存 `start_stream_relay`。
+  - `setBufferConfig` 协同下发 `demuxer-readahead-secs` 与受 `cacheMemoryCapMB` 约束的 `demuxer-max-bytes` 防 OOM；起播未出首帧或缓冲 `> 2.5s` 时暂停/取消下一集预载让出带宽。
+  - 预加载用 1 MiB 内存分块，**严禁持 `RwLock` 跨越 `.await`**；文件大小用 `GET Range: bytes=0-0` 探测；302 跨域剥离鉴权头；稳定起播后调 `release_active_preload_memory`；`-13` 调 `diagnose_stream_url` 必要时降级 `start_stream_relay`。
 - **缓冲态解耦**：播放中缓冲仅显示 `pointer-events-none` 的 [`BufferingIndicator.tsx`](file:///d:/wade/code/emby-tauri-player/src/components/player/BufferingIndicator.tsx)，**严禁拉起全屏 `isLoadingVideo` 或强制显示 OSD**。
 
 ### 3. 视窗穿透、主题毛玻璃与 macOS 原生窗口/全屏浮层

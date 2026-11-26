@@ -30,6 +30,15 @@ export interface PlayerTelemetry {
   cacheDuration?: number; // 前向缓冲秒数 (demuxer-cache-duration)
   bufferedEnd?: number; // 缓冲末端时间点 (demuxer-cache-time)
   cacheForwardBytes?: number; // 前向缓冲字节数 (demuxer-cache-state['fw-bytes'])
+  voConfigured?: boolean;
+  isSeeking?: boolean;
+  pausedForCache?: boolean;
+  seekable?: boolean;
+  partiallySeekable?: boolean;
+  firstFrameReady?: boolean;
+  streamPos?: number;
+  fileSize?: number;
+  currentDemuxer?: string;
 }
 
 export interface BufferConfigOptions {
@@ -66,6 +75,7 @@ export interface PlayerLoadOptions {
   isLive?: boolean;
   proxyOverride?: StreamProxyOverride;
   bufferConfig?: BufferConfigOptions;
+  demuxer?: 'auto' | 'lavf';
 }
 
 export interface IPlayerEngine {

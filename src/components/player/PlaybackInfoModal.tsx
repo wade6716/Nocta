@@ -167,6 +167,13 @@ export const PlaybackInfoModal: React.FC<PlaybackInfoModalProps> = ({
         ? `下一集内存预加载: ${nextPreloadStatus.itemName} · ${formatPreloadStateText(nextPreloadStatus)} (${formatPreloadDurationMMSS(nextPreloadStatus.cachedDurationSec)} / ${formatPreloadDurationMMSS(nextPreloadStatus.targetDurationSec)}, ${formatBytes(nextPreloadStatus.cachedBytes)}${nextPreloadStatus.skippedIntro ? `, 已跳过片头至 ${formatTime(nextPreloadStatus.startSeconds)}` : ''})`
         : `下一集内存预加载: ${playerPreferences.preloadNextEnabled ? `待触发 (${formatMinutesLabel(playerPreferences.preloadNextDurationSeconds)})` : '已关闭'}`,
       `播放内核: ${engineType === 'mpv' ? 'libmpv (原生渲染)' : 'HTML5 Video'}`,
+      telemetry?.currentDemuxer ? `解复用器: ${telemetry.currentDemuxer}` : null,
+      telemetry?.seekable !== undefined
+        ? `分段寻址 (Range): ${telemetry.partiallySeekable ? '受限 (非 Range / 部分可寻址)' : telemetry.seekable ? '支持' : '不支持'}`
+        : null,
+      telemetry?.streamPos !== undefined && telemetry.streamPos > 0
+        ? `底层流读取游标: ${formatBytes(telemetry.streamPos)}${telemetry.fileSize ? ` / ${formatBytes(telemetry.fileSize)}` : ''}`
+        : null,
       `实时硬件解码: ${hwdecLabel}`,
       `实时渲染帧率: ${telemetry?.fps ? `${telemetry.fps.toFixed(2)} fps` : '-'} (丢帧: ${telemetry?.droppedFrames ?? 0})`,
       `播放进度: ${formatTime(currentTime)} / ${formatTime(duration)} (${progressPercent}%) · ${playbackRate}x 倍速`,
@@ -408,6 +415,49 @@ export const PlaybackInfoModal: React.FC<PlaybackInfoModalProps> = ({
                   {telemetry?.droppedFrames ?? 0}
                 </span>
               </div>
+
+              {engineType === 'mpv' && (
+                <>
+                  <div>
+                    <span className="text-slate-500 block text-[11px]">解复用器 (Demuxer)</span>
+                    <span className="font-mono text-slate-200 font-semibold">
+                      {telemetry?.currentDemuxer || '-'}
+                    </span>
+                  </div>
+
+                  <div>
+                    <span className="text-slate-500 block text-[11px]">分段寻址 (Range)</span>
+                    <span
+                      className={`font-mono font-semibold ${
+                        telemetry?.partiallySeekable
+                          ? 'text-amber-300'
+                          : telemetry?.seekable === false
+                          ? 'text-red-300'
+                          : 'text-emerald-300'
+                      }`}
+                    >
+                      {telemetry?.partiallySeekable
+                        ? '受限 (非 Range)'
+                        : telemetry?.seekable === true
+                        ? '支持'
+                        : telemetry?.seekable === false
+                        ? '不支持'
+                        : '-'}
+                    </span>
+                  </div>
+
+                  <div>
+                    <span className="text-slate-500 block text-[11px]">底层流读取游标</span>
+                    <span className="font-mono text-slate-200 font-semibold tabular-nums">
+                      {telemetry?.streamPos !== undefined && telemetry.streamPos > 0
+                        ? `${formatBytes(telemetry.streamPos)}${
+                            telemetry.fileSize ? ` / ${formatBytes(telemetry.fileSize)}` : ''
+                          }`
+                        : '-'}
+                    </span>
+                  </div>
+                </>
+              )}
 
               <div className="col-span-2 sm:col-span-3">
                 <span className="text-slate-500 block text-[11px]">弹幕源绑定</span>

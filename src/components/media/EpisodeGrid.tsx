@@ -446,20 +446,8 @@ const EpisodeGridComponent: React.FC<EpisodeGridProps> = ({
                   </div>
                 ) : null}
 
-                {/* Hover play icon (click directly plays without opening top detail) */}
-                <div className="absolute inset-0 bg-black/35 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      (onPlayEpisode || onSelectEpisode)(ep);
-                    }}
-                    className="pointer-events-auto cursor-pointer w-11 h-11 rounded-full bg-[#38BDF8] hover:bg-[#0ea5e9] text-slate-950 flex items-center justify-center shadow-xl shadow-sky-500/35 transform scale-75 group-hover:scale-100 transition-transform"
-                    title="直接播放此集"
-                  >
-                    <Play className="w-5 h-5 fill-current ml-0.5" />
-                  </button>
-                </div>
+                {/* Hover subtle darken overlay (click anywhere on card opens top detail) */}
+                <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
 
                 {/* Duration & file size badge */}
                 {(ep.RunTimeTicks || epSizeLabel) && (
@@ -483,12 +471,27 @@ const EpisodeGridComponent: React.FC<EpisodeGridProps> = ({
 
               {/* Bottom Full-Width Info Details */}
               <div className="p-3.5 flex-1 flex flex-col min-w-0">
-                <h3
-                  className="text-sm font-semibold text-slate-50 group-hover:text-[#38BDF8] transition-colors line-clamp-1"
-                  title={ep.Name}
-                >
-                  {ep.Name}
-                </h3>
+                <div className="flex items-center justify-between gap-2">
+                  <h3
+                    className="text-sm font-semibold text-slate-50 group-hover:text-[#38BDF8] transition-colors line-clamp-1 min-w-0"
+                    title={ep.Name}
+                  >
+                    {ep.Name}
+                  </h3>
+                  {onPlayEpisode && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onPlayEpisode(ep);
+                      }}
+                      className="shrink-0 w-7 h-7 rounded-full bg-white/[0.06] hover:bg-[#38BDF8] text-slate-300 hover:text-slate-950 border border-white/[0.08] hover:border-[#38BDF8] flex items-center justify-center transition cursor-pointer"
+                      title="直接播放此集"
+                    >
+                      <Play className="w-3.5 h-3.5 fill-current ml-0.5" />
+                    </button>
+                  )}
+                </div>
 
                 {ep.Overview ? (
                   <p

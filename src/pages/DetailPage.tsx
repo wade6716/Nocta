@@ -118,8 +118,11 @@ export const DetailPage: React.FC = () => {
   const prevVersionItemIdRef = useRef<string | undefined>(undefined);
   const topRef = useRef<HTMLDivElement | null>(null);
 
-  const isSeriesItem = item?.Type === 'Series';
-  const activePlayableItem = !isSeriesItem ? item : selectedEpisode;
+  const hasSeriesContext =
+    item?.Type === 'Series' || (item?.Type === 'Episode' && !!item?.SeriesId);
+  const activePlayableItem = hasSeriesContext
+    ? selectedEpisode || (item?.Type === 'Episode' ? item : null)
+    : item;
 
   const sortedItemMediaSources = useMemo(
     () => sortMediaSourcesByQuality(activePlayableItem?.MediaSources || []),
@@ -576,7 +579,7 @@ export const DetailPage: React.FC = () => {
             )}
 
             {/* 剧集选中分集详情面板（点击下方某一集后在顶部展示本集参数、介绍与多清晰度版本） */}
-            {isSeries && selectedEpisode && (
+            {(isSeries || isEpisodeWithSeries) && selectedEpisode && (
               <div className="mt-4 p-5 rounded-2xl bg-[#131826]/90 border border-[#38BDF8]/35 shadow-xl shadow-black/40 space-y-4 max-w-3xl">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0 space-y-1">
@@ -762,8 +765,8 @@ export const DetailPage: React.FC = () => {
               </div>
             )}
 
-            {/* 电影或指定单集版本选择与直接起播按钮 */}
-            {!isSeries && (
+            {/* 电影或独立单视频版本选择与直接起播按钮 */}
+            {!isSeries && !isEpisodeWithSeries && (
               <div className="pt-2 space-y-3">
                 {sortedItemMediaSources.length > 1 && (
                   <div className="space-y-2 max-w-3xl">
@@ -872,15 +875,9 @@ export const DetailPage: React.FC = () => {
                   ? cachedPlayerItem.Id
                   : undefined
               }
-              selectedEpisodeId={isSeries ? selectedEpisode?.Id : undefined}
+              selectedEpisodeId={selectedEpisode?.Id}
               seriesItem={isSeries ? item : seriesItem}
-              onSelectEpisode={(ep) => {
-                if (isSeries) {
-                  handleSelectEpisode(ep);
-                } else {
-                  startPlayback(ep);
-                }
-              }}
+              onSelectEpisode={handleSelectEpisode}
               onPlayEpisode={(ep) => startPlayback(ep)}
             />
           )}

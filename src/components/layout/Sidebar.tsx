@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Compass,
@@ -24,23 +24,11 @@ interface SidebarProps {
   onToggleCollapse?: () => void;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({
-  collapsed: controlledCollapsed,
-  onToggleCollapse,
-}) => {
+export const Sidebar: React.FC<SidebarProps> = ({ collapsed: controlledCollapsed }) => {
   const location = useLocation();
   const navigate = useNavigate();
 
-  const [internalCollapsed, setInternalCollapsed] = useState(false);
-  const isCollapsed = controlledCollapsed !== undefined ? controlledCollapsed : internalCollapsed;
-
-  const toggleCollapse = () => {
-    if (onToggleCollapse) {
-      onToggleCollapse();
-    } else {
-      setInternalCollapsed(!internalCollapsed);
-    }
-  };
+  const isCollapsed = Boolean(controlledCollapsed);
 
   const { views, musicViews, viewCounts } = useMediaStore();
   const currentServer = useAuthStore((s) => s.getCurrentServer());
@@ -66,7 +54,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
     }
   }, [currentPath, activeSpace, setActiveSpace]);
 
-  const isMusicSpace = currentPath.startsWith('/music') || (activeSpace === 'music' && currentPath === '/settings');
+  const isMusicSpace =
+    currentPath.startsWith('/music') || (activeSpace === 'music' && currentPath === '/settings');
 
   const handleNavClick = (path: string, hash?: string) => {
     if (path === '/' && hash) {
@@ -94,282 +83,246 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   return (
-    <aside
-      className={`h-full flex-shrink-0 select-none bg-[#080B12]/95 backdrop-blur-2xl border-r border-white/[0.06] transition-all duration-300 flex flex-col justify-between z-30 ${
-        isCollapsed ? 'w-16' : 'w-56'
+    <div
+      className={`relative h-full flex-shrink-0 overflow-hidden transition-[width] duration-300 ease-out z-30 ${
+        isCollapsed ? 'w-0' : 'w-56'
       }`}
+      aria-hidden={isCollapsed}
     >
-      {/* 导航菜单列表 */}
-      <div className="relative flex flex-col flex-1 min-h-0">
-        <div className="flex-1 overflow-y-auto overflow-x-hidden py-3 px-2 space-y-1 custom-scrollbar">
-          {!isMusicSpace ? (
-            <>
-              {/* 影视主导航区 */}
-              <div className="space-y-0.5">
-                <button
-                  onClick={() => handleNavClick('/')}
-                  className={`w-full h-9 rounded-xl flex items-center text-sm transition-all cursor-pointer relative group ${
-                    isCollapsed ? 'justify-center px-0' : 'px-3 gap-3'
-                  } ${
-                    currentPath === '/'
-                      ? 'bg-[#38BDF8]/15 text-[#38BDF8] font-medium'
-                      : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.04]'
-                  }`}
-                  title="首页发现"
-                >
-                  {currentPath === '/' && (
-                    <span className="absolute left-0 w-1 h-5 rounded-full bg-[#38BDF8]" />
-                  )}
-                  <Compass className="w-4 h-4 flex-shrink-0" />
-                  {!isCollapsed && <span>首页发现</span>}
-                </button>
+      <aside
+        className={`absolute inset-y-0 left-0 w-56 h-full select-none bg-[#080B12]/95 backdrop-blur-2xl border-r border-white/[0.06] transition-transform duration-300 ease-out flex flex-col justify-between ${
+          isCollapsed ? '-translate-x-full pointer-events-none' : 'translate-x-0'
+        }`}
+      >
+        {/* 导航菜单列表 */}
+        <div className="relative flex flex-col flex-1 min-h-0">
+          <div className="flex-1 overflow-y-auto overflow-x-hidden py-3 px-2 space-y-1 custom-scrollbar">
+            {!isMusicSpace ? (
+              <>
+                {/* 影视主导航区 */}
+                <div className="space-y-0.5">
+                  <button
+                    onClick={() => handleNavClick('/')}
+                    className={`w-full h-9 px-3 gap-3 rounded-xl flex items-center text-sm transition-all cursor-pointer relative group ${
+                      currentPath === '/'
+                        ? 'bg-[#38BDF8]/15 text-[#38BDF8] font-medium'
+                        : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.04]'
+                    }`}
+                    title="首页发现"
+                  >
+                    {currentPath === '/' && (
+                      <span className="absolute left-0 w-1 h-5 rounded-full bg-[#38BDF8]" />
+                    )}
+                    <Compass className="w-4 h-4 flex-shrink-0" />
+                    <span>首页发现</span>
+                  </button>
 
-                <button
-                  onClick={() => handleNavClick('/continue-watching')}
-                  className={`w-full h-9 rounded-xl flex items-center text-sm transition-all cursor-pointer relative group ${
-                    isCollapsed ? 'justify-center px-0' : 'px-3 gap-3'
-                  } ${
-                    currentPath === '/continue-watching'
-                      ? 'bg-[#38BDF8]/15 text-[#38BDF8] font-medium'
-                      : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.04]'
-                  }`}
-                  title="继续观看与最近播放"
-                >
-                  {currentPath === '/continue-watching' && (
-                    <span className="absolute left-0 w-1 h-5 rounded-full bg-[#38BDF8]" />
-                  )}
-                  <Play className="w-4 h-4 flex-shrink-0" />
-                  {!isCollapsed && <span>继续观看</span>}
-                </button>
-              </div>
+                  <button
+                    onClick={() => handleNavClick('/continue-watching')}
+                    className={`w-full h-9 px-3 gap-3 rounded-xl flex items-center text-sm transition-all cursor-pointer relative group ${
+                      currentPath === '/continue-watching'
+                        ? 'bg-[#38BDF8]/15 text-[#38BDF8] font-medium'
+                        : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.04]'
+                    }`}
+                    title="继续观看与最近播放"
+                  >
+                    {currentPath === '/continue-watching' && (
+                      <span className="absolute left-0 w-1 h-5 rounded-full bg-[#38BDF8]" />
+                    )}
+                    <Play className="w-4 h-4 flex-shrink-0" />
+                    <span>继续观看</span>
+                  </button>
+                </div>
 
-              {/* 影视媒体库分类区 */}
-              {views.length > 0 && (
-                <div className="pt-3 space-y-0.5">
-                  {!isCollapsed && (
+                {/* 影视媒体库分类区 */}
+                {views.length > 0 && (
+                  <div className="pt-3 space-y-0.5">
                     <div className="px-3 pb-1 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
                       媒体库
                     </div>
-                  )}
-                  {isCollapsed && <div className="border-t border-white/[0.06] my-2" />}
 
-                  {views.map((v) => {
-                    const targetPath = `/library/${v.Id}`;
-                    const isSelected = currentPath === targetPath;
-                    const counts = viewCounts[v.Id];
-                    const countNum = counts?.movieCount || counts?.seriesCount;
+                    {views.map((v) => {
+                      const targetPath = `/library/${v.Id}`;
+                      const isSelected = currentPath === targetPath;
+                      const counts = viewCounts[v.Id];
+                      const countNum = counts?.movieCount || counts?.seriesCount;
 
+                      return (
+                        <button
+                          key={v.Id}
+                          onClick={() => navigate(targetPath)}
+                          className={`w-full h-9 px-3 rounded-xl flex items-center justify-between text-sm transition-all cursor-pointer relative group ${
+                            isSelected
+                              ? 'bg-[#38BDF8]/15 text-[#38BDF8] font-medium'
+                              : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.04]'
+                          }`}
+                          title={v.Name}
+                        >
+                          {isSelected && (
+                            <span className="absolute left-0 w-1 h-5 rounded-full bg-[#38BDF8]" />
+                          )}
+                          <div className="flex items-center gap-3 truncate">
+                            {renderViewIcon(v.CollectionType)}
+                            <span className="truncate">{v.Name}</span>
+                          </div>
+
+                          {typeof countNum === 'number' && countNum > 0 && (
+                            <span className="text-[11px] font-mono text-slate-500 tabular-nums">
+                              {countNum}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                {/* 音乐独立导航区 */}
+                <div className="space-y-0.5">
+                  {[
+                    { path: '/music', label: '发现音乐', icon: Compass },
+                    { path: '/music/albums', label: '专辑', icon: Disc3 },
+                    { path: '/music/artists', label: '歌手', icon: Mic2 },
+                    { path: '/music/playlists', label: '歌单', icon: ListMusic },
+                    { path: '/music/favorites', label: '我喜欢的', icon: Heart },
+                  ].map((nav) => {
+                    const Icon = nav.icon;
+                    const active = currentPath === nav.path;
                     return (
                       <button
-                        key={v.Id}
-                        onClick={() => navigate(targetPath)}
-                        className={`w-full h-9 rounded-xl flex items-center text-sm transition-all cursor-pointer relative group ${
-                          isCollapsed ? 'justify-center px-0' : 'justify-between px-3'
-                        } ${
-                          isSelected
-                            ? 'bg-[#38BDF8]/15 text-[#38BDF8] font-medium'
-                            : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.04]'
-                        }`}
-                        title={v.Name}
-                      >
-                        {isSelected && (
-                          <span className="absolute left-0 w-1 h-5 rounded-full bg-[#38BDF8]" />
-                        )}
-                        {isCollapsed ? (
-                          renderViewIcon(v.CollectionType)
-                        ) : (
-                          <>
-                            <div className="flex items-center gap-3 truncate">
-                              {renderViewIcon(v.CollectionType)}
-                              <span className="truncate">{v.Name}</span>
-                            </div>
-
-                            {typeof countNum === 'number' && countNum > 0 && (
-                              <span className="text-[11px] font-mono text-slate-500 tabular-nums">
-                                {countNum}
-                              </span>
-                            )}
-                          </>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </>
-          ) : (
-            <>
-              {/* 音乐独立导航区 */}
-              <div className="space-y-0.5">
-                {[
-                  { path: '/music', label: '发现音乐', icon: Compass },
-                  { path: '/music/albums', label: '专辑', icon: Disc3 },
-                  { path: '/music/artists', label: '歌手', icon: Mic2 },
-                  { path: '/music/playlists', label: '歌单', icon: ListMusic },
-                  { path: '/music/favorites', label: '我喜欢的', icon: Heart },
-                ].map((nav) => {
-                  const Icon = nav.icon;
-                  const active = currentPath === nav.path;
-                  return (
-                    <button
-                      key={nav.path}
-                      onClick={() => navigate(nav.path)}
-                      className={`w-full h-9 rounded-xl flex items-center text-sm transition-all cursor-pointer relative group ${
-                        isCollapsed ? 'justify-center px-0' : 'px-3 gap-3'
-                      } ${
-                        active
-                          ? 'bg-purple-500/15 text-purple-300 font-medium'
-                          : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.04]'
-                      }`}
-                      title={nav.label}
-                    >
-                      {active && (
-                        <span className="absolute left-0 w-1 h-5 rounded-full bg-purple-400" />
-                      )}
-                      <Icon className="w-4 h-4 flex-shrink-0" />
-                      {!isCollapsed && <span>{nav.label}</span>}
-                    </button>
-                  );
-                })}
-
-                <button
-                  onClick={() => navigate('/music/search')}
-                  className={`w-full h-9 rounded-xl flex items-center text-sm transition-all cursor-pointer relative group ${
-                    isCollapsed ? 'justify-center px-0' : 'justify-between px-3'
-                  } ${
-                    currentPath === '/music/search'
-                      ? 'bg-purple-500/15 text-purple-300 font-medium'
-                      : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.04]'
-                  }`}
-                  title={`音乐搜索 (${isMac ? '⌘K' : 'Ctrl+K'})`}
-                >
-                  {currentPath === '/music/search' && (
-                    <span className="absolute left-0 w-1 h-5 rounded-full bg-purple-400" />
-                  )}
-                  {isCollapsed ? (
-                    <Search className="w-4 h-4 flex-shrink-0" />
-                  ) : (
-                    <>
-                      <div className="flex items-center gap-3">
-                        <Search className="w-4 h-4 flex-shrink-0" />
-                        <span>音乐搜索</span>
-                      </div>
-                      <kbd className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white/[0.06] text-slate-400 border border-white/[0.08]">
-                        {isMac ? '⌘K' : 'Ctrl K'}
-                      </kbd>
-                    </>
-                  )}
-                </button>
-              </div>
-
-              {/* 音乐库分区 */}
-              {musicViews.length > 0 && (
-                <div className="pt-3 space-y-0.5">
-                  {!isCollapsed && (
-                    <div className="px-3 pb-1 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
-                      音乐库
-                    </div>
-                  )}
-                  {isCollapsed && <div className="border-t border-white/[0.06] my-2" />}
-
-                  {musicViews.map((v) => {
-                    const targetPath = `/music/library/${v.Id}`;
-                    const isSelected = currentPath === targetPath;
-                    const counts = viewCounts[v.Id];
-                    const countNum = counts?.albumCount || counts?.songCount;
-
-                    return (
-                      <button
-                        key={v.Id}
-                        onClick={() => navigate(targetPath)}
-                        className={`w-full h-9 rounded-xl flex items-center text-sm transition-all cursor-pointer relative group ${
-                          isCollapsed ? 'justify-center px-0' : 'justify-between px-3'
-                        } ${
-                          isSelected
+                        key={nav.path}
+                        onClick={() => navigate(nav.path)}
+                        className={`w-full h-9 px-3 gap-3 rounded-xl flex items-center text-sm transition-all cursor-pointer relative group ${
+                          active
                             ? 'bg-purple-500/15 text-purple-300 font-medium'
                             : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.04]'
                         }`}
-                        title={v.Name}
+                        title={nav.label}
                       >
-                        {isSelected && (
+                        {active && (
                           <span className="absolute left-0 w-1 h-5 rounded-full bg-purple-400" />
                         )}
-                        {isCollapsed ? (
-                          <Music className="w-4 h-4 flex-shrink-0" />
-                        ) : (
-                          <>
-                            <div className="flex items-center gap-3 truncate">
-                              <Music className="w-4 h-4 flex-shrink-0" />
-                              <span className="truncate">{v.Name}</span>
-                            </div>
-                            {typeof countNum === 'number' && countNum > 0 && (
-                              <span className="text-[11px] font-mono text-slate-500 tabular-nums">
-                                {countNum}
-                              </span>
-                            )}
-                          </>
-                        )}
+                        <Icon className="w-4 h-4 flex-shrink-0" />
+                        <span>{nav.label}</span>
                       </button>
                     );
                   })}
+
+                  <button
+                    onClick={() => navigate('/music/search')}
+                    className={`w-full h-9 px-3 rounded-xl flex items-center justify-between text-sm transition-all cursor-pointer relative group ${
+                      currentPath === '/music/search'
+                        ? 'bg-purple-500/15 text-purple-300 font-medium'
+                        : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.04]'
+                    }`}
+                    title={`音乐搜索 (${isMac ? '⌘K' : 'Ctrl+K'})`}
+                  >
+                    {currentPath === '/music/search' && (
+                      <span className="absolute left-0 w-1 h-5 rounded-full bg-purple-400" />
+                    )}
+                    <div className="flex items-center gap-3">
+                      <Search className="w-4 h-4 flex-shrink-0" />
+                      <span>音乐搜索</span>
+                    </div>
+                    <kbd className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white/[0.06] text-slate-400 border border-white/[0.08]">
+                      {isMac ? '⌘K' : 'Ctrl K'}
+                    </kbd>
+                  </button>
                 </div>
-              )}
-            </>
+
+                {/* 音乐库分区 */}
+                {musicViews.length > 0 && (
+                  <div className="pt-3 space-y-0.5">
+                    <div className="px-3 pb-1 text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+                      音乐库
+                    </div>
+
+                    {musicViews.map((v) => {
+                      const targetPath = `/music/library/${v.Id}`;
+                      const isSelected = currentPath === targetPath;
+                      const counts = viewCounts[v.Id];
+                      const countNum = counts?.albumCount || counts?.songCount;
+
+                      return (
+                        <button
+                          key={v.Id}
+                          onClick={() => navigate(targetPath)}
+                          className={`w-full h-9 px-3 rounded-xl flex items-center justify-between text-sm transition-all cursor-pointer relative group ${
+                            isSelected
+                              ? 'bg-purple-500/15 text-purple-300 font-medium'
+                              : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.04]'
+                          }`}
+                          title={v.Name}
+                        >
+                          {isSelected && (
+                            <span className="absolute left-0 w-1 h-5 rounded-full bg-purple-400" />
+                          )}
+                          <div className="flex items-center gap-3 truncate">
+                            <Music className="w-4 h-4 flex-shrink-0" />
+                            <span className="truncate">{v.Name}</span>
+                          </div>
+                          {typeof countNum === 'number' && countNum > 0 && (
+                            <span className="text-[11px] font-mono text-slate-500 tabular-nums">
+                              {countNum}
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-6 bg-gradient-to-t from-[#080B12] to-transparent" />
+        </div>
+
+        {/* 底部系统配置区 */}
+        <div className="p-2 border-t border-white/[0.06] space-y-1">
+          {/* 系统设置 */}
+          <button
+            onClick={() => handleNavClick('/settings', hasUpdate ? 'about' : undefined)}
+            className={`w-full h-9 px-3 rounded-xl flex items-center justify-between text-sm transition-all cursor-pointer relative ${
+              currentPath === '/settings'
+                ? 'bg-[#38BDF8]/15 text-[#38BDF8] font-medium'
+                : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.04]'
+            }`}
+            title={hasUpdate ? '系统设置 · 发现新版本' : '系统设置'}
+          >
+            {currentPath === '/settings' && (
+              <span className="absolute left-0 w-1 h-5 rounded-full bg-[#38BDF8]" />
+            )}
+            <div className="flex items-center gap-3">
+              <Settings className="w-4 h-4 flex-shrink-0" />
+              <span>系统设置</span>
+            </div>
+            {hasUpdate && (
+              <span className="px-1.5 py-0.5 rounded-full bg-[#38BDF8]/20 border border-[#38BDF8]/40 text-[#38BDF8] text-[10px] font-semibold">
+                新版本
+              </span>
+            )}
+          </button>
+
+          {/* 未连接服务器时的快捷引导卡 */}
+          {!currentServer && (
+            <div
+              onClick={() => handleNavClick('/settings', 'sync')}
+              className="px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center space-x-2 cursor-pointer hover:bg-amber-500/20 transition group"
+              title="未连接服务器，点击导入配置或添加服务器"
+            >
+              <span className="w-2 h-2 rounded-full flex-shrink-0 bg-amber-400 animate-pulse" />
+              <div className="min-w-0 flex-1">
+                <span className="text-xs text-amber-300 font-medium truncate block group-hover:underline">
+                  未连接 · 导入配置
+                </span>
+              </div>
+            </div>
           )}
         </div>
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-6 bg-gradient-to-t from-[#080B12] to-transparent" />
-      </div>
-
-      {/* 底部系统配置区 */}
-      <div className="p-2 border-t border-white/[0.06] space-y-1">
-        {/* 系统设置 */}
-        <button
-          onClick={() => handleNavClick('/settings', hasUpdate ? 'about' : undefined)}
-          className={`w-full h-9 rounded-xl flex items-center text-sm transition-all cursor-pointer relative ${
-            isCollapsed ? 'justify-center px-0' : 'justify-between px-3'
-          } ${
-            currentPath === '/settings'
-              ? 'bg-[#38BDF8]/15 text-[#38BDF8] font-medium'
-              : 'text-slate-400 hover:text-slate-100 hover:bg-white/[0.04]'
-          }`}
-          title={hasUpdate ? '系统设置 · 发现新版本' : '系统设置'}
-        >
-          {currentPath === '/settings' && (
-            <span className="absolute left-0 w-1 h-5 rounded-full bg-[#38BDF8]" />
-          )}
-          <div className={`flex items-center ${isCollapsed ? 'justify-center' : 'gap-3'}`}>
-            <div className="relative flex items-center justify-center">
-              <Settings className="w-4 h-4 flex-shrink-0" />
-              {hasUpdate && isCollapsed && (
-                <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-[#38BDF8] ring-2 ring-[#080B12] animate-pulse" />
-              )}
-            </div>
-            {!isCollapsed && <span>系统设置</span>}
-          </div>
-          {!isCollapsed && hasUpdate && (
-            <span className="px-1.5 py-0.5 rounded-full bg-[#38BDF8]/20 border border-[#38BDF8]/40 text-[#38BDF8] text-[10px] font-semibold">
-              新版本
-            </span>
-          )}
-        </button>
-
-        {/* 未连接服务器时的快捷引导卡 */}
-        {!isCollapsed && !currentServer && (
-          <div
-            onClick={() => handleNavClick('/settings', 'sync')}
-            className="px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center space-x-2 cursor-pointer hover:bg-amber-500/20 transition group"
-            title="未连接服务器，点击导入配置或添加服务器"
-          >
-            <span className="w-2 h-2 rounded-full flex-shrink-0 bg-amber-400 animate-pulse" />
-            <div className="min-w-0 flex-1">
-              <span className="text-xs text-amber-300 font-medium truncate block group-hover:underline">
-                未连接 · 导入配置
-              </span>
-            </div>
-          </div>
-        )}
-      </div>
-    </aside>
+      </aside>
+    </div>
   );
 };
 

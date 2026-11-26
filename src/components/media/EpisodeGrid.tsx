@@ -26,6 +26,9 @@ interface EpisodeGridProps {
   currentEpisodeId?: string;
   selectedEpisodeId?: string;
   seriesItem?: EmbyItem | null;
+  seasons?: EmbyItem[];
+  selectedSeasonId?: string | null;
+  onSeasonChange?: (seasonId: string) => void;
   onSelectEpisode: (episode: EmbyItem) => void;
   onPlayEpisode?: (episode: EmbyItem) => void;
 }
@@ -128,6 +131,9 @@ const EpisodeGridComponent: React.FC<EpisodeGridProps> = ({
   currentEpisodeId,
   selectedEpisodeId,
   seriesItem,
+  seasons,
+  selectedSeasonId,
+  onSeasonChange,
   onSelectEpisode,
   onPlayEpisode,
 }) => {
@@ -196,122 +202,152 @@ const EpisodeGridComponent: React.FC<EpisodeGridProps> = ({
     });
   }, [totalPages, sortedEpisodes, sortOrder, activeEpisodePage]);
 
+  const hasMultipleSeasons = Boolean(seasons && seasons.length > 1 && onSeasonChange);
+
   return (
-    <div className="space-y-5 select-none">
-      {/* 顶部控制栏：总集数 / 当前页 / 一键定位当前集 / 正序倒序切换 */}
-      {episodes.length > 0 && (
-        <div ref={toolbarRef} className="space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-2.5 text-xs">
-              <span className="text-slate-300 font-medium tabular-nums">
+    <div className="space-y-4 select-none">
+      {/* 单行合一选集工具栏：季切换 / 选集标题 + 区间分页 + 定位当前集 + 正序倒序 */}
+      {(episodes.length > 0 || hasMultipleSeasons) && (
+        <div
+          ref={toolbarRef}
+          className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-white/[0.06]"
+        >
+          {/* 左侧：多季切换胶囊 或 单季「选集 · 共 N 集」 */}
+          <div className="flex flex-wrap items-center gap-2 min-w-0">
+            {hasMultipleSeasons ? (
+              <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+                {seasons!.map((s) => {
+                  const isActive = selectedSeasonId === s.Id;
+                  return (
+                    <button
+                      key={s.Id}
+                      type="button"
+                      onClick={() => onSeasonChange!(s.Id)}
+                      className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition cursor-pointer whitespace-nowrap border ${
+                        isActive
+                          ? 'bg-[#38BDF8]/15 border-[#38BDF8] text-[#38BDF8] shadow-sm shadow-sky-500/10'
+                          : 'bg-white/[0.04] border-white/[0.08] text-slate-400 hover:text-slate-200 hover:bg-white/[0.08]'
+                      }`}
+                    >
+                      {s.Name}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <h2 className="text-base font-bold text-slate-100 tracking-tight">选集</h2>
+            )}
+
+            {episodes.length > 0 && (
+              <span className="text-xs font-mono text-slate-400 tabular-nums">
                 共 {episodes.length} 集
               </span>
+            )}
+          </div>
+
+          {/* 右侧：轻量内联分页胶囊 + 定位当前集 + 正序倒序 */}
+          {episodes.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2">
               {totalPages > 1 && (
-                <span className="text-slate-400 font-mono tabular-nums">
-                  · 第 {safePage + 1} / {totalPages} 页
-                </span>
+                <div className="flex flex-wrap items-center gap-1">
+                  <button
+                    type="button"
+                    disabled={safePage <= 0}
+                    onClick={() => setCurrentPage((p) => Math.max(0, p - 1))}
+                    className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-white/[0.04] hover:bg-white/[0.1] border border-white/[0.08] text-slate-300 transition cursor-pointer disabled:opacity-35 disabled:cursor-not-allowed"
+                    title="上一页"
+                  >
+                    <ChevronLeft className="w-3.5 h-3.5" />
+                  </button>
+
+                  {pageRangeItems.map((pageItem) => {
+                    const isSelected = pageItem.page === safePage;
+                    return (
+                      <button
+                        key={pageItem.page}
+                        type="button"
+                        onClick={() => setCurrentPage(pageItem.page)}
+                        className={`relative inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-lg text-xs font-mono tabular-nums border transition cursor-pointer ${
+                          isSelected
+                            ? 'bg-[#38BDF8]/15 border-[#38BDF8] text-[#38BDF8] font-bold'
+                            : 'bg-white/[0.03] border-white/[0.08] text-slate-400 hover:bg-white/[0.08] hover:text-white'
+                        }`}
+                        title={`第 ${pageItem.page + 1} 页`}
+                      >
+                        <span>{pageItem.label}</span>
+                        {pageItem.hasActive && !isSelected && (
+                          <span
+                            className="w-1.5 h-1.5 rounded-full bg-[#38BDF8]"
+                            title="当前观看进度在此页"
+                          />
+                        )}
+                      </button>
+                    );
+                  })}
+
+                  <button
+                    type="button"
+                    disabled={safePage >= totalPages - 1}
+                    onClick={() => setCurrentPage((p) => Math.min(totalPages - 1, p + 1))}
+                    className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-white/[0.04] hover:bg-white/[0.1] border border-white/[0.08] text-slate-300 transition cursor-pointer disabled:opacity-35 disabled:cursor-not-allowed"
+                    title="下一页"
+                  >
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               )}
+
               {activeEpisode && activeEpisodePage >= 0 && activeEpisodePage !== safePage && (
                 <button
                   type="button"
                   onClick={() => setCurrentPage(activeEpisodePage)}
-                  className="inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-full bg-[#38BDF8]/15 hover:bg-[#38BDF8]/25 border border-[#38BDF8]/40 text-[#38BDF8] text-xs font-medium transition cursor-pointer"
+                  className="inline-flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-[#38BDF8]/15 hover:bg-[#38BDF8]/25 border border-[#38BDF8]/35 text-[#38BDF8] text-xs font-medium transition cursor-pointer"
                   title={`跳转到当前进度所在的第 ${activeEpisodePage + 1} 页`}
                 >
                   <LocateFixed className="w-3.5 h-3.5" />
                   <span>
-                    定位当前集
+                    定位
                     {activeEpisode.IndexNumber !== undefined
-                      ? ` (E${activeEpisode.IndexNumber})`
+                      ? ` E${activeEpisode.IndexNumber}`
                       : ''}
                   </span>
                 </button>
               )}
-            </div>
 
-            {/* 正序 / 倒序排列开关 */}
-            <div className="inline-flex items-center p-0.5 rounded-xl bg-white/[0.04] border border-white/[0.08] text-xs">
-              <button
-                type="button"
-                onClick={() => handleToggleSortOrder('asc')}
-                className={`inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg font-medium transition cursor-pointer ${
-                  sortOrder === 'asc'
-                    ? 'bg-[#38BDF8] text-slate-950 font-semibold shadow-sm'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <ArrowUpNarrowWide className="w-3.5 h-3.5" />
-                <span>正序</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => handleToggleSortOrder('desc')}
-                className={`inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg font-medium transition cursor-pointer ${
-                  sortOrder === 'desc'
-                    ? 'bg-[#38BDF8] text-slate-950 font-semibold shadow-sm'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <ArrowDownWideNarrow className="w-3.5 h-3.5" />
-                <span>倒序</span>
-              </button>
-            </div>
-          </div>
-
-          {/* 区间分集分页胶囊栏 */}
-          {totalPages > 1 && (
-            <div className="flex flex-wrap items-center gap-1.5 p-2 rounded-2xl bg-white/[0.03] border border-white/[0.06]">
-              <button
-                type="button"
-                disabled={safePage <= 0}
-                onClick={() => setCurrentPage((p) => Math.max(0, p - 1))}
-                className="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-white/[0.04] hover:bg-white/[0.1] border border-white/[0.08] text-slate-300 transition cursor-pointer disabled:opacity-35 disabled:cursor-not-allowed"
-                title="上一页"
-              >
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-
-              {pageRangeItems.map((pageItem) => {
-                const isSelected = pageItem.page === safePage;
-                return (
-                  <button
-                    key={pageItem.page}
-                    type="button"
-                    onClick={() => setCurrentPage(pageItem.page)}
-                    className={`relative inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-mono tabular-nums border transition cursor-pointer ${
-                      isSelected
-                        ? 'bg-[#38BDF8]/15 border-[#38BDF8] text-[#38BDF8] font-bold shadow-sm shadow-sky-500/15'
-                        : 'bg-white/[0.04] border-white/[0.08] text-slate-300 hover:bg-white/[0.08] hover:text-white'
-                    }`}
-                    title={`第 ${pageItem.page + 1} 页`}
-                  >
-                    <span>{pageItem.label}</span>
-                    {pageItem.hasActive && !isSelected && (
-                      <span
-                        className="w-1.5 h-1.5 rounded-full bg-[#38BDF8]"
-                        title="当前观看进度在此页"
-                      />
-                    )}
-                  </button>
-                );
-              })}
-
-              <button
-                type="button"
-                disabled={safePage >= totalPages - 1}
-                onClick={() => setCurrentPage((p) => Math.min(totalPages - 1, p + 1))}
-                className="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-white/[0.04] hover:bg-white/[0.1] border border-white/[0.08] text-slate-300 transition cursor-pointer disabled:opacity-35 disabled:cursor-not-allowed"
-                title="下一页"
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
+              {/* 正序 / 倒序排列开关 */}
+              <div className="inline-flex items-center p-0.5 rounded-lg bg-white/[0.04] border border-white/[0.08] text-xs">
+                <button
+                  type="button"
+                  onClick={() => handleToggleSortOrder('asc')}
+                  className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-md font-medium transition cursor-pointer ${
+                    sortOrder === 'asc'
+                      ? 'bg-[#38BDF8] text-slate-950 font-semibold shadow-sm'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <ArrowUpNarrowWide className="w-3.5 h-3.5" />
+                  <span>正序</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleToggleSortOrder('desc')}
+                  className={`inline-flex items-center space-x-1 px-2.5 py-1 rounded-md font-medium transition cursor-pointer ${
+                    sortOrder === 'desc'
+                      ? 'bg-[#38BDF8] text-slate-950 font-semibold shadow-sm'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <ArrowDownWideNarrow className="w-3.5 h-3.5" />
+                  <span>倒序</span>
+                </button>
+              </div>
             </div>
           )}
         </div>
       )}
 
       {/* 分集卡片网格 */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
         {visibleEpisodes.map((ep) => {
           const isCurrent = ep.Id === activeEpisode?.Id;
           const isSelected = ep.Id === selectedEpisodeId;

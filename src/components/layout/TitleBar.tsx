@@ -123,13 +123,22 @@ export const TitleBar: React.FC<TitleBarProps> = ({
           <button
             type="button"
             onClick={onToggleSidebar}
-            className="pointer-events-auto p-1.5 rounded-lg hover:bg-white/[0.08] text-slate-400 hover:text-slate-100 transition cursor-pointer"
-            title={sidebarCollapsed ? '展开侧边栏' : '折叠侧边栏'}
+            className="relative pointer-events-auto p-1.5 rounded-lg hover:bg-white/[0.08] text-slate-400 hover:text-slate-100 transition cursor-pointer"
+            title={
+              sidebarCollapsed
+                ? hasUpdate
+                  ? '展开侧边栏 · 发现新版本'
+                  : '展开侧边栏'
+                : '隐藏侧边栏'
+            }
           >
             {sidebarCollapsed ? (
               <PanelLeftOpen className="w-4 h-4" />
             ) : (
               <PanelLeftClose className="w-4 h-4" />
+            )}
+            {sidebarCollapsed && hasUpdate && (
+              <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-[#38BDF8] animate-pulse" />
             )}
           </button>
         )}

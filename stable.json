@@ -1,31 +1,31 @@
 {
-  "version": "0.3.4",
-  "notes": "### 🚀 新功能\n- **全新中文品牌「Nocta · 诺塔」与明暗双主题体系**：支持亮色 / 暗色 / 跟随系统三档外观无缝切换及侧边栏原生窗口毛玻璃透视（视频播放页自动关闭以保障 `libmpv` 穿透硬解），顶栏新增一键日夜切换。\n\n### ♻️ 体验与架构优化\n- **Apple TV+ / Infuse 级全出血影院舞台重构**：亮色主画布升级为纯净 `#FFFFFF` 画廊白与 `#1D1D1F` 单色高对比体系；首页与详情页统一采用视口黄金画幅全出血 Hero、动态剧照环境色柔光过渡带、8 秒自动轮播进度胶囊及无级连续渐显悬浮顶栏。\n- **去贴纸化海报墙与 Up Next 精雕**：移除卡片彩色方框角标，升级 16:9 续播卡三段抗亮图暗角与内嵌圆角纯白进度轨；补全 Emby 首页与续播接口的年份、流派、片长与分级字段，并在首页通过视觉质量评分择优挑选 Hero 大片。",
-  "pub_date": "2026-11-26T08:17:01.617Z",
+  "version": "0.3.5",
+  "notes": "### 🚀 新功能\n- **演职员横滑轨与点击搜索联动**：影视详情页新增导演、主演、编剧、制片等演职员头像横滑列表（按主创权重排序，支持角色展示与无图回退），点击演职员可直接跳转 `/search?q=...` 检索其关联作品。\n- **相似影片/剧集推荐**：接入 Emby `/emby/Items/{Id}/Similar` 接口，在详情页底部展示同风格相似影片与剧集横滑推荐轨。\n- **完整媒体技术参数与信息面板**：详情页新增关于与媒体信息区块，集中展示原名、发行与入库信息、制作公司、外部资料标识、完整视频/音频/字幕流规格（含 Dolby Vision / HDR、色深、声道布局等）及脱敏文件路径，支持一键复制全部媒体技术参数。",
+  "pub_date": "2026-11-26T10:20:10.079Z",
   "platforms": {
     "linux-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUQVU1VFpoVS9CVVpzRWJBNzRidjh1U0swalpWV3VTR2Rhb0lPc3BqU2pvME1GS25xdDRqZWNUL1NMdGdMUFVLZVdyemhwRXh5NzJYQmtNZlo4TGVMT0Y3ZjhsTnl3QVEwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NjgwODg3CWZpbGU6Tm9jdGFfMC4zLjRfYW1kNjQuZGViCXZlcnNpb246MC4zLjQKR3JJRWw4bHM3UXVjS1dUMEM0cDQvOExyM0RYOFgwbzlSbXBtczNNT0F1blZnZStrUTJSVXlWT3d4czhGWW1Jcm9qWGUyRlFpRmN1SlNNVVp0V2t6Q3c9PQo=",
-      "url": "https://github.com/wade6716/Nocta/releases/download/v0.3.4/Nocta_0.3.4_linux_amd64.deb"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUQVU1VFpoVS9CVVlZSWpacmVtTmY2emVuWFlaczhSYnJJNThIYkxLM1JhY3l3TXRub05tencwZ2MvK003NTlwd2FyaTZsanhxS2ZWUnhzT2EwWXFsL3V3TXd6bnJMb0F3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1Njg4MDU2CWZpbGU6Tm9jdGFfMC4zLjVfYW1kNjQuZGViCXZlcnNpb246MC4zLjUKNFAzZkY2b1M3VSt2bkxnWTU0RkFtWSsvazlqLzdFOEZ2RzJobG10ZGZjcHZIZGNBMnRxbTZaM3NwbDI3TTRNQmtMNUdxU0pzYTVkc2lGNno5QXNoQkE9PQo=",
+      "url": "https://github.com/wade6716/Nocta/releases/download/v0.3.5/Nocta_0.3.5_linux_amd64.deb"
     },
     "linux-x86_64-deb": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUQVU1VFpoVS9CVVpzRWJBNzRidjh1U0swalpWV3VTR2Rhb0lPc3BqU2pvME1GS25xdDRqZWNUL1NMdGdMUFVLZVdyemhwRXh5NzJYQmtNZlo4TGVMT0Y3ZjhsTnl3QVEwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NjgwODg3CWZpbGU6Tm9jdGFfMC4zLjRfYW1kNjQuZGViCXZlcnNpb246MC4zLjQKR3JJRWw4bHM3UXVjS1dUMEM0cDQvOExyM0RYOFgwbzlSbXBtczNNT0F1blZnZStrUTJSVXlWT3d4czhGWW1Jcm9qWGUyRlFpRmN1SlNNVVp0V2t6Q3c9PQo=",
-      "url": "https://github.com/wade6716/Nocta/releases/download/v0.3.4/Nocta_0.3.4_linux_amd64.deb"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUQVU1VFpoVS9CVVlZSWpacmVtTmY2emVuWFlaczhSYnJJNThIYkxLM1JhY3l3TXRub05tencwZ2MvK003NTlwd2FyaTZsanhxS2ZWUnhzT2EwWXFsL3V3TXd6bnJMb0F3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1Njg4MDU2CWZpbGU6Tm9jdGFfMC4zLjVfYW1kNjQuZGViCXZlcnNpb246MC4zLjUKNFAzZkY2b1M3VSt2bkxnWTU0RkFtWSsvazlqLzdFOEZ2RzJobG10ZGZjcHZIZGNBMnRxbTZaM3NwbDI3TTRNQmtMNUdxU0pzYTVkc2lGNno5QXNoQkE9PQo=",
+      "url": "https://github.com/wade6716/Nocta/releases/download/v0.3.5/Nocta_0.3.5_linux_amd64.deb"
     },
     "darwin-aarch64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUQVU1VFpoVS9CVVgyRlkrbEV6eWVUeWNXNFlrb2pJZElUaEJMb2l3Um41S0pGWTVzMXByN3pnR0p4bmVQUGtHaUJhSjc2MS9NYmMyOW9xYTJZWTlISVdBYjkvenh6NFFJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NjgwOTU0CWZpbGU6Tm9jdGEuYXBwLnRhci5negl2ZXJzaW9uOjAuMy40ClhkSDh0bWpWKzgyS1pPdEtPaUdXaTVJc0ZvaU0zYnlxc0hJS2ZtS2VUUTB5NjdDZTdlZWM1cXVLc2ppRS9LbEFzZkprcGRlQ0htQ0FtYWNKc3ZndUJBPT0K",
-      "url": "https://github.com/wade6716/Nocta/releases/download/v0.3.4/Nocta_0.3.4_macos_aarch64.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUQVU1VFpoVS9CVVdvY1p3Uk1qeWtHM3pLMlgrV0Q3dmNkT0hndm90NzFyUDJLZ1FoQ2xLRTFPL0U2WVhQTU41RFp5UFRJYWJTK0tlSG9BOTJDbW5XQnE3ams1NWg5Y1FNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1Njg4MzkxCWZpbGU6Tm9jdGEuYXBwLnRhci5negl2ZXJzaW9uOjAuMy41CldNKys1WnV3NEFrc2xrK0plaU5CMXU1eWpMM2paRngyVUF6SDJ0SnZPRjYxVVhudnkrNStvd2F0SlRkZXh5T3JNWkh3L0l5MEJCZzh0RFdCU1YzcEFRPT0K",
+      "url": "https://github.com/wade6716/Nocta/releases/download/v0.3.5/Nocta_0.3.5_macos_aarch64.app.tar.gz"
     },
     "darwin-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUQVU1VFpoVS9CVVFqNjFLdlBORlQ4K0JacXkvMlNTRmxxdUZIaTN2L0FGUFJuRFR3cStYYVV2eS82dko2Uk1QS3JLRGJkWG9GSis0ZnN5NW9lZFZHaklzVFo4dmlLZmcwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NjgwOTY1CWZpbGU6Tm9jdGEuYXBwLnRhci5negl2ZXJzaW9uOjAuMy40CmxrTzNPUnFYZ2Ftb3JFK0lSRjloYTF3T08vQmRHS3ZsUWt4Q1MzNXRsakk3ckJyQkFURHZYNkxOVlVjbnJKYytzamQwRGdwL2lFMWRWVjJ4R0d1ckJ3PT0K",
-      "url": "https://github.com/wade6716/Nocta/releases/download/v0.3.4/Nocta_0.3.4_macos_x64.app.tar.gz"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUQVU1VFpoVS9CVVN4MUliem1TSEs1NVdMcE9VRjJQUFFmOVZVY1V6YmliUDV2Y3FTNWNGMnRZaUk5TFFsSGU2cjhxeXBtcHA3KzZ6WW1FODdQU0h4NGxzVDR0UkMwd1FvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1Njg4MDc5CWZpbGU6Tm9jdGEuYXBwLnRhci5negl2ZXJzaW9uOjAuMy41CkZaRWhHQVpLclBzankvODE3V2Y4UkZvYzBYamFMb3ZyeGRHeTZWRE53Y29NYktuKzFwOTdVTTNmQ1V6R2hpamtWY01lYnd4TW5XUVBkWWNrRWhCL0JBPT0K",
+      "url": "https://github.com/wade6716/Nocta/releases/download/v0.3.5/Nocta_0.3.5_macos_x64.app.tar.gz"
     },
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUQVU1VFpoVS9CVVJIMnBUZDF5SFAvdEpBMy9uTzYxZjhXMjJGY2lkMVh5SlFRTHlOd29SSGFiaU00L25idEd4SEFNVkdvUzlDWi9NaXBVM2xPSG1XaWJDR2t3UVhqUXdVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NjgwOTYzCWZpbGU6Tm9jdGFfMC4zLjRfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuMy40ClQ3L084M21TYkhFekJENlF1aEFJRzVRUVJYSW5VQjdEcFFmWFQrbzcvN0ljVzZFNHBFeGprd0xtZm5KcUd2azlLbmttaHdIN1B4QzltVEN0SFpJOEJRPT0K",
-      "url": "https://github.com/wade6716/Nocta/releases/download/v0.3.4/Nocta_0.3.4_windows_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUQVU1VFpoVS9CVVlPN0tZRExiY1lrenNSQkRKeUNsakxnNjlYeWh3UElZb2hXOEt1a0tDaUpmL1dSc1Q3UzZTc2U1VkYrcjVCR0hoYjZPaVFaMGdac2JtS05pd2hIUWdBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1Njg4MDQyCWZpbGU6Tm9jdGFfMC4zLjVfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuMy41Cko5bkllQks2WnQwTGFNMkwweG04WDEva3p6N0NXcE5NanpIbjNsa2Y0d3d3M0tNS0NiZlRpTURLZkczc1FJYWhuaHBvL0dURjNIa1YxM0JUSXlEY0JRPT0K",
+      "url": "https://github.com/wade6716/Nocta/releases/download/v0.3.5/Nocta_0.3.5_windows_x64-setup.exe"
     },
     "windows-x86_64-nsis": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUQVU1VFpoVS9CVVJIMnBUZDF5SFAvdEpBMy9uTzYxZjhXMjJGY2lkMVh5SlFRTHlOd29SSGFiaU00L25idEd4SEFNVkdvUzlDWi9NaXBVM2xPSG1XaWJDR2t3UVhqUXdVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1NjgwOTYzCWZpbGU6Tm9jdGFfMC4zLjRfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuMy40ClQ3L084M21TYkhFekJENlF1aEFJRzVRUVJYSW5VQjdEcFFmWFQrbzcvN0ljVzZFNHBFeGprd0xtZm5KcUd2azlLbmttaHdIN1B4QzltVEN0SFpJOEJRPT0K",
-      "url": "https://github.com/wade6716/Nocta/releases/download/v0.3.4/Nocta_0.3.4_windows_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUQVU1VFpoVS9CVVlPN0tZRExiY1lrenNSQkRKeUNsakxnNjlYeWh3UElZb2hXOEt1a0tDaUpmL1dSc1Q3UzZTc2U1VkYrcjVCR0hoYjZPaVFaMGdac2JtS05pd2hIUWdBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1Njg4MDQyCWZpbGU6Tm9jdGFfMC4zLjVfeDY0LXNldHVwLmV4ZQl2ZXJzaW9uOjAuMy41Cko5bkllQks2WnQwTGFNMkwweG04WDEva3p6N0NXcE5NanpIbjNsa2Y0d3d3M0tNS0NiZlRpTURLZkczc1FJYWhuaHBvL0dURjNIa1YxM0JUSXlEY0JRPT0K",
+      "url": "https://github.com/wade6716/Nocta/releases/download/v0.3.5/Nocta_0.3.5_windows_x64-setup.exe"
     }
   }
 }

@@ -393,12 +393,42 @@ export const DetailPage: React.FC = () => {
       .catch(() => [] as EmbyItem[]);
 
     let startedSeriesForId: string | null = null;
+    const seasonHint = {
+      seasonId: initialPreview?.SeasonId,
+      seasonNumber: initialPreview?.ParentIndexNumber,
+    };
+    const seriesSyncState: {
+      seasons: EmbyItem[] | null;
+      pickedSeasonId: string | null;
+    } = {
+      seasons: null,
+      pickedSeasonId: null,
+    };
+
+    const matchSeasonFromList = (
+      seasonList: EmbyItem[],
+      seasonIdHint?: string,
+      seasonNumberHint?: number
+    ): EmbyItem | undefined => {
+      const effectiveSeasonId = seasonHint.seasonId || seasonIdHint;
+      if (effectiveSeasonId) {
+        const byId = seasonList.find((s) => s.Id === effectiveSeasonId);
+        if (byId) return byId;
+      }
+      const effectiveSeasonNum = seasonHint.seasonNumber ?? seasonNumberHint;
+      if (typeof effectiveSeasonNum === 'number') {
+        const byNumber = seasonList.find((s) => s.IndexNumber === effectiveSeasonNum);
+        if (byNumber) return byNumber;
+      }
+      return seasonList[0];
+    };
 
     const runSeriesContext = async (
       targetSeriesId: string,
       isEpisode: boolean,
       seasonIdHint?: string,
-      hasInitialEpisode?: boolean
+      hasInitialEpisode?: boolean,
+      seasonNumberHint?: number
     ) => {
       try {
         const [seasonsRes, parentSeries] = await Promise.all([
@@ -429,8 +459,10 @@ export const DetailPage: React.FC = () => {
         cacheSnap.seasons = seasonList;
 
         if (seasonList.length > 0) {
+          seriesSyncState.seasons = seasonList;
           const matchSeason =
-            seasonList.find((s) => s.Id === seasonIdHint) || seasonList[0];
+            matchSeasonFromList(seasonList, seasonIdHint, seasonNumberHint) || seasonList[0];
+          seriesSyncState.pickedSeasonId = matchSeason.Id;
           setSelectedSeasonId(matchSeason.Id);
           cacheSnap.selectedSeasonId = matchSeason.Id;
           flushCache();
@@ -446,6 +478,8 @@ export const DetailPage: React.FC = () => {
             }
           );
         } else {
+          seriesSyncState.seasons = [];
+          seriesSyncState.pickedSeasonId = null;
           setSelectedSeasonId(null);
           setEpisodes([]);
           setEpisodesLoading(false);
@@ -473,7 +507,8 @@ export const DetailPage: React.FC = () => {
         previewSeriesId,
         initialPreview?.Type === 'Episode',
         initialPreview?.SeasonId,
-        initialPreview?.Type === 'Episode'
+        initialPreview?.Type === 'Episode',
+        initialPreview?.ParentIndexNumber
       );
     }
 
@@ -497,6 +532,11 @@ export const DetailPage: React.FC = () => {
       }
       flushCache();
 
+      if (detail.SeasonId) seasonHint.seasonId = detail.SeasonId;
+      if (detail.ParentIndexNumber !== undefined) {
+        seasonHint.seasonNumber = detail.ParentIndexNumber;
+      }
+
       const targetSeriesId = detail.Type === 'Series' ? detail.Id : detail.SeriesId;
       if (targetSeriesId) {
         if (startedSeriesForId !== targetSeriesId) {
@@ -504,8 +544,36 @@ export const DetailPage: React.FC = () => {
             targetSeriesId,
             detail.Type === 'Episode' && Boolean(detail.SeriesId),
             detail.SeasonId,
-            Boolean(initialEp)
+            Boolean(initialEp),
+            detail.ParentIndexNumber
           );
+        } else if (
+          detail.Type === 'Episode' &&
+          seriesSyncState.seasons &&
+          seriesSyncState.seasons.length > 0
+        ) {
+          const resolvedSeason = matchSeasonFromList(
+            seriesSyncState.seasons,
+            detail.SeasonId,
+            detail.ParentIndexNumber
+          );
+          if (resolvedSeason && resolvedSeason.Id !== seriesSyncState.pickedSeasonId) {
+            seriesSyncState.pickedSeasonId = resolvedSeason.Id;
+            setSelectedSeasonId(resolvedSeason.Id);
+            cacheSnap.selectedSeasonId = resolvedSeason.Id;
+            flushCache();
+            loadEpisodes(
+              targetSeriesId,
+              resolvedSeason.Id,
+              reqId,
+              false,
+              isBackgroundRefresh,
+              (eps) => {
+                cacheSnap.episodes = eps;
+                flushCache();
+              }
+            );
+          }
         }
         if (detail.Type === 'Episode' && detail.SeriesId) {
           const initialSimilar = await similarPromise;

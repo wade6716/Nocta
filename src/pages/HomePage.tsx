@@ -121,7 +121,8 @@ export const HomePage: React.FC<{ isActive?: boolean }> = ({ isActive = true }) 
 
   const isCached = isLoaded && serverId === currentServer?.id;
   const [loading, setLoading] = useState(!isCached);
-  const [startingSpotlightPlay, setStartingSpotlightPlay] = useState(false);
+  const [startingPlayItemId, setStartingPlayItemId] = useState<string | null>(null);
+  const startingSpotlightPlay = startingPlayItemId !== null;
   const [isDanmuModalOpen, setIsDanmuModalOpen] = useState(false);
   const [isServerModalOpen, setIsServerModalOpen] = useState(false);
   const [isProxyModalOpen, setIsProxyModalOpen] = useState(false);
@@ -363,7 +364,7 @@ export const HomePage: React.FC<{ isActive?: boolean }> = ({ isActive = true }) 
       return;
     }
     try {
-      setStartingSpotlightPlay(true);
+      setStartingPlayItemId(item.Id);
       const engineType = usePlayerStore.getState().engineType;
       const session = await fetchAndPreparePlaybackSession(
         currentServer,
@@ -376,7 +377,7 @@ export const HomePage: React.FC<{ isActive?: boolean }> = ({ isActive = true }) 
     } catch (err: any) {
       alert(`无法起播: ${err?.message || '请检查服务器连接'}`);
     } finally {
-      setStartingSpotlightPlay(false);
+      setStartingPlayItemId(null);
     }
   };
 
@@ -512,7 +513,9 @@ export const HomePage: React.FC<{ isActive?: boolean }> = ({ isActive = true }) 
                       <MediaCard
                         item={item}
                         serverUrl={currentServer.url}
-                        onClick={handleSpotlightPlay}
+                        onClick={handleCardClick}
+                        onQuickPlay={handleSpotlightPlay}
+                        isQuickPlaying={startingPlayItemId === item.Id}
                         aspectRatio="backdrop"
                         subtitle={continueSubtitle}
                         remainingLabel={remainMin > 0 ? `剩余 ${remainMin} 分钟` : undefined}

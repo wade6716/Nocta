@@ -18,6 +18,7 @@ import { useAuthStore } from '../stores/useAuthStore';
 import { usePlayerStore } from '../stores/usePlayerStore';
 import { useDanmuStore } from '../stores/useDanmuStore';
 import { useEmbyHostsStore } from '../stores/useEmbyHostsStore';
+import { useThemeStore } from '../stores/useThemeStore';
 import { extractHostFromUrl } from '../services/embyHostCollector';
 import {
   EmbyChapter,
@@ -188,6 +189,7 @@ export const PlayerPage: React.FC = () => {
   const setVideoLayout = usePlayerStore((s) => s.setVideoLayout);
   const updatePlayerPreferences = usePlayerStore((s) => s.updatePlayerPreferences);
   const resetPlayer = usePlayerStore((s) => s.resetPlayer);
+  const resolvedTheme = useThemeStore((s) => s.resolvedTheme);
 
   // Bridge ref for 120Hz interpolation
   const bridgeRef = useRef<MpvDanmakuBridge>(new MpvDanmakuBridge());
@@ -2613,6 +2615,7 @@ export const PlayerPage: React.FC = () => {
         sourceDuration,
         danmuToast,
         durationAlert,
+        resolvedTheme,
         storeSnapshot: {
           revision: storeRevisionRef.current,
           danmakuSettings,
@@ -2664,6 +2667,7 @@ export const PlayerPage: React.FC = () => {
     nextPreloadStatus?.token ?? '',
     nextPreloadStatus?.status ?? '',
     Math.floor(nextPreloadStatus?.cachedDurationSec ?? 0),
+    resolvedTheme,
     storeRevisionRef.current,
   ].join('|');
 
@@ -2857,12 +2861,12 @@ export const PlayerPage: React.FC = () => {
 
   if (!item) {
     return (
-      <div className="w-full h-full min-h-screen bg-[#0f1115] flex flex-col items-center justify-center space-y-4 text-gray-300">
-        <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+      <div className="nocta-player-scope w-full h-full min-h-screen bg-[#F5F5F7] dark:bg-[#0A0A0C] flex flex-col items-center justify-center space-y-4 text-[#48484A] dark:text-white/75">
+        <div className="w-8 h-8 border-2 border-[#1D1D1F] dark:border-white border-t-transparent rounded-full animate-spin" />
         <p className="text-sm">正在加载媒体信息...</p>
         <button
           onClick={() => navigate('/')}
-          className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs transition cursor-pointer"
+          className="px-4 py-2 bg-black/[0.06] hover:bg-black/[0.12] text-[#1D1D1F] dark:bg-white/10 dark:hover:bg-white/20 dark:text-white rounded-xl text-xs transition cursor-pointer"
         >
           返回首页
         </button>
@@ -2883,16 +2887,16 @@ export const PlayerPage: React.FC = () => {
     <div
       onWheel={handleVideoWheel}
       onContextMenu={handleContextMenu}
-      className="relative w-screen h-screen overflow-hidden select-none bg-transparent"
+      className="nocta-player-scope relative w-screen h-screen overflow-hidden select-none bg-transparent"
     >
       {/* 屏幕中央播放/暂停瞬时动效徽标 */}
       {centerIcon && (
         <div className="absolute inset-0 pointer-events-none flex items-center justify-center z-30">
-          <div className="p-5 rounded-full bg-black/60 backdrop-blur-md text-white border border-white/10 animate-in zoom-in-75 fade-in duration-150">
+          <div className="p-5 rounded-full bg-white/[0.92] dark:bg-[#141416]/[0.88] text-[#1D1D1F] dark:text-white border border-black/[0.12] dark:border-white/[0.14] animate-in zoom-in-75 fade-in duration-150">
             {centerIcon === 'play' ? (
-              <Play className="w-9 h-9 fill-white translate-x-0.5" />
+              <Play className="w-9 h-9 fill-current translate-x-0.5" />
             ) : (
-              <Pause className="w-9 h-9 fill-white" />
+              <Pause className="w-9 h-9 fill-current" />
             )}
           </div>
         </div>
@@ -2919,7 +2923,7 @@ export const PlayerPage: React.FC = () => {
 
       {/* Loading Overlay */}
       {isLoadingVideo && !videoError && (
-        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-[#0f1115]/90 backdrop-blur-sm pointer-events-auto">
+        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-[#F5F5F7]/[0.94] dark:bg-[#0A0A0C]/[0.94] pointer-events-auto">
           {backdropUrl && (
             <img
               key={backdropUrl}
@@ -2938,27 +2942,27 @@ export const PlayerPage: React.FC = () => {
                 target.dataset.fallbackStep = 'done';
                 target.style.display = 'none';
               }}
-              className="absolute inset-0 w-full h-full object-cover filter blur-2xl opacity-25"
+              className="absolute inset-0 w-full h-full object-cover filter blur-2xl opacity-15 dark:opacity-25"
             />
           )}
           <div className="relative z-10 flex flex-col items-center space-y-4">
-            <div className="w-12 h-12 border-3 border-primary border-t-transparent rounded-full animate-spin" />
+            <div className="w-12 h-12 border-3 border-[#1D1D1F] dark:border-white border-t-transparent rounded-full animate-spin" />
             <div className="text-center">
-              <h2 className="text-base font-bold text-white tracking-wide">{item.Name}</h2>
-              <p className="text-xs text-gray-400 mt-1">
+              <h2 className="text-base font-bold text-[#1D1D1F] dark:text-white tracking-wide">{item.Name}</h2>
+              <p className="text-xs text-[#6E6E73] dark:text-white/65 mt-1">
                 {engineType === 'mpv'
                   ? '正在通过 MPV 硬解引擎直连原画 (0 转码)...'
                   : '正在通过 HTML5 引擎直连原画 (0 转码)...'}
               </p>
               {proxyInfo && (
-                <p className="text-[11px] text-sky-400/90 font-mono mt-1.5">
+                <p className="text-[11px] text-[#48484A] dark:text-white/75 font-mono mt-1.5">
                   网络路线: {proxyInfo.configuredProxy || proxyInfo.effectiveProxy ? `代理 ${proxyInfo.configuredProxy || proxyInfo.effectiveProxy}` : proxySummaryLabel}
                 </p>
               )}
             </div>
             <button
               onClick={handleBack}
-              className="mt-4 px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs flex items-center space-x-1.5 transition cursor-pointer"
+              className="mt-4 px-4 py-2 bg-black/[0.06] hover:bg-black/[0.12] text-[#1D1D1F] dark:bg-white/10 dark:hover:bg-white/20 dark:text-white rounded-xl text-xs flex items-center space-x-1.5 transition cursor-pointer"
             >
               <ArrowLeft className="w-3.5 h-3.5" />
               <span>返回详情页</span>
@@ -2969,8 +2973,8 @@ export const PlayerPage: React.FC = () => {
 
       {/* Error Overlay (增强：显示当前代理路线 + 自动逐跳诊断 + 内置中转救援 + 切换 UA) */}
       {videoError && (
-        <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-[#0f1115]/95 p-4 sm:p-6 pointer-events-auto">
-          <div className="max-w-lg w-full max-h-[88vh] overflow-y-auto custom-scrollbar bg-[#161922] border border-red-500/30 rounded-2xl p-5 sm:p-6 shadow-2xl space-y-3.5 text-center">
+        <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-[#F5F5F7]/[0.95] dark:bg-[#0A0A0C]/[0.95] p-4 sm:p-6 pointer-events-auto">
+          <div className="max-w-lg w-full max-h-[88vh] overflow-y-auto custom-scrollbar bg-white dark:bg-[#161618] border border-rose-500/25 dark:border-red-500/30 rounded-2xl p-5 sm:p-6 space-y-3.5 text-center">
             <div className="w-11 h-11 mx-auto rounded-full bg-red-500/20 text-red-400 flex items-center justify-center">
               <AlertTriangle className="w-5 h-5" />
             </div>
@@ -3154,14 +3158,14 @@ export const PlayerPage: React.FC = () => {
                 <div className="flex gap-2">
                   <button
                     onClick={handleSwitchToMpv}
-                    className="flex-1 py-2.5 bg-primary hover:bg-primary-hover text-white rounded-xl text-xs font-semibold flex items-center justify-center space-x-1.5 transition cursor-pointer shadow-lg shadow-primary/20"
+                    className="flex-1 py-2.5 bg-[#1D1D1F] hover:bg-black text-white dark:bg-white dark:hover:bg-white/90 dark:text-[#1D1D1F] rounded-xl text-xs font-semibold flex items-center justify-center space-x-1.5 transition cursor-pointer"
                   >
                     <Zap className="w-3.5 h-3.5" />
                     <span>一键切换至 MPV 硬解</span>
                   </button>
                   <button
                     onClick={() => handleRetryDirect()}
-                    className="py-2.5 px-4 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-semibold flex items-center justify-center space-x-1.5 transition cursor-pointer"
+                    className="py-2.5 px-4 bg-black/[0.06] hover:bg-black/[0.12] text-[#1D1D1F] dark:bg-white/10 dark:hover:bg-white/20 dark:text-white rounded-xl text-xs font-semibold flex items-center justify-center space-x-1.5 transition cursor-pointer"
                   >
                     <RefreshCw className="w-3.5 h-3.5" />
                     <span>重试</span>
@@ -3172,7 +3176,7 @@ export const PlayerPage: React.FC = () => {
                   <div className="grid grid-cols-2 gap-2">
                     <button
                       onClick={() => handleRetryDirect()}
-                      className="py-2.5 bg-primary hover:bg-primary-hover text-white rounded-xl text-xs font-semibold flex items-center justify-center space-x-1.5 transition cursor-pointer"
+                      className="py-2.5 bg-[#1D1D1F] hover:bg-black text-white dark:bg-white dark:hover:bg-white/90 dark:text-[#1D1D1F] rounded-xl text-xs font-semibold flex items-center justify-center space-x-1.5 transition cursor-pointer"
                     >
                       <RefreshCw className="w-3.5 h-3.5" />
                       <span>重试原画直连</span>
@@ -3400,8 +3404,8 @@ export const PlayerPage: React.FC = () => {
 
       {/* 弹幕加载或绑定提示 Toast */}
       {danmuToast && (
-        <div className="fixed top-20 right-6 z-40 max-w-md bg-black/85 backdrop-blur-md border border-primary/40 text-white text-xs px-4 py-2.5 rounded-xl flex items-center space-x-2.5 animate-in fade-in slide-in-from-top-2">
-          <span className="w-2 h-2 rounded-full bg-primary animate-ping flex-shrink-0" />
+        <div className="fixed top-20 right-6 z-40 max-w-md bg-white/[0.95] dark:bg-[#141416]/[0.94] border border-black/[0.12] dark:border-white/[0.14] text-[#1D1D1F] dark:text-white text-xs px-4 py-2.5 rounded-xl flex items-center space-x-2.5 animate-in fade-in slide-in-from-top-2">
+          <span className="w-2 h-2 rounded-full bg-[#1D1D1F] dark:bg-white animate-ping flex-shrink-0" />
           <span className="font-medium truncate">{danmuToast}</span>
         </div>
       )}
@@ -3410,12 +3414,12 @@ export const PlayerPage: React.FC = () => {
 
       {/* 时长偏差提示 Banner */}
       {durationAlert && (
-        <div className="fixed top-32 right-6 z-40 max-w-sm bg-black/80 backdrop-blur-md border border-yellow-500/30 text-yellow-300 text-xs p-3 rounded-xl flex items-start space-x-2 animate-in fade-in slide-in-from-top-2">
-          <AlertCircle className="w-4 h-4 flex-shrink-0 text-yellow-400 mt-0.5" />
+        <div className="fixed top-32 right-6 z-40 max-w-sm bg-white/[0.95] dark:bg-[#141416]/[0.94] border border-amber-600/30 dark:border-amber-400/30 text-[#B45309] dark:text-amber-300 text-xs p-3 rounded-xl flex items-start space-x-2 animate-in fade-in slide-in-from-top-2">
+          <AlertCircle className="w-4 h-4 flex-shrink-0 text-[#B45309] dark:text-amber-400 mt-0.5" />
           <div className="flex-1 leading-relaxed">{durationAlert}</div>
           <button
             onClick={() => setDurationAlert(null)}
-            className="text-gray-400 hover:text-white ml-1 cursor-pointer"
+            className="text-[#6E6E73] hover:text-[#1D1D1F] dark:text-white/55 dark:hover:text-white ml-1 cursor-pointer"
           >
             <X className="w-3.5 h-3.5" />
           </button>

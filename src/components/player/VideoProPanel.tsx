@@ -110,16 +110,16 @@ export const VideoProPanel: React.FC<VideoProPanelProps> = ({
   return (
     <>
       <div className="fixed inset-0 z-20 bg-transparent" onClick={onClose} />
-      <div className="fixed top-16 bottom-24 right-6 z-30 w-80 md:w-96 rounded-2xl bg-[#0B0E17]/95 backdrop-blur-2xl border border-white/15 flex flex-col text-gray-200 select-none animate-in slide-in-from-right duration-200 overflow-hidden">
+      <div className="fixed top-16 bottom-24 right-6 z-30 w-80 md:w-96 rounded-2xl bg-white/[0.96] dark:bg-[#141416]/[0.95] border border-black/[0.12] dark:border-white/[0.12] flex flex-col text-[#1D1D1F] dark:text-white/90 select-none animate-in slide-in-from-right duration-200 overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-white/10 bg-white/[0.02]">
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-black/[0.08] dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02]">
           <div className="flex items-center space-x-2">
-            <Sparkles className="w-4 h-4 text-amber-400" />
-            <h2 className="text-sm font-semibold tracking-wide text-white">画质、硬解与音字幕调校</h2>
+            <Sparkles className="w-4 h-4 text-[#B45309] dark:text-amber-400" />
+            <h2 className="text-sm font-semibold tracking-wide text-[#1D1D1F] dark:text-white">画质、硬解与音字幕调校</h2>
           </div>
           <button
             onClick={onClose}
-            className="p-1 rounded-lg hover:bg-white/10 text-gray-400 hover:text-white transition cursor-pointer"
+            className="p-1 rounded-lg hover:bg-black/[0.08] dark:hover:bg-white/10 text-[#6E6E73] hover:text-[#1D1D1F] dark:text-white/60 dark:hover:text-white transition cursor-pointer"
             title="关闭 (Esc)"
           >
             <X className="w-4 h-4" />
@@ -127,14 +127,14 @@ export const VideoProPanel: React.FC<VideoProPanelProps> = ({
         </div>
 
         {/* 3-Tab Switcher */}
-        <div className="p-3 border-b border-white/10 bg-white/[0.01]">
-          <div className="flex bg-white/5 p-1 rounded-xl border border-white/5 text-xs font-medium">
+        <div className="p-3 border-b border-black/[0.08] dark:border-white/10 bg-black/[0.015] dark:bg-white/[0.01]">
+          <div className="flex bg-black/[0.05] dark:bg-white/[0.06] p-1 rounded-xl border border-black/[0.06] dark:border-white/[0.06] text-xs font-medium">
             <button
               onClick={() => setActiveTab('video')}
               className={`flex-1 py-1.5 rounded-lg transition flex items-center justify-center space-x-1 cursor-pointer ${
                 activeTab === 'video'
-                  ? 'bg-primary text-white font-semibold shadow-md'
-                  : 'text-gray-400 hover:text-white'
+                  ? 'bg-[#1D1D1F] text-white dark:bg-white dark:text-[#1D1D1F] font-semibold'
+                  : 'text-[#6E6E73] hover:text-[#1D1D1F] dark:text-white/60 dark:hover:text-white'
               }`}
             >
               <Cpu className="w-3.5 h-3.5" />
@@ -144,8 +144,8 @@ export const VideoProPanel: React.FC<VideoProPanelProps> = ({
               onClick={() => setActiveTab('subtitle')}
               className={`flex-1 py-1.5 rounded-lg transition flex items-center justify-center space-x-1 cursor-pointer ${
                 activeTab === 'subtitle'
-                  ? 'bg-primary text-white font-semibold shadow-md'
-                  : 'text-gray-400 hover:text-white'
+                  ? 'bg-[#1D1D1F] text-white dark:bg-white dark:text-[#1D1D1F] font-semibold'
+                  : 'text-[#6E6E73] hover:text-[#1D1D1F] dark:text-white/60 dark:hover:text-white'
               }`}
             >
               <Subtitles className="w-3.5 h-3.5" />
@@ -155,8 +155,8 @@ export const VideoProPanel: React.FC<VideoProPanelProps> = ({
               onClick={() => setActiveTab('audio')}
               className={`flex-1 py-1.5 rounded-lg transition flex items-center justify-center space-x-1 cursor-pointer ${
                 activeTab === 'audio'
-                  ? 'bg-primary text-white font-semibold shadow-md'
-                  : 'text-gray-400 hover:text-white'
+                  ? 'bg-[#1D1D1F] text-white dark:bg-white dark:text-[#1D1D1F] font-semibold'
+                  : 'text-[#6E6E73] hover:text-[#1D1D1F] dark:text-white/60 dark:hover:text-white'
               }`}
             >
               <Volume2 className="w-3.5 h-3.5" />
@@ -206,8 +206,8 @@ export const VideoProPanel: React.FC<VideoProPanelProps> = ({
                         onClick={() => updatePlayerPreferences({ hwdecMode: opt.mode })}
                         className={`py-1.5 rounded-lg text-[11px] font-medium transition cursor-pointer ${
                           playerPreferences.hwdecMode === opt.mode
-                            ? 'bg-primary text-white font-semibold shadow-sm'
-                            : 'bg-white/5 hover:bg-white/10 text-gray-300'
+                            ? 'bg-[#1D1D1F] text-white dark:bg-white dark:text-[#1D1D1F] font-semibold'
+                            : 'bg-black/[0.05] hover:bg-black/[0.10] text-[#48484A] dark:bg-white/[0.06] dark:hover:bg-white/10 dark:text-white/75'
                         }`}
                       >
                         {opt.label}
@@ -252,8 +252,8 @@ export const VideoProPanel: React.FC<VideoProPanelProps> = ({
                         onClick={() => updatePlayerPreferences({ videoAspect: p.id })}
                         className={`py-1.5 rounded-lg text-[11px] font-medium transition cursor-pointer ${
                           playerPreferences.videoAspect === p.id
-                            ? 'bg-primary text-white shadow-sm'
-                            : 'bg-white/5 hover:bg-white/10 text-gray-300'
+                            ? 'bg-[#1D1D1F] text-white dark:bg-white dark:text-[#1D1D1F] font-semibold'
+                            : 'bg-black/[0.05] hover:bg-black/[0.10] text-[#48484A] dark:bg-white/[0.06] dark:hover:bg-white/10 dark:text-white/75'
                         }`}
                       >
                         {p.label}
@@ -279,11 +279,11 @@ export const VideoProPanel: React.FC<VideoProPanelProps> = ({
                       }
                       className="sr-only peer"
                     />
-                    <div className="w-9 h-5 bg-white/10 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary" />
+                    <div className="w-9 h-5 bg-black/[0.14] dark:bg-white/15 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#1D1D1F] dark:peer-checked:bg-emerald-500" />
                   </label>
                 </div>
 
-                <div className="flex items-center justify-between text-[11px] pt-1 border-t border-white/5">
+                <div className="flex items-center justify-between text-[11px] pt-1 border-t border-black/[0.06] dark:border-white/5">
                   <span className="text-gray-400">画幅检测:</span>
                   {videoAspectRatio ? (
                     <span
@@ -332,8 +332,8 @@ export const VideoProPanel: React.FC<VideoProPanelProps> = ({
                           onClick={() => setVideoLayout(layoutKey, { verticalOffset: item.val })}
                           className={`py-1 rounded-lg text-[11px] font-medium transition cursor-pointer ${
                             currentLayout.verticalOffset === item.val
-                              ? 'bg-primary text-white'
-                              : 'bg-white/5 hover:bg-white/10 text-gray-300'
+                              ? 'bg-[#1D1D1F] text-white dark:bg-white dark:text-[#1D1D1F] font-semibold'
+                              : 'bg-black/[0.05] hover:bg-black/[0.10] text-[#48484A] dark:bg-white/[0.06] dark:hover:bg-white/10 dark:text-white/75'
                           }`}
                         >
                           {item.label}
@@ -372,8 +372,8 @@ export const VideoProPanel: React.FC<VideoProPanelProps> = ({
                           onClick={() => updatePlayerPreferences({ toneMapping: t.id })}
                           className={`py-1.5 rounded-lg text-[11px] font-medium transition cursor-pointer ${
                             playerPreferences.toneMapping === t.id
-                              ? 'bg-primary text-white'
-                              : 'bg-white/5 hover:bg-white/10 text-gray-300'
+                              ? 'bg-[#1D1D1F] text-white dark:bg-white dark:text-[#1D1D1F] font-semibold'
+                              : 'bg-black/[0.05] hover:bg-black/[0.10] text-[#48484A] dark:bg-white/[0.06] dark:hover:bg-white/10 dark:text-white/75'
                           }`}
                         >
                           {t.label}
@@ -397,7 +397,7 @@ export const VideoProPanel: React.FC<VideoProPanelProps> = ({
                         onChange={(e) => updatePlayerPreferences({ deband: e.target.checked })}
                         className="sr-only peer"
                       />
-                      <div className="w-9 h-5 bg-white/10 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary" />
+                      <div className="w-9 h-5 bg-black/[0.14] dark:bg-white/15 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#1D1D1F] dark:peer-checked:bg-emerald-500" />
                     </label>
                   </div>
 
@@ -477,8 +477,8 @@ export const VideoProPanel: React.FC<VideoProPanelProps> = ({
                         onClick={() => updatePlayerPreferences({ bufferDurationSeconds: sec })}
                         className={`py-1 rounded-lg text-[11px] font-medium transition cursor-pointer ${
                           playerPreferences.bufferDurationSeconds === sec
-                            ? 'bg-primary text-white shadow-sm'
-                            : 'bg-white/5 hover:bg-white/10 text-gray-300'
+                            ? 'bg-[#1D1D1F] text-white dark:bg-white dark:text-[#1D1D1F] font-semibold'
+                            : 'bg-black/[0.05] hover:bg-black/[0.10] text-[#48484A] dark:bg-white/[0.06] dark:hover:bg-white/10 dark:text-white/75'
                         }`}
                       >
                         {formatShortMinutesLabel(sec)}
@@ -502,8 +502,8 @@ export const VideoProPanel: React.FC<VideoProPanelProps> = ({
                         onClick={() => updatePlayerPreferences({ cacheMemoryCapMB: cap.mb })}
                         className={`py-1 rounded-lg text-[10px] font-mono font-medium transition cursor-pointer ${
                           playerPreferences.cacheMemoryCapMB === cap.mb
-                            ? 'bg-sky-500/80 text-white shadow-sm'
-                            : 'bg-white/5 hover:bg-white/10 text-gray-300'
+                            ? 'bg-[#1D1D1F] text-white dark:bg-white dark:text-[#1D1D1F] font-semibold'
+                            : 'bg-black/[0.05] hover:bg-black/[0.10] text-[#48484A] dark:bg-white/[0.06] dark:hover:bg-white/10 dark:text-white/75'
                         }`}
                       >
                         {cap.label}
@@ -530,7 +530,7 @@ export const VideoProPanel: React.FC<VideoProPanelProps> = ({
                         }
                         className="sr-only peer"
                       />
-                      <div className="w-9 h-5 bg-white/10 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary" />
+                      <div className="w-9 h-5 bg-black/[0.14] dark:bg-white/15 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#1D1D1F] dark:peer-checked:bg-emerald-500" />
                     </label>
                   </div>
 
@@ -552,8 +552,8 @@ export const VideoProPanel: React.FC<VideoProPanelProps> = ({
                               }
                               className={`py-1 rounded-lg text-[11px] font-medium transition cursor-pointer ${
                                 playerPreferences.preloadNextDurationSeconds === sec
-                                  ? 'bg-primary text-white shadow-sm'
-                                  : 'bg-white/5 hover:bg-white/10 text-gray-300'
+                                  ? 'bg-[#1D1D1F] text-white dark:bg-white dark:text-[#1D1D1F] font-semibold'
+                                  : 'bg-black/[0.05] hover:bg-black/[0.10] text-[#48484A] dark:bg-white/[0.06] dark:hover:bg-white/10 dark:text-white/75'
                               }`}
                             >
                               {formatShortMinutesLabel(sec)}
@@ -580,8 +580,8 @@ export const VideoProPanel: React.FC<VideoProPanelProps> = ({
                               }
                               className={`py-1 rounded-lg text-[10px] font-medium transition cursor-pointer ${
                                 playerPreferences.preloadTriggerMode === opt.id
-                                  ? 'bg-primary text-white shadow-sm'
-                                  : 'bg-white/5 hover:bg-white/10 text-gray-300'
+                                  ? 'bg-[#1D1D1F] text-white dark:bg-white dark:text-[#1D1D1F] font-semibold'
+                                  : 'bg-black/[0.05] hover:bg-black/[0.10] text-[#48484A] dark:bg-white/[0.06] dark:hover:bg-white/10 dark:text-white/75'
                               }`}
                             >
                               {opt.shortLabel}
@@ -688,8 +688,8 @@ export const VideoProPanel: React.FC<VideoProPanelProps> = ({
                     onClick={() => setEngineType('mpv')}
                     className={`py-1.5 rounded-lg text-xs font-medium transition cursor-pointer ${
                       isMpv
-                        ? 'bg-primary text-white shadow-md'
-                        : 'bg-white/5 hover:bg-white/10 text-gray-300'
+                        ? 'bg-[#1D1D1F] text-white dark:bg-white dark:text-[#1D1D1F] font-semibold'
+                        : 'bg-black/[0.05] hover:bg-black/[0.10] text-[#48484A] dark:bg-white/[0.06] dark:hover:bg-white/10 dark:text-white/75'
                     }`}
                   >
                     libmpv 原生硬解
@@ -698,8 +698,8 @@ export const VideoProPanel: React.FC<VideoProPanelProps> = ({
                     onClick={() => setEngineType('html5')}
                     className={`py-1.5 rounded-lg text-xs font-medium transition cursor-pointer ${
                       !isMpv
-                        ? 'bg-primary text-white shadow-md'
-                        : 'bg-white/5 hover:bg-white/10 text-gray-300'
+                        ? 'bg-[#1D1D1F] text-white dark:bg-white dark:text-[#1D1D1F] font-semibold'
+                        : 'bg-black/[0.05] hover:bg-black/[0.10] text-[#48484A] dark:bg-white/[0.06] dark:hover:bg-white/10 dark:text-white/75'
                     }`}
                   >
                     WebView 兼容
@@ -899,7 +899,7 @@ export const VideoProPanel: React.FC<VideoProPanelProps> = ({
                         }
                         className="sr-only peer"
                       />
-                      <div className="w-9 h-5 bg-white/10 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary" />
+                      <div className="w-9 h-5 bg-black/[0.14] dark:bg-white/15 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#1D1D1F] dark:peer-checked:bg-emerald-500" />
                     </label>
                   </div>
 
@@ -957,8 +957,8 @@ export const VideoProPanel: React.FC<VideoProPanelProps> = ({
                         onClick={() => updatePlayerPreferences({ longPressSpeed: r })}
                         className={`px-2.5 py-1 rounded-lg font-mono text-[11px] transition cursor-pointer ${
                           playerPreferences.longPressSpeed === r
-                            ? 'bg-primary text-white font-bold'
-                            : 'bg-white/5 hover:bg-white/10 text-slate-300'
+                            ? 'bg-[#1D1D1F] text-white dark:bg-white dark:text-[#1D1D1F] font-bold'
+                            : 'bg-black/[0.05] hover:bg-black/[0.10] text-[#48484A] dark:bg-white/[0.06] dark:hover:bg-white/10 dark:text-white/75'
                         }`}
                       >
                         {r}x

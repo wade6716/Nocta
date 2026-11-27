@@ -689,27 +689,27 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
   return (
     <>
       <div className="fixed inset-0 z-20 bg-transparent" onClick={onClose} />
-      <div className="fixed top-16 bottom-24 right-6 z-30 w-80 sm:w-[400px] lg:w-[430px] rounded-2xl bg-[#0B0E17]/95 backdrop-blur-2xl border border-white/15 flex flex-col text-gray-200 select-none animate-in slide-in-from-right duration-200 overflow-hidden">
+      <div className="fixed top-16 bottom-24 right-6 z-30 w-80 sm:w-[400px] lg:w-[430px] rounded-2xl bg-white/[0.96] dark:bg-[#141416]/[0.95] border border-black/[0.12] dark:border-white/[0.12] flex flex-col text-[#1D1D1F] dark:text-white/90 select-none animate-in slide-in-from-right duration-200 overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-white/10 bg-white/[0.02]">
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-black/[0.08] dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02]">
           <div className="flex items-center space-x-2">
-            <Sliders className="w-4 h-4 text-primary" />
-            <h2 className="text-sm font-semibold tracking-wide text-white">弹幕控制中心</h2>
+            <Sliders className="w-4 h-4 text-[#1D1D1F] dark:text-white" />
+            <h2 className="text-sm font-semibold tracking-wide text-[#1D1D1F] dark:text-white">弹幕控制中心</h2>
           </div>
 
           <div className="flex items-center space-x-2">
             <button
               onClick={() => setIsServerModalOpen(true)}
-              className="flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-xs text-gray-300 hover:text-white transition border border-white/5 cursor-pointer"
+              className="flex items-center space-x-1 px-2.5 py-1 rounded-lg bg-black/[0.05] hover:bg-black/[0.10] dark:bg-white/[0.06] dark:hover:bg-white/[0.12] text-xs text-[#48484A] hover:text-[#1D1D1F] dark:text-white/75 dark:hover:text-white transition border border-black/[0.08] dark:border-white/10 cursor-pointer"
               title="配置弹幕 API 节点"
             >
-              <Server className="w-3.5 h-3.5 text-primary" />
+              <Server className="w-3.5 h-3.5 text-[#1D1D1F] dark:text-white" />
               <span className="truncate max-w-[80px]">{activeServer.name}</span>
             </button>
 
             <button
               onClick={onClose}
-              className="p-1 rounded-lg hover:bg-white/10 text-gray-400 hover:text-white transition cursor-pointer"
+              className="p-1 rounded-lg hover:bg-black/[0.08] dark:hover:bg-white/10 text-[#6E6E73] hover:text-[#1D1D1F] dark:text-white/60 dark:hover:text-white transition cursor-pointer"
               title="关闭弹幕设置 (Esc)"
             >
               <X className="w-4 h-4" />
@@ -719,21 +719,21 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
 
         {/* Toast */}
         {bindSuccessToast && (
-          <div className="mx-4 mt-3 p-2.5 bg-green-500/15 border border-green-500/30 rounded-xl text-xs text-green-300 flex items-center space-x-2 animate-fadeIn">
-            <CheckCircle2 className="w-4 h-4 flex-shrink-0 text-green-400" />
+          <div className="mx-4 mt-3 p-2.5 bg-emerald-500/[0.12] dark:bg-green-500/15 border border-emerald-600/25 dark:border-green-500/30 rounded-xl text-xs text-[#047857] dark:text-green-300 flex items-center space-x-2 animate-fadeIn">
+            <CheckCircle2 className="w-4 h-4 flex-shrink-0 text-[#047857] dark:text-green-400" />
             <span className="truncate">{bindSuccessToast}</span>
           </div>
         )}
 
         {/* 4-Tab Segmented Control */}
-        <div className="p-3 border-b border-white/10 bg-white/[0.01]">
-          <div className="grid grid-cols-4 bg-white/5 p-1 rounded-xl border border-white/5 text-xs font-medium gap-1">
+        <div className="p-3 border-b border-black/[0.08] dark:border-white/10 bg-black/[0.015] dark:bg-white/[0.01]">
+          <div className="grid grid-cols-4 bg-black/[0.05] dark:bg-white/[0.06] p-1 rounded-xl border border-black/[0.06] dark:border-white/[0.06] text-xs font-medium gap-1">
             <button
               onClick={() => setActiveTab('match')}
               className={`py-1.5 rounded-lg transition flex items-center justify-center space-x-1 cursor-pointer ${
                 activeTab === 'match'
-                  ? 'bg-primary text-white font-semibold shadow-md'
-                  : 'text-gray-400 hover:text-white'
+                  ? 'bg-[#1D1D1F] text-white dark:bg-white dark:text-[#1D1D1F] font-semibold'
+                  : 'text-[#6E6E73] hover:text-[#1D1D1F] dark:text-white/60 dark:hover:text-white'
               }`}
             >
               <Tv className="w-3.5 h-3.5" />
@@ -743,8 +743,8 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
               onClick={() => setActiveTab('time')}
               className={`py-1.5 rounded-lg transition flex items-center justify-center space-x-1 cursor-pointer ${
                 activeTab === 'time'
-                  ? 'bg-primary text-white font-semibold shadow-md'
-                  : 'text-gray-400 hover:text-white'
+                  ? 'bg-[#1D1D1F] text-white dark:bg-white dark:text-[#1D1D1F] font-semibold'
+                  : 'text-[#6E6E73] hover:text-[#1D1D1F] dark:text-white/60 dark:hover:text-white'
               }`}
             >
               <Clock className="w-3.5 h-3.5" />
@@ -754,8 +754,8 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
               onClick={() => setActiveTab('style')}
               className={`py-1.5 rounded-lg transition flex items-center justify-center space-x-1 cursor-pointer ${
                 activeTab === 'style'
-                  ? 'bg-primary text-white font-semibold shadow-md'
-                  : 'text-gray-400 hover:text-white'
+                  ? 'bg-[#1D1D1F] text-white dark:bg-white dark:text-[#1D1D1F] font-semibold'
+                  : 'text-[#6E6E73] hover:text-[#1D1D1F] dark:text-white/60 dark:hover:text-white'
               }`}
             >
               <Palette className="w-3.5 h-3.5" />
@@ -765,8 +765,8 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
               onClick={() => setActiveTab('list')}
               className={`py-1.5 rounded-lg transition flex items-center justify-center space-x-1 cursor-pointer ${
                 activeTab === 'list'
-                  ? 'bg-primary text-white font-semibold shadow-md'
-                  : 'text-gray-400 hover:text-white'
+                  ? 'bg-[#1D1D1F] text-white dark:bg-white dark:text-[#1D1D1F] font-semibold'
+                  : 'text-[#6E6E73] hover:text-[#1D1D1F] dark:text-white/60 dark:hover:text-white'
               }`}
             >
               <ListFilter className="w-3.5 h-3.5" />
@@ -897,7 +897,7 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
                   <button
                     type="submit"
                     disabled={searching}
-                    className="px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-xl text-sm font-medium transition flex items-center space-x-1.5 disabled:opacity-50 cursor-pointer"
+                    className="px-4 py-2 bg-[#1D1D1F] hover:bg-black text-white dark:bg-white dark:hover:bg-white/90 dark:text-[#1D1D1F] rounded-xl text-sm font-semibold transition flex items-center space-x-1.5 disabled:opacity-50 cursor-pointer"
                   >
                     <Search className="w-4 h-4" />
                     <span>{searching ? '搜索中' : '搜索'}</span>
@@ -1091,14 +1091,14 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
                             </button>
                           )}
 
-                          <div className="shrink-0 flex items-center bg-black/50 p-0.5 rounded-lg border border-white/10">
+                          <div className="shrink-0 flex items-center bg-black/[0.06] dark:bg-white/[0.06] p-0.5 rounded-lg border border-black/[0.08] dark:border-white/10">
                             <button
                               type="button"
                               onClick={() => setEpisodeViewModeOverride('grid')}
                               className={`p-1.5 rounded-md transition cursor-pointer ${
                                 episodeViewMode === 'grid'
-                                  ? 'bg-primary text-white'
-                                  : 'text-gray-400 hover:text-white'
+                                  ? 'bg-[#1D1D1F] text-white dark:bg-white dark:text-[#1D1D1F]'
+                                  : 'text-[#6E6E73] hover:text-[#1D1D1F] dark:text-white/60 dark:hover:text-white'
                               }`}
                               title="集号网格视图"
                             >
@@ -1109,8 +1109,8 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
                               onClick={() => setEpisodeViewModeOverride('list')}
                               className={`p-1.5 rounded-md transition cursor-pointer ${
                                 episodeViewMode === 'list'
-                                  ? 'bg-primary text-white'
-                                  : 'text-gray-400 hover:text-white'
+                                  ? 'bg-[#1D1D1F] text-white dark:bg-white dark:text-[#1D1D1F]'
+                                  : 'text-[#6E6E73] hover:text-[#1D1D1F] dark:text-white/60 dark:hover:text-white'
                               }`}
                               title="分集列表视图"
                             >
@@ -1392,7 +1392,7 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
                   </button>
                   <button
                     onClick={resetOffset}
-                    className="py-2.5 bg-primary/20 hover:bg-primary text-primary hover:text-white rounded-xl text-xs font-bold transition border border-primary/30 cursor-pointer shadow-sm"
+                    className="py-2.5 bg-black/[0.06] hover:bg-[#1D1D1F] text-[#1D1D1F] hover:text-white dark:bg-white/[0.10] dark:hover:bg-white dark:text-white dark:hover:text-[#1D1D1F] rounded-xl text-xs font-bold transition border border-black/[0.12] dark:border-white/15 cursor-pointer"
                   >
                     重置
                   </button>
@@ -1440,7 +1440,7 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
                       onChange={(e) => updateDanmakuSettings({ mergeDuplicates: e.target.checked })}
                       className="sr-only peer"
                     />
-                    <div className="w-9 h-5 bg-white/10 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary" />
+                    <div className="w-9 h-5 bg-black/[0.14] dark:bg-white/15 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#1D1D1F] dark:peer-checked:bg-emerald-500" />
                   </label>
                 </div>
 
@@ -1461,7 +1461,7 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
                       onChange={(e) => updateDanmakuSettings({ showHeatmap: e.target.checked })}
                       className="sr-only peer"
                     />
-                    <div className="w-9 h-5 bg-white/10 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary" />
+                    <div className="w-9 h-5 bg-black/[0.14] dark:bg-white/15 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#1D1D1F] dark:peer-checked:bg-emerald-500" />
                   </label>
                 </div>
               </div>
@@ -1484,8 +1484,8 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
                       onClick={() => updateDanmakuSettings({ maxLines: lines })}
                       className={`py-1.5 rounded-lg text-xs font-medium transition cursor-pointer ${
                         danmakuSettings.maxLines === lines
-                          ? 'bg-primary text-white shadow-md'
-                          : 'bg-white/5 hover:bg-white/10 text-gray-300'
+                          ? 'bg-[#1D1D1F] text-white dark:bg-white dark:text-[#1D1D1F] font-semibold'
+                          : 'bg-black/[0.05] hover:bg-black/[0.10] text-[#48484A] dark:bg-white/[0.06] dark:hover:bg-white/10 dark:text-white/75'
                       }`}
                     >
                       {lines === 0 ? '不限' : `${lines}行`}
@@ -1529,8 +1529,8 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
                       }
                       className={`py-2 rounded-xl text-xs font-medium transition cursor-pointer ${
                         danmakuSettings.colorMode === item.mode
-                          ? 'bg-primary text-white shadow-md'
-                          : 'bg-white/5 hover:bg-white/10 text-gray-300'
+                          ? 'bg-[#1D1D1F] text-white dark:bg-white dark:text-[#1D1D1F] font-semibold'
+                          : 'bg-black/[0.05] hover:bg-black/[0.10] text-[#48484A] dark:bg-white/[0.06] dark:hover:bg-white/10 dark:text-white/75'
                       }`}
                     >
                       {item.label}
@@ -1554,8 +1554,8 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
                       onClick={() => updateDanmakuSettings({ area: val })}
                       className={`py-1.5 rounded-lg text-xs font-medium transition cursor-pointer ${
                         danmakuSettings.area === val
-                          ? 'bg-primary text-white'
-                          : 'bg-white/5 hover:bg-white/10 text-gray-300'
+                          ? 'bg-[#1D1D1F] text-white dark:bg-white dark:text-[#1D1D1F] font-semibold'
+                          : 'bg-black/[0.05] hover:bg-black/[0.10] text-[#48484A] dark:bg-white/[0.06] dark:hover:bg-white/10 dark:text-white/75'
                       }`}
                     >
                       {val === 0.25 ? '1/4屏' : val === 0.5 ? '半屏' : val === 0.75 ? '3/4屏' : '满屏'}
@@ -1616,8 +1616,8 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
                       onClick={() => updateDanmakuSettings({ fontSize: size })}
                       className={`py-1.5 rounded-lg text-xs font-medium transition cursor-pointer ${
                         danmakuSettings.fontSize === size
-                          ? 'bg-primary text-white'
-                          : 'bg-white/5 hover:bg-white/10 text-gray-300'
+                          ? 'bg-[#1D1D1F] text-white dark:bg-white dark:text-[#1D1D1F] font-semibold'
+                          : 'bg-black/[0.05] hover:bg-black/[0.10] text-[#48484A] dark:bg-white/[0.06] dark:hover:bg-white/10 dark:text-white/75'
                       }`}
                     >
                       {size === 18 ? '小' : size === 24 ? '中' : size === 30 ? '大' : '特大'}
@@ -1640,8 +1640,8 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
                           onClick={() => updateDanmakuSettings({ fontWeight: w.val })}
                           className={`py-1 rounded-lg text-[11px] transition cursor-pointer ${
                             danmakuSettings.fontWeight === w.val
-                              ? 'bg-primary text-white font-semibold'
-                              : 'bg-white/5 hover:bg-white/10 text-gray-300'
+                              ? 'bg-[#1D1D1F] text-white dark:bg-white dark:text-[#1D1D1F] font-semibold'
+                              : 'bg-black/[0.05] hover:bg-black/[0.10] text-[#48484A] dark:bg-white/[0.06] dark:hover:bg-white/10 dark:text-white/75'
                           }`}
                         >
                           {w.label}
@@ -1662,8 +1662,8 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
                           onClick={() => updateDanmakuSettings({ strokeWidth: s.val })}
                           className={`py-1 rounded-lg text-[11px] transition cursor-pointer ${
                             danmakuSettings.strokeWidth === s.val
-                              ? 'bg-primary text-white font-semibold'
-                              : 'bg-white/5 hover:bg-white/10 text-gray-300'
+                              ? 'bg-[#1D1D1F] text-white dark:bg-white dark:text-[#1D1D1F] font-semibold'
+                              : 'bg-black/[0.05] hover:bg-black/[0.10] text-[#48484A] dark:bg-white/[0.06] dark:hover:bg-white/10 dark:text-white/75'
                           }`}
                         >
                           {s.label}
@@ -1689,8 +1689,8 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
                       onClick={() => updateDanmakuSettings({ bottomMargin: bm })}
                       className={`py-1.5 rounded-lg text-xs font-medium transition cursor-pointer ${
                         danmakuSettings.bottomMargin === bm
-                          ? 'bg-primary text-white'
-                          : 'bg-white/5 hover:bg-white/10 text-gray-300'
+                          ? 'bg-[#1D1D1F] text-white dark:bg-white dark:text-[#1D1D1F] font-semibold'
+                          : 'bg-black/[0.05] hover:bg-black/[0.10] text-[#48484A] dark:bg-white/[0.06] dark:hover:bg-white/10 dark:text-white/75'
                       }`}
                     >
                       {bm === 0 ? '无避让' : `${bm}px`}
@@ -1750,7 +1750,7 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
                   />
                   <button
                     type="submit"
-                    className="px-3 py-1.5 bg-primary hover:bg-primary-hover text-white rounded-lg text-xs font-medium transition flex items-center space-x-1 cursor-pointer"
+                    className="px-3 py-1.5 bg-[#1D1D1F] hover:bg-black text-white dark:bg-white dark:hover:bg-white/90 dark:text-[#1D1D1F] rounded-lg text-xs font-semibold transition flex items-center space-x-1 cursor-pointer"
                   >
                     <Plus className="w-3.5 h-3.5" />
                     <span>添加</span>
@@ -1793,8 +1793,8 @@ export const DanmakuDrawer = React.memo<DanmakuDrawerProps>(({
                   onClick={() => setNearCurrentOnly((prev) => !prev)}
                   className={`px-2.5 py-2 rounded-xl text-[11px] font-medium border transition cursor-pointer shrink-0 ${
                     nearCurrentOnly
-                      ? 'bg-primary text-white border-primary'
-                      : 'bg-white/5 hover:bg-white/10 border-white/10 text-gray-300'
+                      ? 'bg-[#1D1D1F] text-white border-[#1D1D1F] dark:bg-white dark:text-[#1D1D1F] dark:border-white font-semibold'
+                      : 'bg-black/[0.05] hover:bg-black/[0.10] border-black/[0.08] text-[#48484A] dark:bg-white/[0.06] dark:hover:bg-white/10 dark:border-white/10 dark:text-white/75'
                   }`}
                   title="仅看当前进度前后 2 分钟内的弹幕"
                 >

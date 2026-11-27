@@ -28,15 +28,15 @@ export const OutroSkipToast: React.FC<OutroSkipToastProps> = ({
 
   return (
     <div className="fixed bottom-28 left-1/2 -translate-x-1/2 z-40 w-[min(92vw,460px)] pointer-events-auto animate-in fade-in slide-in-from-bottom-3 duration-200">
-      <div className="relative overflow-hidden rounded-2xl border border-white/15 bg-[#0B0E17]/95 backdrop-blur-2xl px-4 py-3.5">
+      <div className="relative overflow-hidden rounded-2xl border border-black/[0.12] dark:border-white/[0.14] bg-white/[0.95] dark:bg-[#141416]/[0.94] px-4 py-3.5">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 flex-shrink-0 rounded-xl bg-primary/15 border border-primary/30 text-primary flex items-center justify-center">
+          <div className="w-9 h-9 flex-shrink-0 rounded-xl bg-black/[0.06] dark:bg-white/10 border border-black/[0.08] dark:border-white/15 text-[#1D1D1F] dark:text-white flex items-center justify-center">
             <SkipForward className="w-4 h-4" />
           </div>
 
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-white">已到片尾</p>
-            <p className="text-xs text-gray-400 mt-0.5">
+            <p className="text-sm font-semibold text-[#1D1D1F] dark:text-white">已到片尾</p>
+            <p className="text-xs text-[#6E6E73] dark:text-white/60 mt-0.5">
               {defaultAction === 'auto'
                 ? hasNextEpisode
                   ? `${remainingSeconds} 秒后自动跳过片尾进入下一集`
@@ -48,22 +48,22 @@ export const OutroSkipToast: React.FC<OutroSkipToastProps> = ({
           <div className="flex items-center gap-2 flex-shrink-0">
             <button
               onClick={onCancel}
-              className="px-3 py-1.5 rounded-xl text-xs font-medium text-gray-300 bg-white/5 border border-white/10 hover:bg-white/10 hover:text-white transition cursor-pointer"
+              className="px-3 py-1.5 rounded-xl text-xs font-medium text-[#48484A] bg-black/[0.05] border border-black/[0.08] hover:bg-black/[0.10] hover:text-[#1D1D1F] dark:text-white/75 dark:bg-white/[0.06] dark:border-white/10 dark:hover:bg-white/[0.12] dark:hover:text-white transition cursor-pointer"
             >
               取消
             </button>
             <button
               onClick={onSkip}
-              className="px-3 py-1.5 rounded-xl text-xs font-semibold text-white bg-primary hover:bg-primary-hover shadow-lg shadow-primary/20 transition cursor-pointer"
+              className="px-3 py-1.5 rounded-xl text-xs font-semibold text-white bg-[#1D1D1F] hover:bg-black dark:text-[#1D1D1F] dark:bg-white dark:hover:bg-white/90 transition cursor-pointer"
             >
               跳过片尾
             </button>
           </div>
         </div>
 
-        <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-white/10">
+        <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-black/[0.10] dark:bg-white/15">
           <div
-            className="h-full bg-gradient-to-r from-sky-400 to-primary transition-[width] duration-200 ease-linear"
+            className="h-full bg-[#1D1D1F] dark:bg-white transition-[width] duration-200 ease-linear"
             style={{ width: `${progressPercent}%` }}
           />
         </div>

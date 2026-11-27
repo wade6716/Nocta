@@ -3,6 +3,7 @@ import type { FormattedDanmakuItem, RawDanmuComment } from '../api/danmuClient';
 import type { ProxyConfig } from '../api/http';
 import type { DanmuServerEntry } from '../stores/useDanmuStore';
 import type { PlayerOverlayStorePatch, SkipSegments } from '../stores/usePlayerStore';
+import type { ResolvedTheme } from '../stores/useThemeStore';
 import type {
   NextEpisodePreloadStatus,
   PlayerTelemetry,
@@ -108,6 +109,7 @@ export interface OsdSyncPayload {
   sourceDuration?: number;
   danmuToast?: string | null;
   durationAlert?: string | null;
+  resolvedTheme?: ResolvedTheme;
   storeSnapshot?: OverlayStoreSnapshot;
 }
 

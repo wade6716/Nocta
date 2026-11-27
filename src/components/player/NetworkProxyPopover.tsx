@@ -17,6 +17,7 @@ import {
   StreamProxyOverride,
 } from '../../player/types';
 import { formatNetworkSpeed } from './PlayerOsd';
+import { useThemeStore } from '../../stores/useThemeStore';
 
 interface NetworkProxyPopoverProps {
   isOpen: boolean;
@@ -138,6 +139,9 @@ export const NetworkProxyPopover: React.FC<NetworkProxyPopoverProps> = ({
   onReloadStream,
   onOpenProxySettings,
 }) => {
+  const resolvedTheme = useThemeStore((s) => s.resolvedTheme);
+  const isLight = resolvedTheme === 'light';
+
   if (!isOpen) return null;
 
   const badge = getProxyModeBadge(proxyInfo);
@@ -164,16 +168,16 @@ export const NetworkProxyPopover: React.FC<NetworkProxyPopoverProps> = ({
   return (
     <>
       <div className="fixed inset-0 z-20 bg-transparent" onClick={onClose} />
-      <div className="fixed top-16 right-6 z-[35] w-80 md:w-96 rounded-2xl bg-[#0B0E17]/95 backdrop-blur-2xl border border-white/15 text-xs text-slate-200 select-none animate-in fade-in slide-in-from-top-2 duration-150 overflow-hidden">
+      <div className="fixed top-16 right-6 z-[35] w-80 md:w-96 rounded-2xl bg-white/[0.96] dark:bg-[#141416]/[0.95] border border-black/[0.12] dark:border-white/[0.12] text-xs text-[#1D1D1F] dark:text-white/90 select-none animate-in fade-in slide-in-from-top-2 duration-150 overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-white/10 bg-white/[0.02]">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-black/[0.08] dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.02]">
           <div className="flex items-center space-x-2">
-            <Globe className="w-4 h-4 text-sky-400" />
-            <h3 className="text-sm font-semibold text-white">网络缓冲与代理路由</h3>
+            <Globe className="w-4 h-4 text-[#1D1D1F] dark:text-white" />
+            <h3 className="text-sm font-semibold text-[#1D1D1F] dark:text-white">网络缓冲与代理路由</h3>
           </div>
           <button
             onClick={onClose}
-            className="p-1 rounded-lg hover:bg-white/10 text-slate-400 hover:text-white transition cursor-pointer"
+            className="p-1 rounded-lg hover:bg-black/[0.08] dark:hover:bg-white/10 text-[#6E6E73] hover:text-[#1D1D1F] dark:text-white/60 dark:hover:text-white transition cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
@@ -231,16 +235,29 @@ export const NetworkProxyPopover: React.FC<NetworkProxyPopoverProps> = ({
               </span>
             </div>
 
-            <div className="w-full h-14 bg-[#07090F] rounded-lg border border-white/[0.06] overflow-hidden relative">
+            <div className="w-full h-14 bg-[#F5F5F7] dark:bg-[#0E0E10] rounded-lg border border-black/[0.08] dark:border-white/[0.08] overflow-hidden relative">
               <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-full preserve-3d">
                 <defs>
                   <linearGradient id="speedGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#38BDF8" stopOpacity="0.45" />
-                    <stop offset="100%" stopColor="#38BDF8" stopOpacity="0.02" />
+                    <stop
+                      offset="0%"
+                      stopColor={isLight ? '#1D1D1F' : '#F5F5F7'}
+                      stopOpacity={isLight ? '0.28' : '0.35'}
+                    />
+                    <stop
+                      offset="100%"
+                      stopColor={isLight ? '#1D1D1F' : '#F5F5F7'}
+                      stopOpacity="0.02"
+                    />
                   </linearGradient>
                 </defs>
                 <path d={areaPath} fill="url(#speedGrad)" />
-                <path d={linePath} fill="none" stroke="#38BDF8" strokeWidth="1.75" />
+                <path
+                  d={linePath}
+                  fill="none"
+                  stroke={isLight ? '#1D1D1F' : '#F5F5F7'}
+                  strokeWidth="1.75"
+                />
               </svg>
             </div>
 
@@ -284,8 +301,8 @@ export const NetworkProxyPopover: React.FC<NetworkProxyPopoverProps> = ({
                   onClick={() => onChangeProxyOverride(opt.id)}
                   className={`py-2 rounded-xl text-[11px] font-semibold transition cursor-pointer border ${
                     proxyOverride === opt.id
-                      ? 'bg-primary text-white border-primary shadow-md'
-                      : 'bg-white/5 hover:bg-white/10 border-white/10 text-slate-300'
+                      ? 'bg-[#1D1D1F] text-white border-[#1D1D1F] dark:bg-white dark:text-[#1D1D1F] dark:border-white'
+                      : 'bg-black/[0.05] hover:bg-black/[0.10] border-black/[0.08] text-[#48484A] dark:bg-white/5 dark:hover:bg-white/10 dark:border-white/10 dark:text-white/75'
                   }`}
                 >
                   {opt.label}
@@ -301,9 +318,9 @@ export const NetworkProxyPopover: React.FC<NetworkProxyPopoverProps> = ({
                 onReloadStream();
                 onClose();
               }}
-              className="py-2 px-3 rounded-xl bg-white/10 hover:bg-white/15 text-white font-medium flex items-center justify-center space-x-1.5 transition cursor-pointer"
+              className="py-2 px-3 rounded-xl bg-black/[0.06] hover:bg-black/[0.12] text-[#1D1D1F] dark:bg-white/10 dark:hover:bg-white/15 dark:text-white font-medium flex items-center justify-center space-x-1.5 transition cursor-pointer"
             >
-              <RefreshCw className="w-3.5 h-3.5 text-sky-400" />
+              <RefreshCw className="w-3.5 h-3.5 text-[#1D1D1F] dark:text-white" />
               <span>重载当前流</span>
             </button>
             <button
@@ -311,7 +328,7 @@ export const NetworkProxyPopover: React.FC<NetworkProxyPopoverProps> = ({
                 onClose();
                 onOpenProxySettings();
               }}
-              className="py-2 px-3 rounded-xl bg-sky-500/20 hover:bg-sky-500/30 border border-sky-400/30 text-sky-300 font-medium flex items-center justify-center space-x-1.5 transition cursor-pointer"
+              className="py-2 px-3 rounded-xl bg-[#1D1D1F] hover:bg-black text-white dark:bg-white dark:hover:bg-white/90 dark:text-[#1D1D1F] font-semibold flex items-center justify-center space-x-1.5 transition cursor-pointer"
             >
               <Settings className="w-3.5 h-3.5" />
               <span>代理详细配置</span>

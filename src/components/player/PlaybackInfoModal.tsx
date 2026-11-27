@@ -208,38 +208,40 @@ export const PlaybackInfoModal: React.FC<PlaybackInfoModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm select-none"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/35 dark:bg-black/65 backdrop-blur-sm select-none"
       onClick={onClose}
     >
       <div
-        className="relative w-full max-w-2xl max-h-[88vh] bg-[#0E121D]/95 border border-white/10 rounded-2xl shadow-2xl flex flex-col overflow-hidden text-slate-200 animate-in fade-in zoom-in-95 duration-150"
+        className="relative w-full max-w-2xl max-h-[88vh] bg-white/[0.97] dark:bg-[#141416]/[0.96] border border-black/[0.12] dark:border-white/[0.12] rounded-2xl flex flex-col overflow-hidden text-[#1D1D1F] dark:text-white/90 animate-in fade-in zoom-in-95 duration-150"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-white/[0.08] bg-white/[0.02]">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-black/[0.08] dark:border-white/[0.08] bg-black/[0.02] dark:bg-white/[0.02]">
           <div className="flex items-center space-x-2.5">
-            <div className="p-2 rounded-xl bg-sky-500/15 border border-sky-400/25 text-sky-400">
+            <div className="p-2 rounded-xl bg-black/[0.06] dark:bg-white/[0.08] border border-black/[0.10] dark:border-white/[0.12] text-[#1D1D1F] dark:text-white">
               <Info className="w-4 h-4" />
             </div>
             <div>
               <div className="flex items-center space-x-2">
-                <h3 className="text-sm font-bold text-white tracking-tight">实时硬解与媒体技术信息</h3>
+                <h3 className="text-sm font-bold text-[#1D1D1F] dark:text-white tracking-tight">实时硬解与媒体技术信息</h3>
                 <span
                   className={`text-[10px] px-2 py-0.5 rounded-full font-medium border flex items-center space-x-1 ${
                     engineType === 'mpv'
-                      ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
-                      : 'bg-primary/15 text-primary border-primary/30'
+                      ? 'bg-emerald-500/[0.12] text-[#047857] border-emerald-600/25 dark:bg-emerald-500/15 dark:text-emerald-300 dark:border-emerald-500/30'
+                      : 'bg-black/[0.06] text-[#1D1D1F] border-black/[0.12] dark:bg-white/10 dark:text-white dark:border-white/20'
                   }`}
                 >
                   <span
                     className={`w-1.5 h-1.5 rounded-full ${
-                      engineType === 'mpv' ? 'bg-emerald-400 animate-pulse' : 'bg-primary'
+                      engineType === 'mpv'
+                        ? 'bg-[#047857] dark:bg-emerald-400 animate-pulse'
+                        : 'bg-[#1D1D1F] dark:bg-white'
                     }`}
                   />
                   <span>{engineType === 'mpv' ? 'DirectPlay 原画直出' : 'HTML5 引擎'}</span>
                 </span>
               </div>
-              <p className="text-[11px] text-slate-400 mt-0.5 truncate max-w-md">
+              <p className="text-[11px] text-[#6E6E73] dark:text-white/55 mt-0.5 truncate max-w-md">
                 {item.SeriesName ? `${item.SeriesName} · ` : ''}{item.Name}
               </p>
             </div>
@@ -250,18 +252,18 @@ export const PlaybackInfoModal: React.FC<PlaybackInfoModalProps> = ({
               onClick={handleCopyInfo}
               className={`px-3 py-1.5 rounded-xl text-xs font-medium transition cursor-pointer border flex items-center space-x-1.5 ${
                 copied
-                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
-                  : 'bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white border-white/10'
+                  ? 'bg-emerald-500/[0.14] text-[#047857] border-emerald-600/30 dark:bg-emerald-500/20 dark:text-emerald-300 dark:border-emerald-500/40'
+                  : 'bg-black/[0.05] hover:bg-black/[0.10] text-[#48484A] hover:text-[#1D1D1F] border-black/[0.08] dark:bg-white/[0.06] dark:hover:bg-white/[0.12] dark:text-white/80 dark:hover:text-white dark:border-white/10'
               }`}
               title="复制全部技术信息"
             >
-              {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+              {copied ? <Check className="w-3.5 h-3.5 text-[#047857] dark:text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
               <span>{copied ? '已复制' : '复制信息'}</span>
             </button>
 
             <button
               onClick={onClose}
-              className="p-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white transition cursor-pointer border border-white/5"
+              className="p-1.5 rounded-xl bg-black/[0.05] hover:bg-black/[0.10] text-[#6E6E73] hover:text-[#1D1D1F] border border-black/[0.08] dark:bg-white/[0.06] dark:hover:bg-white/[0.12] dark:text-white/60 dark:hover:text-white dark:border-white/10 transition cursor-pointer"
               title="关闭 (Esc / I)"
             >
               <X className="w-4 h-4" />

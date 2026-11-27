@@ -103,4 +103,14 @@ if (typeof window !== 'undefined' && window.matchMedia) {
   if (typeof media.addEventListener === 'function') {
     media.addEventListener('change', onSystemThemeChange);
   }
+
+  window.addEventListener('storage', (e) => {
+    if (e.key !== THEME_STORAGE_KEY) return;
+    const raw = e.newValue;
+    const nextMode: ThemeMode =
+      raw === 'light' || raw === 'dark' || raw === 'system' ? raw : 'light';
+    const nextResolved = resolveThemeMode(nextMode);
+    applyThemeToDom(nextResolved);
+    useThemeStore.setState({ mode: nextMode, resolvedTheme: nextResolved });
+  });
 }

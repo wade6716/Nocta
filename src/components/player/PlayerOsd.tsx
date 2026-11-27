@@ -35,6 +35,7 @@ import {
 import { PlayerTelemetry, ResolvedStreamProxyInfo } from '../../player/types';
 import { formatMediaSourceMeta } from '../../player/playbackSessionService';
 import { SkipSegments } from '../../stores/usePlayerStore';
+import { useThemeStore } from '../../stores/useThemeStore';
 
 const IS_MACOS = /Macintosh|Mac OS X/i.test(navigator.userAgent);
 
@@ -145,18 +146,18 @@ function getProxyShortBadge(info?: ResolvedStreamProxyInfo | null): {
   text: string;
   cls: string;
 } {
-  if (!info) return { text: '网络', cls: 'text-slate-400' };
+  if (!info) return { text: '网络', cls: 'text-[#6E6E73] dark:text-white/60' };
   switch (info.mode) {
     case 'system_http':
     case 'manual_http':
-      return { text: '代理', cls: 'text-emerald-400' };
+      return { text: '代理', cls: 'text-[#047857] dark:text-emerald-400' };
     case 'lan_bypass':
-      return { text: '旁路', cls: 'text-teal-400' };
+      return { text: '旁路', cls: 'text-[#0F766E] dark:text-teal-400' };
     case 'socks5_fallback_direct':
-      return { text: '直连*', cls: 'text-amber-400' };
+      return { text: '直连*', cls: 'text-[#B45309] dark:text-amber-400' };
     case 'direct':
     default:
-      return { text: '直连', cls: 'text-slate-400' };
+      return { text: '直连', cls: 'text-[#6E6E73] dark:text-white/60' };
   }
 }
 
@@ -177,12 +178,12 @@ const SkipSegmentRow: React.FC<SkipSegmentRowProps> = ({
   onClear,
   onSeek,
 }) => (
-  <div className="rounded-xl bg-white/[0.04] border border-white/10 p-2.5">
+  <div className="rounded-xl bg-black/[0.04] dark:bg-white/[0.04] border border-black/[0.08] dark:border-white/10 p-2.5">
     <div className="flex items-center justify-between gap-2">
       <div className="flex items-center gap-1.5 min-w-0">
-        <span className="text-[11px] font-medium text-gray-400 shrink-0">{label}</span>
+        <span className="text-[11px] font-medium text-[#6E6E73] dark:text-white/60 shrink-0">{label}</span>
         {hint && (
-          <span className="text-[10px] font-mono tabular-nums text-sky-300/80 bg-sky-500/10 border border-sky-400/20 px-1.5 py-0.2 rounded truncate">
+          <span className="text-[10px] font-mono tabular-nums text-[#1D1D1F] dark:text-white/85 bg-black/[0.06] dark:bg-white/10 border border-black/[0.08] dark:border-white/15 px-1.5 py-0.2 rounded truncate">
             {hint}
           </span>
         )}
@@ -193,13 +194,13 @@ const SkipSegmentRow: React.FC<SkipSegmentRowProps> = ({
             e.stopPropagation();
             onSeek(value);
           }}
-          className="text-xs font-mono tabular-nums text-sky-400 hover:text-sky-300 transition cursor-pointer"
+          className="text-xs font-mono tabular-nums text-[#1D1D1F] hover:opacity-75 dark:text-white dark:hover:text-white/80 font-semibold transition cursor-pointer"
           title="跳转到该标记位置"
         >
           {formatTime(value)}
         </button>
       ) : (
-        <span className="text-[11px] text-gray-500">未标记</span>
+        <span className="text-[11px] text-[#86868B] dark:text-white/40">未标记</span>
       )}
     </div>
 
@@ -210,7 +211,7 @@ const SkipSegmentRow: React.FC<SkipSegmentRowProps> = ({
           onMark?.();
         }}
         disabled={!onMark}
-        className="flex-1 py-1.5 rounded-lg text-[11px] font-semibold text-gray-200 bg-white/5 border border-white/10 hover:bg-white/10 hover:text-white transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
+        className="flex-1 py-1.5 rounded-lg text-[11px] font-semibold text-[#1D1D1F] dark:text-white/90 bg-black/[0.05] dark:bg-white/[0.06] border border-black/[0.08] dark:border-white/10 hover:bg-black/[0.10] dark:hover:bg-white/[0.12] transition cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
       >
         <Crosshair className="w-3 h-3" />
         <span>标记当前</span>
@@ -221,7 +222,7 @@ const SkipSegmentRow: React.FC<SkipSegmentRowProps> = ({
             e.stopPropagation();
             onClear();
           }}
-          className="p-1.5 rounded-lg text-gray-400 bg-white/5 border border-white/10 hover:text-rose-400 hover:bg-rose-500/10 transition cursor-pointer"
+          className="p-1.5 rounded-lg text-[#6E6E73] dark:text-white/60 bg-black/[0.05] dark:bg-white/[0.06] border border-black/[0.08] dark:border-white/10 hover:text-[#BE123C] dark:hover:text-rose-400 hover:bg-rose-500/10 transition cursor-pointer"
           title="清除该标记"
         >
           <X className="w-3.5 h-3.5" />
@@ -308,6 +309,8 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
   const [showSourceMenu, setShowSourceMenu] = useState(false);
   const [showSkipMenu, setShowSkipMenu] = useState(false);
   const [prevVolume, setPrevVolume] = useState(100);
+  const resolvedTheme = useThemeStore((s) => s.resolvedTheme);
+  const isLight = resolvedTheme === 'light';
 
   // 实时时钟
   const [clockText, setClockText] = useState(() => {
@@ -461,11 +464,11 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
         {/* 左侧胶囊：返回、首页、标题与实时硬解/画质徽章 */}
         <div
           onClick={(e) => e.stopPropagation()}
-          className="flex items-center space-x-2.5 px-3.5 py-2 rounded-2xl bg-[#0B0E17]/90 backdrop-blur-2xl border border-white/15 max-w-[55vw]"
+          className="flex items-center space-x-2.5 px-3.5 py-2 rounded-2xl bg-white/[0.94] dark:bg-[#141416]/[0.92] border border-black/[0.12] dark:border-white/[0.12] text-[#1D1D1F] dark:text-white max-w-[55vw]"
         >
           <button
             onClick={onBack}
-            className="p-1.5 rounded-xl bg-white/5 hover:bg-white/15 text-white transition cursor-pointer flex items-center space-x-1 shrink-0"
+            className="p-1.5 rounded-xl bg-black/[0.05] hover:bg-black/[0.10] text-[#1D1D1F] dark:bg-white/[0.07] dark:hover:bg-white/[0.15] dark:text-white transition cursor-pointer flex items-center space-x-1 shrink-0"
             title="返回详情页 (Esc)"
           >
             <ArrowLeft className="w-4 h-4" />
@@ -475,20 +478,20 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
           {onHome && (
             <button
               onClick={onHome}
-              className="p-1.5 rounded-xl bg-white/5 hover:bg-white/15 text-gray-300 hover:text-white transition cursor-pointer shrink-0"
+              className="p-1.5 rounded-xl bg-black/[0.05] hover:bg-black/[0.10] text-[#48484A] hover:text-[#1D1D1F] dark:bg-white/[0.07] dark:hover:bg-white/[0.15] dark:text-white/75 dark:hover:text-white transition cursor-pointer shrink-0"
               title="返回媒体库首页"
             >
               <Home className="w-4 h-4" />
             </button>
           )}
 
-          <div className="h-4 w-px bg-white/15 shrink-0" />
+          <div className="h-4 w-px bg-black/[0.12] dark:bg-white/15 shrink-0" />
 
           <div className="truncate min-w-0">
             <div className="flex items-center space-x-2">
-              <h1 className="text-sm font-bold text-white tracking-wide truncate">{title}</h1>
+              <h1 className="text-sm font-bold text-[#1D1D1F] dark:text-white tracking-wide truncate">{title}</h1>
               {videoSpecLabel && (
-                <span className="hidden md:inline-flex shrink-0 px-1.5 py-0.2 rounded bg-sky-500/15 border border-sky-400/30 text-[10px] font-mono font-bold text-sky-300">
+                <span className="hidden md:inline-flex shrink-0 px-1.5 py-0.2 rounded bg-black/[0.06] border border-black/[0.12] text-[#1D1D1F] dark:bg-white/[0.10] dark:border-white/[0.16] dark:text-white/90 text-[10px] font-mono font-bold">
                   {videoSpecLabel}
                 </span>
               )}
@@ -496,8 +499,8 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
                 <span
                   className={`hidden sm:inline-flex shrink-0 items-center space-x-1 px-1.5 py-0.2 rounded text-[10px] font-mono font-semibold border ${
                     hwdecActive
-                      ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300'
-                      : 'bg-amber-500/15 border-amber-500/30 text-amber-300'
+                      ? 'bg-emerald-500/[0.12] border-emerald-600/25 text-[#047857] dark:bg-emerald-500/15 dark:border-emerald-500/30 dark:text-emerald-300'
+                      : 'bg-amber-500/[0.12] border-amber-600/25 text-[#B45309] dark:bg-amber-500/15 dark:border-amber-500/30 dark:text-amber-300'
                   }`}
                   title={
                     hwdecActive
@@ -513,7 +516,7 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
               )}
             </div>
             {subtitle && (
-              <p className="text-xs text-gray-300 font-medium truncate tabular-nums">
+              <p className="text-xs text-[#6E6E73] dark:text-white/65 font-medium truncate tabular-nums">
                 {subtitle}
               </p>
             )}
@@ -523,14 +526,14 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
         {/* 右侧胶囊：实时时钟、弹幕状态、置顶、窗口控制 */}
         <div
           onClick={(e) => e.stopPropagation()}
-          className="flex items-center space-x-2 px-3 py-2 rounded-2xl bg-[#0B0E17]/90 backdrop-blur-2xl border border-white/15 text-xs text-gray-300 shrink-0"
+          className="flex items-center space-x-2 px-3 py-2 rounded-2xl bg-white/[0.94] dark:bg-[#141416]/[0.92] border border-black/[0.12] dark:border-white/[0.12] text-xs text-[#48484A] dark:text-white/75 shrink-0"
         >
           {/* 系统时间 */}
-          <span className="hidden sm:inline font-mono tabular-nums text-slate-300 px-1.5 font-medium">
+          <span className="hidden sm:inline font-mono tabular-nums text-[#48484A] dark:text-white/80 px-1.5 font-medium">
             {clockText}
           </span>
 
-          <div className="hidden sm:block h-3.5 w-px bg-white/15" />
+          <div className="hidden sm:block h-3.5 w-px bg-black/[0.12] dark:bg-white/15" />
 
           {/* 弹幕载入徽章（窗口态与全屏态均可点击打开弹幕控制中心） */}
           <button
@@ -539,13 +542,13 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
             title="点击打开弹幕控制中心"
           >
             {danmakuCount !== undefined && danmakuCount > 0 ? (
-              <div className="flex items-center space-x-1.5 text-xs text-emerald-400 font-medium px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/25 hover:bg-emerald-500/25 transition">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+              <div className="flex items-center space-x-1.5 text-xs text-[#047857] dark:text-emerald-400 font-medium px-2 py-0.5 rounded-full bg-emerald-500/[0.12] dark:bg-emerald-500/15 border border-emerald-600/25 dark:border-emerald-500/25 hover:bg-emerald-500/20 dark:hover:bg-emerald-500/25 transition">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#047857] dark:bg-emerald-400 animate-pulse shrink-0" />
                 <span className="tabular-nums">{danmakuCount.toLocaleString()} 弹幕</span>
               </div>
             ) : (
-              <div className="flex items-center space-x-1.5 text-xs text-gray-400 px-2 py-0.5 rounded-full bg-white/5 border border-white/10 hover:text-white transition">
-                <span className="w-1.5 h-1.5 rounded-full bg-gray-500 shrink-0" />
+              <div className="flex items-center space-x-1.5 text-xs text-[#6E6E73] dark:text-white/60 px-2 py-0.5 rounded-full bg-black/[0.05] dark:bg-white/[0.06] border border-black/[0.08] dark:border-white/10 hover:text-[#1D1D1F] dark:hover:text-white transition">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#86868B] dark:bg-white/40 shrink-0" />
                 <span>{matchedTitle ? '已匹配' : '搜弹幕'}</span>
               </div>
             )}
@@ -555,10 +558,10 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
           {isTauri && !overlayMode && !isFullscreen && onTogglePin && (
             <button
               onClick={onTogglePin}
-              className={`p-1.5 rounded-xl transition cursor-pointer ${
+              className={`p-1.5 rounded-xl transition cursor-pointer border ${
                 isPinned
-                  ? 'bg-sky-500/25 text-sky-300 border border-sky-400/40'
-                  : 'bg-white/5 hover:bg-white/15 text-gray-300 hover:text-white'
+                  ? 'bg-[#1D1D1F] text-white border-[#1D1D1F] dark:bg-white dark:text-[#1D1D1F] dark:border-white'
+                  : 'bg-black/[0.05] hover:bg-black/[0.10] text-[#48484A] hover:text-[#1D1D1F] border-transparent dark:bg-white/[0.06] dark:hover:bg-white/[0.14] dark:text-white/75 dark:hover:text-white'
               }`}
               title={isPinned ? '取消窗口置顶 (T)' : '置顶播放窗口 (T)'}
             >
@@ -569,17 +572,17 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
           {/* Windows/Linux 窗口态下的最小化与关闭按钮 */}
           {isTauri && !overlayMode && !isMac && !isFullscreen && onMinimizeWindow && onCloseWindow && (
             <>
-              <div className="h-3.5 w-px bg-white/15" />
+              <div className="h-3.5 w-px bg-black/[0.12] dark:bg-white/15" />
               <button
                 onClick={onMinimizeWindow}
-                className="p-1.5 rounded-xl hover:bg-white/15 text-gray-300 hover:text-white transition cursor-pointer"
+                className="p-1.5 rounded-xl hover:bg-black/[0.08] text-[#48484A] hover:text-[#1D1D1F] dark:hover:bg-white/[0.14] dark:text-white/75 dark:hover:text-white transition cursor-pointer"
                 title="最小化"
               >
                 <Minus className="w-3.5 h-3.5" />
               </button>
               <button
                 onClick={onCloseWindow}
-                className="p-1.5 rounded-xl hover:bg-red-500/80 text-gray-300 hover:text-white transition cursor-pointer"
+                className="p-1.5 rounded-xl hover:bg-red-500 text-[#48484A] hover:text-white dark:text-white/75 dark:hover:text-white transition cursor-pointer"
                 title="关闭窗口"
               >
                 <X className="w-3.5 h-3.5" />
@@ -602,7 +605,7 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
       {/* 底部悬浮毛玻璃胶囊控制舱 */}
       <div
         onClick={(e) => e.stopPropagation()}
-        className={`fixed bottom-6 left-1/2 -translate-x-1/2 w-[min(95vw,1060px)] rounded-2xl bg-[#0B0E17]/95 backdrop-blur-2xl border border-white/15 px-5 py-3.5 z-20 transition-all duration-300 pointer-events-auto flex flex-col space-y-2.5 ${
+        className={`fixed bottom-6 left-1/2 -translate-x-1/2 w-[min(95vw,1060px)] rounded-2xl bg-white/[0.95] dark:bg-[#141416]/[0.94] border border-black/[0.12] dark:border-white/[0.12] px-5 py-3.5 z-20 transition-all duration-300 pointer-events-auto flex flex-col space-y-2.5 ${
           visible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4 pointer-events-none'
         }`}
       >
@@ -616,11 +619,11 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
           {/* Hover 预览气泡：时间 + 章节名 */}
           {hoverTime !== null && (
             <div
-              className="absolute bottom-7 -translate-x-1/2 px-2.5 py-1 rounded-lg bg-[#0B0E17]/95 backdrop-blur-xl border border-white/20 text-xs font-mono tabular-nums text-white pointer-events-none z-30 whitespace-nowrap flex flex-col items-center"
+              className="absolute bottom-7 -translate-x-1/2 px-2.5 py-1 rounded-lg bg-white/[0.96] dark:bg-[#141416]/[0.95] border border-black/[0.12] dark:border-white/[0.15] text-xs font-mono tabular-nums text-[#1D1D1F] dark:text-white pointer-events-none z-30 whitespace-nowrap flex flex-col items-center"
               style={{ left: `${hoverPosition}%` }}
             >
               {hoveredChapterName && (
-                <span className="text-[10px] font-sans text-sky-300 font-medium max-w-[180px] truncate mb-0.5">
+                <span className="text-[10px] font-sans text-[#6E6E73] dark:text-white/70 font-medium max-w-[180px] truncate mb-0.5">
                   {hoveredChapterName}
                 </span>
               )}
@@ -639,8 +642,16 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
               >
                 <defs>
                   <linearGradient id="danmuHeatGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#38BDF8" stopOpacity="0.65" />
-                    <stop offset="100%" stopColor="#38BDF8" stopOpacity="0.05" />
+                    <stop
+                      offset="0%"
+                      stopColor={isLight ? '#1D1D1F' : '#F5F5F7'}
+                      stopOpacity={isLight ? '0.38' : '0.45'}
+                    />
+                    <stop
+                      offset="100%"
+                      stopColor={isLight ? '#1D1D1F' : '#F5F5F7'}
+                      stopOpacity="0.04"
+                    />
                   </linearGradient>
                 </defs>
                 <path d={heatmapPath} fill="url(#danmuHeatGrad)" />
@@ -651,12 +662,12 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
             <div
               className={`relative w-full ${
                 isScrubbing ? 'h-2.5' : 'h-1.5 group-hover:h-2.5'
-              } bg-white/15 rounded-full transition-[height] duration-200 overflow-hidden`}
+              } bg-black/[0.12] dark:bg-white/15 rounded-full transition-[height] duration-200 overflow-hidden`}
             >
               {/* 前向缓冲条 */}
               {bufferedPercent > progressPercent && (
                 <div
-                  className="absolute top-0 bottom-0 left-0 bg-white/25 pointer-events-none transition-[width] duration-300"
+                  className="absolute top-0 bottom-0 left-0 bg-black/[0.18] dark:bg-white/25 pointer-events-none transition-[width] duration-300"
                   style={{ width: `${bufferedPercent}%` }}
                 />
               )}
@@ -664,7 +675,7 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
               {/* Hover preview ghost */}
               {hoverTime !== null && (
                 <div
-                  className="absolute top-0 bottom-0 left-0 bg-white/20 pointer-events-none"
+                  className="absolute top-0 bottom-0 left-0 bg-black/[0.12] dark:bg-white/20 pointer-events-none"
                   style={{ width: `${hoverPosition}%` }}
                 />
               )}
@@ -672,14 +683,14 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
               {/* A-B 循环区间高亮 */}
               {abStartPct !== null && abEndPct !== null && abEndPct > abStartPct && (
                 <div
-                  className="absolute top-0 bottom-0 bg-amber-400/60 pointer-events-none"
+                  className="absolute top-0 bottom-0 bg-amber-500/45 dark:bg-amber-400/55 pointer-events-none"
                   style={{ left: `${abStartPct}%`, width: `${abEndPct - abStartPct}%` }}
                 />
               )}
 
               {/* Active progress fill */}
               <div
-                className="absolute top-0 bottom-0 left-0 bg-gradient-to-r from-sky-400 to-[#38BDF8] rounded-full"
+                className="absolute top-0 bottom-0 left-0 bg-[#1D1D1F] dark:bg-white rounded-full"
                 style={{ width: `${progressPercent}%` }}
               />
 
@@ -687,15 +698,15 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
               {chapterMarkers.map((c, idx) => (
                 <div
                   key={`${c.time}-${idx}`}
-                  className="absolute top-0 bottom-0 w-0.5 bg-white/75 pointer-events-none"
+                  className="absolute top-0 bottom-0 w-0.5 bg-white/90 dark:bg-black/60 pointer-events-none"
                   style={{ left: `${(c.time / duration) * 100}%` }}
                 />
               ))}
             </div>
 
-            {/* 发光拖拽手柄（圆心垂直锚定在轨道正中央 top-1/2 -translate-y-1/2） */}
+            {/* 拖拽手柄（圆心垂直锚定在轨道正中央 top-1/2 -translate-y-1/2，零外阴影） */}
             <div
-              className={`absolute top-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-full border-2 border-primary shadow-[0_0_12px_rgba(56,189,248,0.9)] transition-[transform,width,height,box-shadow] duration-150 pointer-events-none ${
+              className={`absolute top-1/2 -translate-x-1/2 -translate-y-1/2 bg-white rounded-full border-2 border-[#1D1D1F] dark:border-white transition-[transform,width,height] duration-150 pointer-events-none ${
                 isScrubbing
                   ? 'w-4 h-4 scale-100'
                   : 'w-3 h-3 group-hover:w-4 group-hover:h-4 scale-100'
@@ -727,7 +738,7 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
         </div>
 
         {/* Action Controls Row */}
-        <div className="flex items-center justify-between text-white select-none gap-2">
+        <div className="flex items-center justify-between text-[#1D1D1F] dark:text-white select-none gap-2">
           {/* Left Zone: Play/Pause, Next, Time, Net/Proxy Pill, Volume */}
           <div className="flex items-center space-x-2.5 min-w-0">
             <button
@@ -735,13 +746,13 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
                 e.stopPropagation();
                 onTogglePlay();
               }}
-              className="p-2 rounded-xl bg-white/5 hover:bg-white/15 text-white transition cursor-pointer shrink-0"
+              className="p-2 rounded-xl bg-black/[0.05] hover:bg-black/[0.10] text-[#1D1D1F] dark:bg-white/[0.07] dark:hover:bg-white/[0.15] dark:text-white transition cursor-pointer shrink-0"
               title="播放/暂停 (空格)"
             >
               {paused ? (
-                <Play className="w-4 h-4 fill-white translate-x-0.5" />
+                <Play className="w-4 h-4 fill-current translate-x-0.5" />
               ) : (
-                <Pause className="w-4 h-4 fill-white" />
+                <Pause className="w-4 h-4 fill-current" />
               )}
             </button>
 
@@ -751,7 +762,7 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
                   e.stopPropagation();
                   onNextEpisode();
                 }}
-                className="p-2 rounded-xl bg-white/5 hover:bg-white/15 text-white transition cursor-pointer shrink-0"
+                className="p-2 rounded-xl bg-black/[0.05] hover:bg-black/[0.10] text-[#1D1D1F] dark:bg-white/[0.07] dark:hover:bg-white/[0.15] dark:text-white transition cursor-pointer shrink-0"
                 title="播放下一集 (N)"
               >
                 <SkipForward className="w-4 h-4" />
@@ -759,15 +770,15 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
             )}
 
             {/* Time readout (点击总时长可切换显示 -剩余时间) */}
-            <div className="flex items-center text-xs font-mono font-medium tracking-wider text-gray-300 px-0.5 shrink-0">
-              <span className="tabular-nums text-white font-semibold">{formatTime(displayTime)}</span>
-              <span className="mx-1 text-gray-500">/</span>
+            <div className="flex items-center text-xs font-mono font-medium tracking-wider text-[#48484A] dark:text-white/75 px-0.5 shrink-0">
+              <span className="tabular-nums text-[#1D1D1F] dark:text-white font-semibold">{formatTime(displayTime)}</span>
+              <span className="mx-1 text-[#86868B] dark:text-white/35">/</span>
               <button
                 onClick={(e) => {
                   e.stopPropagation();
                   onToggleRemainingTime?.();
                 }}
-                className="tabular-nums text-gray-400 hover:text-sky-300 transition cursor-pointer"
+                className="tabular-nums text-[#6E6E73] hover:text-[#1D1D1F] dark:text-white/60 dark:hover:text-white transition cursor-pointer"
                 title="点击切换 总时长 / 剩余时间"
               >
                 {showRemainingTime && duration > 0
@@ -783,17 +794,35 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
                 closeAllDropdowns();
                 onToggleNetworkPopover?.();
               }}
-              className={`hidden sm:flex items-center space-x-1.5 px-2.5 py-1 rounded-lg border text-xs font-mono font-medium select-none shadow-sm transition cursor-pointer shrink-0 ${
+              className={`hidden sm:flex items-center space-x-1.5 px-2.5 py-1 rounded-lg border text-xs font-mono font-medium select-none transition cursor-pointer shrink-0 ${
                 isNetworkPopoverOpen
-                  ? 'bg-sky-500/20 border-sky-400/40 text-sky-300'
-                  : 'bg-white/[0.06] hover:bg-white/[0.12] border-white/10 text-sky-400'
+                  ? 'bg-[#1D1D1F] border-[#1D1D1F] text-white dark:bg-white dark:border-white dark:text-[#1D1D1F]'
+                  : 'bg-black/[0.05] hover:bg-black/[0.10] border-black/[0.08] text-[#1D1D1F] dark:bg-white/[0.06] dark:hover:bg-white/[0.12] dark:border-white/10 dark:text-white/90'
               }`}
               title="点击查看实时缓冲监控与代理路由快切"
             >
-              <ArrowDown className="w-3 h-3 text-sky-400 shrink-0 animate-pulse" />
+              <ArrowDown
+                className={`w-3 h-3 shrink-0 animate-pulse ${
+                  isNetworkPopoverOpen
+                    ? 'text-white dark:text-[#1D1D1F]'
+                    : 'text-[#1D1D1F] dark:text-white/80'
+                }`}
+              />
               <span className="tabular-nums">{formatNetworkSpeed(networkSpeed)}</span>
-              <span className="text-white/20">·</span>
-              <span className={`font-sans text-[11px] font-semibold ${proxyBadge.cls}`}>
+              <span
+                className={
+                  isNetworkPopoverOpen
+                    ? 'text-white/40 dark:text-[#1D1D1F]/35'
+                    : 'text-black/25 dark:text-white/25'
+                }
+              >
+                ·
+              </span>
+              <span
+                className={`font-sans text-[11px] font-semibold ${
+                  isNetworkPopoverOpen ? 'text-white/90 dark:text-[#1D1D1F]/85' : proxyBadge.cls
+                }`}
+              >
                 {proxyBadge.text}
               </span>
             </button>
@@ -805,13 +834,13 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
                   e.stopPropagation();
                   handleToggleMute();
                 }}
-                className="p-1.5 rounded-xl hover:bg-white/10 text-gray-300 hover:text-white transition cursor-pointer"
+                className="p-1.5 rounded-xl hover:bg-black/[0.08] text-[#48484A] hover:text-[#1D1D1F] dark:hover:bg-white/10 dark:text-white/75 dark:hover:text-white transition cursor-pointer"
                 title={volume === 0 ? '取消静音 (M)' : '静音 (M)'}
               >
                 {volume === 0 ? (
-                  <VolumeX className="w-4 h-4 text-rose-400" />
+                  <VolumeX className="w-4 h-4 text-[#BE123C] dark:text-rose-400" />
                 ) : (
-                  <Volume2 className={`w-4 h-4 ${volume > 100 ? 'text-amber-400' : ''}`} />
+                  <Volume2 className={`w-4 h-4 ${volume > 100 ? 'text-[#B45309] dark:text-amber-400' : ''}`} />
                 )}
               </button>
               <input
@@ -820,11 +849,11 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
                 max={engineType === 'mpv' ? 200 : 100}
                 value={volume}
                 onChange={(e) => onVolumeChange(parseInt(e.target.value, 10))}
-                className="w-16 md:w-20 h-1 bg-white/30 rounded-lg cursor-pointer accent-primary opacity-75 group-hover/vol:opacity-100 transition"
+                className="w-16 md:w-20 h-1 bg-black/20 dark:bg-white/25 rounded-lg cursor-pointer accent-[#1D1D1F] dark:accent-white opacity-80 group-hover/vol:opacity-100 transition"
                 title={`音量: ${volume}%`}
               />
               {volume > 100 && (
-                <span className="hidden lg:inline text-[10px] font-mono font-bold text-amber-400 tabular-nums">
+                <span className="hidden lg:inline text-[10px] font-mono font-bold text-[#B45309] dark:text-amber-400 tabular-nums">
                   {volume}%
                 </span>
               )}
@@ -838,10 +867,10 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
                 e.stopPropagation();
                 onToggleDanmaku();
               }}
-              className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition flex items-center space-x-1.5 cursor-pointer ${
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition flex items-center space-x-1.5 cursor-pointer border ${
                 danmakuVisible
-                  ? 'bg-primary/25 text-primary border border-primary/40 shadow-[0_0_15px_rgba(56,189,248,0.2)] hover:bg-primary/35'
-                  : 'bg-white/5 text-gray-400 border border-white/5 hover:text-white hover:bg-white/10'
+                  ? 'bg-[#1D1D1F] text-white border-[#1D1D1F] hover:bg-black dark:bg-white/[0.16] dark:text-white dark:border-white/25 dark:hover:bg-white/25'
+                  : 'bg-black/[0.05] text-[#6E6E73] border-black/[0.08] hover:text-[#1D1D1F] hover:bg-black/[0.10] dark:bg-white/[0.06] dark:text-white/60 dark:border-white/[0.08] dark:hover:text-white dark:hover:bg-white/[0.12]'
               }`}
               title="一键开关弹幕 (快捷键 D)"
             >
@@ -861,15 +890,21 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
               }}
               className={`px-3 py-1.5 rounded-xl transition cursor-pointer flex items-center space-x-1.5 text-xs font-medium border ${
                 isDanmakuDrawerOpen
-                  ? 'bg-primary/25 text-white border-primary/50'
-                  : 'bg-white/5 hover:bg-white/15 text-gray-200 hover:text-white border-white/10'
+                  ? 'bg-[#1D1D1F] text-white border-[#1D1D1F] dark:bg-white dark:text-[#1D1D1F] dark:border-white'
+                  : 'bg-black/[0.05] hover:bg-black/[0.10] text-[#1D1D1F] border-black/[0.08] dark:bg-white/[0.06] dark:hover:bg-white/[0.14] dark:text-white/85 dark:border-white/10'
               }`}
               title="打开弹幕控制中心 (换源绑定、时间微调、防刷屏与弹幕列表)"
             >
-              <Sliders className="w-3.5 h-3.5 text-primary" />
+              <Sliders className="w-3.5 h-3.5" />
               <span>弹幕</span>
               {danmakuOffset !== undefined && danmakuOffset !== 0 && (
-                <span className="px-1.5 py-0.2 rounded bg-primary/20 text-primary font-mono text-[11px] tabular-nums font-semibold">
+                <span
+                  className={`px-1.5 py-0.2 rounded font-mono text-[11px] tabular-nums font-semibold ${
+                    isDanmakuDrawerOpen
+                      ? 'bg-white/20 text-white dark:bg-black/15 dark:text-[#1D1D1F]'
+                      : 'bg-black/[0.08] text-[#1D1D1F] dark:bg-white/[0.14] dark:text-white'
+                  }`}
+                >
                   {danmakuOffset > 0 ? `+${danmakuOffset}s` : `${danmakuOffset}s`}
                 </span>
               )}
@@ -889,27 +924,33 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
                 }}
                 className={`relative p-1.5 rounded-xl transition cursor-pointer border ${
                   showSkipMenu || hasSkipSegments
-                    ? 'bg-primary/20 text-primary border-primary/40'
-                    : 'bg-white/5 text-white hover:bg-white/15 border-white/5'
+                    ? 'bg-[#1D1D1F] text-white border-[#1D1D1F] dark:bg-white dark:text-[#1D1D1F] dark:border-white'
+                    : 'bg-black/[0.05] text-[#1D1D1F] hover:bg-black/[0.10] border-black/[0.08] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.14] dark:border-white/[0.08]'
                 }`}
                 title="标记片头结束与片尾开始"
               >
                 <Crosshair className="w-4 h-4" />
                 {hasSkipSegments && (
-                  <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-primary shadow-[0_0_6px_rgba(56,189,248,0.9)]" />
+                  <span
+                    className={`absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full ${
+                      showSkipMenu || hasSkipSegments
+                        ? 'bg-emerald-400 dark:bg-emerald-500'
+                        : 'bg-[#1D1D1F] dark:bg-white'
+                    }`}
+                  />
                 )}
               </button>
 
               {showSkipMenu && (
-                <div className="absolute bottom-full mb-3 right-0 w-72 rounded-xl bg-[#0B0E17]/95 backdrop-blur-2xl border border-white/15 p-2.5 space-y-2 z-40">
+                <div className="absolute bottom-full mb-3 right-0 w-72 rounded-xl bg-white/[0.96] dark:bg-[#141416]/[0.95] border border-black/[0.12] dark:border-white/[0.12] p-2.5 space-y-2 z-40">
                   <div className="flex items-center justify-between px-1">
-                    <span className="text-xs font-semibold text-white">片头片尾标记</span>
+                    <span className="text-xs font-semibold text-[#1D1D1F] dark:text-white">片头片尾标记</span>
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
                         setShowSkipMenu(false);
                       }}
-                      className="p-1 rounded-lg text-gray-400 hover:text-white hover:bg-white/10 transition cursor-pointer"
+                      className="p-1 rounded-lg text-[#6E6E73] hover:text-[#1D1D1F] hover:bg-black/[0.08] dark:text-white/60 dark:hover:text-white dark:hover:bg-white/10 transition cursor-pointer"
                       title="关闭"
                     >
                       <X className="w-3.5 h-3.5" />
@@ -949,15 +990,19 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
                     closeAllDropdowns();
                     setShowSourceMenu(next);
                   }}
-                  className="px-2 py-1.5 rounded-xl bg-white/5 hover:bg-white/15 text-xs font-medium transition cursor-pointer border border-white/5 flex items-center space-x-1"
+                  className={`px-2 py-1.5 rounded-xl text-xs font-medium transition cursor-pointer border flex items-center space-x-1 ${
+                    showSourceMenu
+                      ? 'bg-[#1D1D1F] text-white border-[#1D1D1F] dark:bg-white dark:text-[#1D1D1F] dark:border-white'
+                      : 'bg-black/[0.05] hover:bg-black/[0.10] text-[#1D1D1F] border-black/[0.08] dark:bg-white/[0.06] dark:hover:bg-white/[0.14] dark:text-white dark:border-white/[0.08]'
+                  }`}
                   title="切换多版本原画片源"
                 >
-                  <Layers className="w-3.5 h-3.5 text-sky-400" />
+                  <Layers className="w-3.5 h-3.5" />
                   <span className="hidden lg:inline">版本</span>
                 </button>
                 {showSourceMenu && (
-                  <div className="absolute bottom-full mb-3 right-0 bg-[#0B0E17]/95 backdrop-blur-2xl border border-white/15 rounded-xl p-2 w-72 space-y-1 max-h-64 overflow-y-auto z-30">
-                    <span className="text-[11px] font-semibold text-gray-400 px-2 block mb-1">
+                  <div className="absolute bottom-full mb-3 right-0 bg-white/[0.96] dark:bg-[#141416]/[0.95] border border-black/[0.12] dark:border-white/[0.12] rounded-xl p-2 w-72 space-y-1 max-h-64 overflow-y-auto z-30">
+                    <span className="text-[11px] font-semibold text-[#6E6E73] dark:text-white/55 px-2 block mb-1">
                       切换原画版本 (0 转码直连)
                     </span>
                     {availableMediaSources.map((ms) => {
@@ -981,8 +1026,8 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
                           }}
                           className={`w-full text-left px-3 py-2 rounded-lg text-xs transition cursor-pointer flex items-center justify-between gap-2 ${
                             isActive
-                              ? 'bg-primary text-white'
-                              : 'hover:bg-white/10 text-gray-300'
+                              ? 'bg-[#1D1D1F] text-white dark:bg-white dark:text-[#1D1D1F]'
+                              : 'hover:bg-black/[0.06] text-[#1D1D1F] dark:hover:bg-white/10 dark:text-white/85'
                           }`}
                         >
                           <div className="min-w-0 flex-1">
@@ -992,7 +1037,9 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
                             {specLine && (
                               <div
                                 className={`text-[10px] font-mono truncate mt-0.5 ${
-                                  isActive ? 'text-white/80' : 'text-gray-400'
+                                  isActive
+                                    ? 'text-white/75 dark:text-[#1D1D1F]/70'
+                                    : 'text-[#6E6E73] dark:text-white/50'
                                 }`}
                               >
                                 {specLine}
@@ -1000,7 +1047,7 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
                             )}
                           </div>
                           {isActive && (
-                            <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-white/20 text-white font-bold">
+                            <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-white/20 text-white dark:bg-black/15 dark:text-[#1D1D1F] font-bold">
                               当前
                             </span>
                           )}
@@ -1021,13 +1068,17 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
                   closeAllDropdowns();
                   setShowRateMenu(next);
                 }}
-                className="px-2.5 py-1.5 rounded-xl bg-white/5 hover:bg-white/15 text-xs font-mono font-medium transition cursor-pointer border border-white/5"
+                className={`px-2.5 py-1.5 rounded-xl text-xs font-mono font-medium transition cursor-pointer border ${
+                  showRateMenu
+                    ? 'bg-[#1D1D1F] text-white border-[#1D1D1F] dark:bg-white dark:text-[#1D1D1F] dark:border-white'
+                    : 'bg-black/[0.05] hover:bg-black/[0.10] text-[#1D1D1F] border-black/[0.08] dark:bg-white/[0.06] dark:hover:bg-white/[0.14] dark:text-white dark:border-white/[0.08]'
+                }`}
                 title="倍速选择 ([ / ] / \)"
               >
                 {playbackRate}x
               </button>
               {showRateMenu && (
-                <div className="absolute bottom-full mb-3 right-0 bg-[#0B0E17]/95 backdrop-blur-2xl border border-white/15 rounded-xl p-1.5 w-24 space-y-1 z-30">
+                <div className="absolute bottom-full mb-3 right-0 bg-white/[0.96] dark:bg-[#141416]/[0.95] border border-black/[0.12] dark:border-white/[0.12] rounded-xl p-1.5 w-24 space-y-1 z-30">
                   {rates.map((r) => (
                     <button
                       key={r}
@@ -1038,8 +1089,8 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
                       }}
                       className={`w-full text-center py-1.5 rounded-lg text-xs font-mono transition cursor-pointer ${
                         playbackRate === r
-                          ? 'bg-primary text-white font-bold shadow-md'
-                          : 'hover:bg-white/10 text-gray-300'
+                          ? 'bg-[#1D1D1F] text-white dark:bg-white dark:text-[#1D1D1F] font-bold'
+                          : 'hover:bg-black/[0.06] text-[#1D1D1F] dark:hover:bg-white/10 dark:text-white/80'
                       }`}
                     >
                       {r}x
@@ -1059,14 +1110,18 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
                     closeAllDropdowns();
                     setShowAudioMenu(next);
                   }}
-                  className="p-1.5 rounded-xl bg-white/5 hover:bg-white/15 text-white transition cursor-pointer border border-white/5"
+                  className={`p-1.5 rounded-xl transition cursor-pointer border ${
+                    showAudioMenu
+                      ? 'bg-[#1D1D1F] text-white border-[#1D1D1F] dark:bg-white dark:text-[#1D1D1F] dark:border-white'
+                      : 'bg-black/[0.05] hover:bg-black/[0.10] text-[#1D1D1F] border-black/[0.08] dark:bg-white/[0.06] dark:hover:bg-white/[0.14] dark:text-white dark:border-white/[0.08]'
+                  }`}
                   title="音轨切换 (快捷键 A)"
                 >
                   <AudioLines className="w-4 h-4" />
                 </button>
                 {showAudioMenu && (
-                  <div className="absolute bottom-full mb-3 right-0 bg-[#0B0E17]/95 backdrop-blur-2xl border border-white/15 rounded-xl p-2 w-64 space-y-1 max-h-56 overflow-y-auto z-30">
-                    <span className="text-[11px] font-semibold text-gray-400 px-2 block mb-1">
+                  <div className="absolute bottom-full mb-3 right-0 bg-white/[0.96] dark:bg-[#141416]/[0.95] border border-black/[0.12] dark:border-white/[0.12] rounded-xl p-2 w-64 space-y-1 max-h-56 overflow-y-auto z-30">
+                    <span className="text-[11px] font-semibold text-[#6E6E73] dark:text-white/55 px-2 block mb-1">
                       音轨选择
                     </span>
                     {audioTracks.map((track) => (
@@ -1079,8 +1134,8 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
                         }}
                         className={`w-full text-left px-3 py-2 rounded-lg text-xs transition truncate cursor-pointer ${
                           selectedAudioId === track.id
-                            ? 'bg-primary text-white font-semibold shadow-md'
-                            : 'hover:bg-white/10 text-gray-300'
+                            ? 'bg-[#1D1D1F] text-white dark:bg-white dark:text-[#1D1D1F] font-semibold'
+                            : 'hover:bg-black/[0.06] text-[#1D1D1F] dark:hover:bg-white/10 dark:text-white/80'
                         }`}
                       >
                         {track.title}
@@ -1102,22 +1157,22 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
                     setShowSubtitleMenu(next);
                   }}
                   className={`p-1.5 rounded-xl transition cursor-pointer border relative ${
-                    selectedSubtitleId || selectedSecondarySubtitleId
-                      ? 'bg-primary/20 text-primary border-primary/40'
-                      : 'bg-white/5 text-white hover:bg-white/15 border-white/5'
+                    showSubtitleMenu || selectedSubtitleId || selectedSecondarySubtitleId
+                      ? 'bg-[#1D1D1F] text-white border-[#1D1D1F] dark:bg-white dark:text-[#1D1D1F] dark:border-white'
+                      : 'bg-black/[0.05] text-[#1D1D1F] hover:bg-black/[0.10] border-black/[0.08] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.14] dark:border-white/[0.08]'
                   }`}
                   title="字幕切换 (快捷键 C)"
                 >
                   <Subtitles className="w-4 h-4" />
                   {selectedSecondarySubtitleId && (
-                    <span className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-sky-400 text-[9px] text-slate-950 font-bold flex items-center justify-center">
+                    <span className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-[#1D1D1F] text-white dark:bg-white dark:text-[#1D1D1F] border border-white dark:border-[#141416] text-[9px] font-bold flex items-center justify-center">
                       2
                     </span>
                   )}
                 </button>
                 {showSubtitleMenu && (
-                  <div className="absolute bottom-full mb-3 right-0 bg-[#0B0E17]/95 backdrop-blur-2xl border border-white/15 rounded-xl p-2 w-64 space-y-1 max-h-60 overflow-y-auto z-30">
-                    <span className="text-[11px] font-semibold text-gray-400 px-2 block mb-1">
+                  <div className="absolute bottom-full mb-3 right-0 bg-white/[0.96] dark:bg-[#141416]/[0.95] border border-black/[0.12] dark:border-white/[0.12] rounded-xl p-2 w-64 space-y-1 max-h-60 overflow-y-auto z-30">
+                    <span className="text-[11px] font-semibold text-[#6E6E73] dark:text-white/55 px-2 block mb-1">
                       主字幕选择 (双语次字幕可在调校面板设置)
                     </span>
                     <button
@@ -1128,8 +1183,8 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
                       }}
                       className={`w-full text-left px-3 py-2 rounded-lg text-xs transition cursor-pointer ${
                         selectedSubtitleId === null
-                          ? 'bg-primary text-white font-semibold'
-                          : 'hover:bg-white/10 text-gray-300'
+                          ? 'bg-[#1D1D1F] text-white dark:bg-white dark:text-[#1D1D1F] font-semibold'
+                          : 'hover:bg-black/[0.06] text-[#1D1D1F] dark:hover:bg-white/10 dark:text-white/80'
                       }`}
                     >
                       关闭字幕
@@ -1144,8 +1199,8 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
                         }}
                         className={`w-full text-left px-3 py-2 rounded-lg text-xs transition truncate cursor-pointer ${
                           selectedSubtitleId === track.id
-                            ? 'bg-primary text-white font-semibold shadow-md'
-                            : 'hover:bg-white/10 text-gray-300'
+                            ? 'bg-[#1D1D1F] text-white dark:bg-white dark:text-[#1D1D1F] font-semibold'
+                            : 'hover:bg-black/[0.06] text-[#1D1D1F] dark:hover:bg-white/10 dark:text-white/80'
                         }`}
                       >
                         {track.title}
@@ -1166,12 +1221,18 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
                 }}
                 className={`p-1.5 rounded-xl transition cursor-pointer border ${
                   isVideoProPanelOpen
-                    ? 'bg-amber-500/20 text-amber-300 border-amber-400/40'
-                    : 'bg-white/5 text-white hover:bg-white/15 border-white/5'
+                    ? 'bg-[#1D1D1F] text-white border-[#1D1D1F] dark:bg-white dark:text-[#1D1D1F] dark:border-white'
+                    : 'bg-black/[0.05] text-[#1D1D1F] hover:bg-black/[0.10] border-black/[0.08] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.14] dark:border-white/[0.08]'
                 }`}
                 title="画质、硬解、宽银幕贴底、双语字幕与音频增益调校"
               >
-                <Sparkles className="w-4 h-4 text-amber-400" />
+                <Sparkles
+                  className={`w-4 h-4 ${
+                    isVideoProPanelOpen
+                      ? 'text-amber-300 dark:text-amber-600'
+                      : 'text-[#B45309] dark:text-amber-400'
+                  }`}
+                />
               </button>
             )}
 
@@ -1185,8 +1246,8 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
                 }}
                 className={`p-1.5 rounded-xl transition cursor-pointer border ${
                   isEpisodeDrawerOpen
-                    ? 'bg-primary/20 text-primary border-primary/40'
-                    : 'bg-white/5 text-white hover:bg-white/15 border-white/5'
+                    ? 'bg-[#1D1D1F] text-white border-[#1D1D1F] dark:bg-white dark:text-[#1D1D1F] dark:border-white'
+                    : 'bg-black/[0.05] text-[#1D1D1F] hover:bg-black/[0.10] border-black/[0.08] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.14] dark:border-white/[0.08]'
                 }`}
                 title="分集与片源版本"
               >
@@ -1204,8 +1265,8 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
                 }}
                 className={`p-1.5 rounded-xl transition cursor-pointer border ${
                   isPlaybackInfoOpen
-                    ? 'bg-primary/20 text-primary border-primary/40'
-                    : 'bg-white/5 text-white hover:bg-white/15 border-white/5'
+                    ? 'bg-[#1D1D1F] text-white border-[#1D1D1F] dark:bg-white dark:text-[#1D1D1F] dark:border-white'
+                    : 'bg-black/[0.05] text-[#1D1D1F] hover:bg-black/[0.10] border-black/[0.08] dark:bg-white/[0.06] dark:text-white dark:hover:bg-white/[0.14] dark:border-white/[0.08]'
                 }`}
                 title="实时硬解与媒体技术信息 (快捷键 I)"
               >
@@ -1219,7 +1280,7 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
                 e.stopPropagation();
                 onToggleWindowMode();
               }}
-              className="p-1.5 rounded-xl bg-white/5 hover:bg-white/15 text-white transition cursor-pointer border border-white/5"
+              className="p-1.5 rounded-xl bg-black/[0.05] hover:bg-black/[0.10] text-[#1D1D1F] border border-black/[0.08] dark:bg-white/[0.06] dark:hover:bg-white/[0.14] dark:text-white dark:border-white/[0.08] transition cursor-pointer"
               title={
                 isFullscreen
                   ? '恢复窗口 (退出全屏)'
@@ -1237,7 +1298,7 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
                 e.stopPropagation();
                 onToggleFullscreen();
               }}
-              className="p-1.5 rounded-xl bg-white/5 hover:bg-white/15 text-white transition cursor-pointer border border-white/5"
+              className="p-1.5 rounded-xl bg-black/[0.05] hover:bg-black/[0.10] text-[#1D1D1F] border border-black/[0.08] dark:bg-white/[0.06] dark:hover:bg-white/[0.14] dark:text-white dark:border-white/[0.08] transition cursor-pointer"
               title={isFullscreen ? '退出全屏 (F / Esc)' : '全屏 (F)'}
             >
               {isFullscreen ? <Minimize className="w-4 h-4" /> : <Maximize className="w-4 h-4" />}

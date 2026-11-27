@@ -21,6 +21,7 @@ import { NetworkProxyModal } from '../components/settings/NetworkProxyModal';
 import { useAuthStore } from '../stores/useAuthStore';
 import { useDanmuStore } from '../stores/useDanmuStore';
 import { PlayerOverlayStorePatch, usePlayerStore } from '../stores/usePlayerStore';
+import { applyThemeToDom, useThemeStore } from '../stores/useThemeStore';
 import {
   OSD_OVERLAY_COMMENTS_EVENT,
   OSD_OVERLAY_COMMAND_EVENT,
@@ -154,8 +155,13 @@ export const OsdOverlayPage: React.FC = () => {
 
   // 接收主窗口推送的播放状态、格式化弹幕与原始弹幕列表
   useEffect(() => {
+    // 确保独立浮层窗口初始化即同步当前主题
+    applyThemeToDom(useThemeStore.getState().resolvedTheme);
     const unlistenSync = listen<OsdSyncPayload>(OSD_OVERLAY_SYNC_EVENT, (event) => {
       const payload = event.payload;
+      if (payload.resolvedTheme) {
+        applyThemeToDom(payload.resolvedTheme);
+      }
       setSync(payload);
 
       if (
@@ -541,16 +547,16 @@ export const OsdOverlayPage: React.FC = () => {
     <div
       onWheel={handleWheel}
       onContextMenu={handleContextMenu}
-      className="fixed inset-0 bg-transparent select-none overflow-hidden"
+      className="nocta-player-scope fixed inset-0 bg-transparent select-none overflow-hidden"
     >
       {/* 屏幕中央播放/暂停瞬时动效徽标 */}
       {sync.centerIcon && (
         <div className="absolute inset-0 pointer-events-none flex items-center justify-center z-30">
-          <div className="p-5 rounded-full bg-black/60 backdrop-blur-md text-white border border-white/10 animate-in zoom-in-75 fade-in duration-150">
+          <div className="p-5 rounded-full bg-white/[0.92] dark:bg-[#141416]/[0.88] text-[#1D1D1F] dark:text-white border border-black/[0.12] dark:border-white/[0.14] animate-in zoom-in-75 fade-in duration-150">
             {sync.centerIcon === 'play' ? (
-              <Play className="w-9 h-9 fill-white translate-x-0.5" />
+              <Play className="w-9 h-9 fill-current translate-x-0.5" />
             ) : (
-              <Pause className="w-9 h-9 fill-white" />
+              <Pause className="w-9 h-9 fill-current" />
             )}
           </div>
         </div>
@@ -711,8 +717,8 @@ export const OsdOverlayPage: React.FC = () => {
 
       {/* 弹幕加载或绑定提示 Toast */}
       {sync.danmuToast && (
-        <div className="fixed top-20 right-6 z-40 max-w-md bg-black/85 backdrop-blur-md border border-primary/40 text-white text-xs px-4 py-2.5 rounded-xl flex items-center space-x-2.5 animate-in fade-in slide-in-from-top-2">
-          <span className="w-2 h-2 rounded-full bg-primary animate-ping flex-shrink-0" />
+        <div className="fixed top-20 right-6 z-40 max-w-md bg-white/[0.95] dark:bg-[#141416]/[0.94] border border-black/[0.12] dark:border-white/[0.14] text-[#1D1D1F] dark:text-white text-xs px-4 py-2.5 rounded-xl flex items-center space-x-2.5 animate-in fade-in slide-in-from-top-2">
+          <span className="w-2 h-2 rounded-full bg-[#1D1D1F] dark:bg-white animate-ping flex-shrink-0" />
           <span className="font-medium truncate">{sync.danmuToast}</span>
         </div>
       )}
@@ -721,12 +727,12 @@ export const OsdOverlayPage: React.FC = () => {
 
       {/* 时长偏差提示 Banner */}
       {sync.durationAlert && (
-        <div className="fixed top-32 right-6 z-40 max-w-sm bg-black/80 backdrop-blur-md border border-yellow-500/30 text-yellow-300 text-xs p-3 rounded-xl flex items-start space-x-2 animate-in fade-in slide-in-from-top-2">
-          <AlertCircle className="w-4 h-4 flex-shrink-0 text-yellow-400 mt-0.5" />
+        <div className="fixed top-32 right-6 z-40 max-w-sm bg-white/[0.95] dark:bg-[#141416]/[0.94] border border-amber-600/30 dark:border-amber-400/30 text-[#B45309] dark:text-amber-300 text-xs p-3 rounded-xl flex items-start space-x-2 animate-in fade-in slide-in-from-top-2">
+          <AlertCircle className="w-4 h-4 flex-shrink-0 text-[#B45309] dark:text-amber-400 mt-0.5" />
           <div className="flex-1 leading-relaxed">{sync.durationAlert}</div>
           <button
             onClick={() => send({ type: 'dismiss-duration-alert' })}
-            className="text-gray-400 hover:text-white ml-1 cursor-pointer"
+            className="text-[#6E6E73] hover:text-[#1D1D1F] dark:text-white/55 dark:hover:text-white ml-1 cursor-pointer"
           >
             <X className="w-3.5 h-3.5" />
           </button>

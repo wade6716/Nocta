@@ -640,6 +640,427 @@ html.light :where(.nocta-theme-scope) :where(input, select, textarea)::placehold
   color: #64748B;
 }
 
+/* ============================================================================
+ * Player Floating Overlay Theme Bridge (.nocta-player-scope)
+ * - Keeps root / video surface strictly transparent (no background on root).
+ * - Zero large outer drop shadows for Windows transparent WebView2 safety.
+ * - High-opacity Apple TV+ Light & Dark surfaces legible over live video.
+ * ============================================================================ */
+
+.nocta-player-scope .player-surface {
+  background-color: rgba(255, 255, 255, 0.95);
+  border-color: rgba(0, 0, 0, 0.12);
+  color: #1D1D1F;
+  box-shadow: none;
+}
+
+html.dark .nocta-player-scope .player-surface {
+  background-color: rgba(20, 20, 22, 0.94);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #F5F5F7;
+  box-shadow: none;
+}
+
+.nocta-player-scope .player-surface-subtle {
+  background-color: rgba(245, 245, 247, 0.96);
+  border-color: rgba(0, 0, 0, 0.08);
+  box-shadow: none;
+}
+
+html.dark .nocta-player-scope .player-surface-subtle {
+  background-color: rgba(28, 28, 30, 0.94);
+  border-color: rgba(255, 255, 255, 0.09);
+  box-shadow: none;
+}
+
+.nocta-player-scope .player-capsule {
+  background-color: rgba(255, 255, 255, 0.93);
+  border-color: rgba(0, 0, 0, 0.12);
+  color: #1D1D1F;
+  box-shadow: none;
+}
+
+html.dark .nocta-player-scope .player-capsule {
+  background-color: rgba(20, 20, 22, 0.92);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #F5F5F7;
+  box-shadow: none;
+}
+
+/* Dark-mode neutralization inside player (replaces legacy bluish navy tints with Apple cinema dark) */
+html.dark :where(.nocta-player-scope) :where(
+  .bg-\[\#0B0E17\],
+  .bg-\[\#0B0E17\]\/95,
+  .bg-\[\#0B0E17\]\/90,
+  .bg-\[\#0B0E17\]\/85,
+  .bg-\[\#0E121D\]\/95
+):where(:not(.preserve-dark):not(.preserve-dark *)) {
+  background-color: rgba(20, 20, 22, 0.94);
+  box-shadow: none;
+}
+
+html.dark :where(.nocta-player-scope) :where(
+  .bg-\[\#0f1115\],
+  .bg-\[\#0f1115\]\/95,
+  .bg-\[\#0f1115\]\/90,
+  .bg-\[\#0F1115\],
+  .bg-\[\#0F1422\]\/95
+):where(:not(.preserve-dark):not(.preserve-dark *)) {
+  background-color: rgba(10, 10, 12, 0.94);
+}
+
+html.dark :where(.nocta-player-scope) :where(
+  .bg-\[\#161922\],
+  .bg-\[\#121622\],
+  .bg-\[\#121622\]\/95
+):where(:not(.preserve-dark):not(.preserve-dark *)) {
+  background-color: rgba(22, 22, 24, 0.96);
+  box-shadow: none;
+}
+
+html.dark :where(.nocta-player-scope) :where(.bg-\[\#07090F\]):where(:not(.preserve-dark):not(.preserve-dark *)) {
+  background-color: rgba(14, 14, 16, 0.95);
+}
+
+/* Light-mode surface bridge inside player (for nested modals/drawers, zero outer shadow) */
+html.light :where(.nocta-player-scope) :where(
+  .bg-\[\#0B0E17\],
+  .bg-\[\#0B0E17\]\/95,
+  .bg-\[\#0B0E17\]\/90,
+  .bg-\[\#0B0E17\]\/85,
+  .bg-\[\#0E121D\]\/95,
+  .bg-\[\#080B12\],
+  .bg-\[\#080B12\]\/95,
+  .bg-\[\#080B13\],
+  .bg-\[\#0F1115\],
+  .bg-\[\#0f1115\],
+  .bg-\[\#0f1115\]\/95,
+  .bg-\[\#0f1115\]\/90,
+  .bg-\[\#0F1422\],
+  .bg-\[\#0F1422\]\/95,
+  .bg-\[\#111521\]\/95,
+  .bg-\[\#12141a\],
+  .bg-\[\#12141a\]\/60,
+  .bg-\[\#12151d\]\/95,
+  .bg-\[\#121622\],
+  .bg-\[\#121622\]\/95,
+  .bg-\[\#131826\],
+  .bg-\[\#131826\]\/80,
+  .bg-\[\#131826\]\/85,
+  .bg-\[\#131826\]\/90,
+  .bg-\[\#141824\],
+  .bg-\[\#141828\],
+  .bg-\[\#141828\]\/95,
+  .bg-\[\#141A29\],
+  .bg-\[\#161821\]\/95,
+  .bg-\[\#161922\],
+  .bg-\[\#161c2e\],
+  .bg-\[\#161D2F\],
+  .bg-\[\#07090F\],
+  .bg-gray-900,
+  .bg-gray-950,
+  .bg-slate-900,
+  .bg-slate-950,
+  .bg-zinc-900
+):where(:not(.preserve-dark):not(.preserve-dark *)) {
+  background-color: rgba(255, 255, 255, 0.95);
+  box-shadow: none;
+}
+
+html.light .nocta-player-scope :where(
+  .hover\:bg-\[\#161c2e\]:hover,
+  .hover\:bg-\[\#171d2e\]:hover,
+  .hover\:bg-\[\#0B0E17\]:hover
+):where(:not(.preserve-dark):not(.preserve-dark *)) {
+  background-color: rgba(245, 245, 247, 0.98);
+}
+
+/* Modal backdrops in player stay translucent scrim */
+html.light :where(.nocta-player-scope) :where(
+  .fixed.inset-0.bg-black\/75,
+  .fixed.inset-0.bg-black\/70,
+  .fixed.inset-0.bg-black\/60,
+  .fixed.inset-0.bg-black\/50,
+  .fixed.inset-0.bg-black\/45
+):where(:not(.preserve-dark)) {
+  background-color: rgba(15, 23, 42, 0.28);
+  box-shadow: none;
+}
+
+/* Non-fullscreen black translucent sub-cards / inputs in player light mode */
+html.light :where(.nocta-player-scope) :where(
+  .bg-black\/20,
+  .bg-black\/25,
+  .bg-black\/30,
+  .bg-black\/35,
+  .bg-black\/40,
+  .bg-black\/45,
+  .bg-black\/50,
+  .bg-black\/60
+):where(:not(.fixed):not(.preserve-dark):not(.preserve-dark *)) {
+  background-color: rgba(245, 245, 247, 0.92);
+  box-shadow: none;
+}
+
+html.light :where(.nocta-player-scope) :where(
+  .bg-black\/80,
+  .bg-black\/85
+):where(:not(.preserve-dark):not(.preserve-dark *)) {
+  background-color: rgba(255, 255, 255, 0.95);
+  box-shadow: none;
+}
+
+html.light :where(.nocta-player-scope) :where(
+  .bg-white\/\[0\.02\],
+  .bg-white\/\[0\.03\],
+  .bg-white\/\[0\.04\],
+  .bg-white\/\[0\.05\],
+  .bg-white\/5
+):where(:not(.preserve-dark):not(.preserve-dark *)) {
+  background-color: rgba(0, 0, 0, 0.04);
+}
+
+html.light :where(.nocta-player-scope) :where(
+  .bg-white\/\[0\.06\],
+  .bg-white\/\[0\.07\],
+  .bg-white\/\[0\.08\],
+  .bg-white\/\[0\.09\],
+  .bg-white\/\[0\.1\],
+  .bg-white\/10,
+  .bg-white\/15,
+  .bg-white\/20
+):where(:not(.preserve-dark):not(.preserve-dark *)) {
+  background-color: rgba(0, 0, 0, 0.07);
+}
+
+html.light .nocta-player-scope :where(
+  .hover\:bg-white\/\[0\.03\]:hover,
+  .hover\:bg-white\/\[0\.04\]:hover,
+  .hover\:bg-white\/\[0\.05\]:hover,
+  .hover\:bg-white\/5:hover,
+  .hover\:bg-white\/\[0\.06\]:hover,
+  .hover\:bg-white\/\[0\.07\]:hover,
+  .hover\:bg-white\/\[0\.08\]:hover,
+  .hover\:bg-white\/\[0\.09\]:hover,
+  .hover\:bg-white\/\[0\.1\]:hover,
+  .hover\:bg-white\/\[0\.12\]:hover,
+  .hover\:bg-white\/\[0\.14\]:hover,
+  .hover\:bg-white\/10:hover,
+  .hover\:bg-white\/15:hover,
+  .hover\:bg-white\/20:hover
+):where(:not(.preserve-dark):not(.preserve-dark *)) {
+  background-color: rgba(0, 0, 0, 0.11);
+}
+
+html.light :where(.nocta-player-scope) :where(
+  .border-white\/\[0\.04\],
+  .border-white\/5,
+  .border-white\/\[0\.05\],
+  .border-white\/\[0\.06\],
+  .border-white\/\[0\.07\],
+  .border-white\/\[0\.08\],
+  .border-white\/\[0\.09\],
+  .border-white\/10,
+  .border-white\/\[0\.1\],
+  .border-white\/\[0\.12\],
+  .border-white\/\[0\.14\],
+  .border-white\/15,
+  .border-white\/20,
+  .border-white\/25
+):where(:not(.preserve-dark):not(.preserve-dark *)) {
+  border-color: rgba(0, 0, 0, 0.1);
+}
+
+html.light .nocta-player-scope :where(
+  .hover\:border-white\/10:hover,
+  .hover\:border-white\/15:hover,
+  .hover\:border-white\/20:hover,
+  .hover\:border-white\/30:hover
+):where(:not(.preserve-dark):not(.preserve-dark *)) {
+  border-color: rgba(0, 0, 0, 0.2);
+}
+
+html.light :where(.nocta-player-scope) :where(.text-white):where(
+  :not(.preserve-dark):not(.preserve-dark *)
+  :not(.bg-primary):not(.bg-primary *)
+  :not(.bg-\[\#1D1D1F\]):not(.bg-\[\#1D1D1F\] *)
+  :not(.bg-\[\#38BDF8\]):not(.bg-\[\#38BDF8\] *)
+  :not(.bg-sky-500):not(.bg-sky-500 *)
+  :not(.bg-sky-600):not(.bg-sky-600 *)
+  :not(.bg-emerald-500):not(.bg-emerald-500 *)
+  :not(.bg-emerald-600):not(.bg-emerald-600 *)
+  :not(.bg-green-600):not(.bg-green-600 *)
+  :not(.bg-red-500):not(.bg-red-500 *)
+  :not(.bg-red-600):not(.bg-red-600 *)
+  :not(.bg-rose-500):not(.bg-rose-500 *)
+  :not(.bg-rose-600):not(.bg-rose-600 *)
+  :not(.bg-amber-500):not(.bg-amber-500 *)
+  :not(.bg-amber-600):not(.bg-amber-600 *)
+) {
+  color: #1D1D1F;
+}
+
+html.light :where(.nocta-player-scope) :where(
+  .text-slate-50,
+  .text-slate-100,
+  .text-gray-100
+):where(:not(.preserve-dark):not(.preserve-dark *):not(.bg-primary):not(.bg-primary *)) {
+  color: #1D1D1F;
+}
+
+html.light :where(.nocta-player-scope) :where(
+  .text-slate-200,
+  .text-gray-200,
+  .text-slate-200\/95,
+  .text-slate-200\/90
+):where(:not(.preserve-dark):not(.preserve-dark *)) {
+  color: #2C2C2E;
+}
+
+html.light :where(.nocta-player-scope) :where(
+  .text-slate-300,
+  .text-gray-300,
+  .text-slate-300\/95,
+  .text-slate-300\/90,
+  .text-slate-300\/80
+):where(:not(.preserve-dark):not(.preserve-dark *)) {
+  color: #48484A;
+}
+
+html.light :where(.nocta-player-scope) :where(
+  .text-slate-400,
+  .text-gray-400
+):where(:not(.preserve-dark):not(.preserve-dark *)) {
+  color: #6E6E73;
+}
+
+html.light :where(.nocta-player-scope) :where(
+  .text-slate-500,
+  .text-gray-500,
+  .text-slate-600
+):where(:not(.preserve-dark):not(.preserve-dark *)) {
+  color: #86868B;
+}
+
+html.light .nocta-player-scope :where(
+  .hover\:text-white:hover,
+  .hover\:text-slate-100:hover,
+  .hover\:text-slate-200:hover
+):where(:not(.preserve-dark):not(.preserve-dark *):not(.hover\:bg-red-600:hover):not(.hover\:bg-red-500:hover):not(.hover\:bg-primary:hover)) {
+  color: #1D1D1F;
+}
+
+html.light .nocta-player-scope .group:hover :where(.group-hover\:text-white):where(:not(.preserve-dark):not(.preserve-dark *):not(.group-hover\:bg-primary)) {
+  color: #1D1D1F;
+}
+
+html.light :where(.nocta-player-scope) :where(
+  .text-\[\#38BDF8\],
+  .text-sky-300,
+  .text-sky-300\/80,
+  .text-sky-300\/90,
+  .text-sky-300\/95,
+  .text-sky-400,
+  .text-sky-400\/90,
+  .text-sky-200
+):where(:not(.preserve-dark):not(.preserve-dark *)) {
+  color: #1D1D1F;
+}
+
+html.light :where(.nocta-player-scope) :where(
+  .bg-\[\#38BDF8\],
+  .bg-sky-500,
+  .bg-sky-500\/80
+):where(:not(.preserve-dark):not(.preserve-dark *)) {
+  background-color: #1D1D1F;
+  color: #FFFFFF;
+}
+
+html.light :where(.nocta-player-scope) :where(
+  .bg-sky-500\/10,
+  .bg-sky-500\/15,
+  .bg-sky-500\/20,
+  .bg-sky-500\/25,
+  .bg-sky-400
+):where(:not(.preserve-dark):not(.preserve-dark *)) {
+  background-color: rgba(29, 29, 31, 0.08);
+}
+
+html.light :where(.nocta-player-scope) :where(
+  .bg-sky-400.h-full
+):where(:not(.preserve-dark):not(.preserve-dark *)) {
+  background-color: #1D1D1F;
+}
+
+html.light :where(.nocta-player-scope) :where(
+  .border-sky-400\/20,
+  .border-sky-400\/25,
+  .border-sky-400\/30,
+  .border-sky-400\/35,
+  .border-sky-400\/40,
+  .border-sky-400\/50,
+  .border-sky-400\/70,
+  .border-sky-500\/20,
+  .border-sky-500\/30
+):where(:not(.preserve-dark):not(.preserve-dark *)) {
+  border-color: rgba(29, 29, 31, 0.24);
+}
+
+html.light :where(.nocta-player-scope) :where(
+  .text-emerald-100,
+  .text-emerald-200,
+  .text-emerald-300,
+  .text-emerald-400,
+  .text-green-300,
+  .text-green-400,
+  .text-teal-300,
+  .text-teal-400
+):where(:not(.preserve-dark):not(.preserve-dark *)) {
+  color: #047857;
+}
+
+html.light :where(.nocta-player-scope) :where(
+  .text-amber-100,
+  .text-amber-200,
+  .text-amber-200\/80,
+  .text-amber-300,
+  .text-amber-400,
+  .text-yellow-300,
+  .text-yellow-400
+):where(:not(.preserve-dark):not(.preserve-dark *)) {
+  color: #B45309;
+}
+
+html.light :where(.nocta-player-scope) :where(
+  .text-rose-300,
+  .text-rose-400,
+  .text-red-300,
+  .text-red-400
+):where(:not(.preserve-dark):not(.preserve-dark *)) {
+  color: #BE123C;
+}
+
+html.light :where(.nocta-player-scope) :where(
+  .text-violet-300,
+  .text-purple-300,
+  .text-indigo-300
+):where(:not(.preserve-dark):not(.preserve-dark *)) {
+  color: #6D28D9;
+}
+
+html.light :where(.nocta-player-scope) :where(input, select, textarea):where(:not(.preserve-dark):not(.preserve-dark *)) {
+  color: #1D1D1F;
+}
+
+html.light :where(.nocta-player-scope) :where(option):where(:not(.preserve-dark):not(.preserve-dark *)) {
+  background-color: #FFFFFF;
+  color: #1D1D1F;
+}
+
+html.light :where(.nocta-player-scope) :where(input, select, textarea)::placeholder {
+  color: #86868B;
+}
+
 /* Music Player GPU-accelerated animations */
 @keyframes music-eq-bar {
   0%, 100% {

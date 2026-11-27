@@ -54,26 +54,26 @@ export const ShortcutsModal: React.FC<ShortcutsModalProps> = ({ isOpen, onClose 
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm select-none"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/35 dark:bg-black/65 backdrop-blur-sm select-none"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-2xl max-h-[85vh] bg-[#0B0E17]/95 backdrop-blur-2xl border border-white/[0.14] rounded-2xl shadow-[0_24px_70px_rgba(0,0,0,0.8)] overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-150"
+        className="w-full max-w-2xl max-h-[85vh] bg-white/[0.97] dark:bg-[#141416]/[0.96] border border-black/[0.12] dark:border-white/[0.12] rounded-2xl overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-150"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-6 py-4 border-b border-white/[0.08] bg-white/[0.02]">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-black/[0.08] dark:border-white/[0.08] bg-black/[0.02] dark:bg-white/[0.02]">
           <div className="flex items-center space-x-2.5">
-            <div className="p-2 rounded-xl bg-sky-500/15 border border-sky-400/25 text-sky-400">
+            <div className="p-2 rounded-xl bg-black/[0.06] dark:bg-white/[0.08] border border-black/[0.10] dark:border-white/[0.12] text-[#1D1D1F] dark:text-white">
               <Keyboard className="w-4 h-4" />
             </div>
             <div>
-              <h3 className="text-sm font-bold text-white tracking-wide">快捷键与手势指南</h3>
-              <p className="text-[11px] text-slate-400">高沉浸低打扰操作 · 单手键盘与鼠标全掌控</p>
+              <h3 className="text-sm font-bold text-[#1D1D1F] dark:text-white tracking-wide">快捷键与手势指南</h3>
+              <p className="text-[11px] text-[#6E6E73] dark:text-white/55">高沉浸低打扰操作 · 单手键盘与鼠标全掌控</p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white transition cursor-pointer"
+            className="p-1.5 rounded-xl bg-black/[0.05] hover:bg-black/[0.10] text-[#6E6E73] hover:text-[#1D1D1F] dark:bg-white/[0.06] dark:hover:bg-white/[0.12] dark:text-white/60 dark:hover:text-white transition cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
@@ -83,16 +83,16 @@ export const ShortcutsModal: React.FC<ShortcutsModalProps> = ({ isOpen, onClose 
           {SHORTCUT_GROUPS.map((group) => (
             <div
               key={group.title}
-              className="p-4 rounded-xl bg-white/[0.03] border border-white/[0.07] space-y-3"
+              className="p-4 rounded-xl bg-[#F5F5F7]/80 dark:bg-white/[0.04] border border-black/[0.08] dark:border-white/[0.08] space-y-3"
             >
-              <h4 className="text-xs font-semibold text-sky-400 uppercase tracking-wider">
+              <h4 className="text-xs font-semibold text-[#1D1D1F] dark:text-white uppercase tracking-wider">
                 {group.title}
               </h4>
               <div className="space-y-2">
                 {group.items.map((item) => (
                   <div key={item.key} className="flex items-center justify-between text-xs gap-2">
-                    <span className="text-slate-300">{item.desc}</span>
-                    <kbd className="shrink-0 px-2 py-0.5 rounded-md bg-white/[0.08] border border-white/[0.1] font-mono text-[11px] text-slate-100">
+                    <span className="text-[#48484A] dark:text-white/80">{item.desc}</span>
+                    <kbd className="shrink-0 px-2 py-0.5 rounded-md bg-white dark:bg-white/[0.08] border border-black/[0.14] dark:border-white/[0.16] font-mono text-[11px] text-[#1D1D1F] dark:text-[#F5F5F7]">
                       {item.key}
                     </kbd>
                   </div>

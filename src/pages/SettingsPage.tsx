@@ -664,7 +664,7 @@ export const SettingsPage: React.FC = () => {
           <ArrowLeft className="w-5 h-5" />
         </button>
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-white flex items-center space-x-2">
+          <h1 className="text-2xl font-bold tracking-tight text-[#1D1D1F] dark:text-white flex items-center space-x-2">
             <span>系统设置</span>
           </h1>
           <p className="text-xs text-gray-400 mt-0.5">
@@ -721,12 +721,12 @@ export const SettingsPage: React.FC = () => {
           {activeTab === 'appearance' && (
             <div className="space-y-6">
               <div>
-                <h2 className="text-lg font-bold text-white flex items-center space-x-2">
+                <h2 className="text-lg font-bold text-[#1D1D1F] dark:text-white flex items-center space-x-2">
                   <Palette className="w-5 h-5 text-primary" />
                   <span>外观与玻璃材质</span>
                 </h2>
                 <p className="text-xs text-gray-400 mt-1">
-                  自由切换亮色 / 暗色 / 跟随系统外观，支持 macOS 液态毛玻璃与原生桌面透视质感（视频播放页始终保持暗色纯净画布）。
+                  自由切换亮色 / 暗色 / 跟随系统外观，支持 macOS 液态毛玻璃与原生桌面透视质感（播放页悬浮组件同步支持亮/暗双主题）。
                 </p>
               </div>
 
@@ -3150,13 +3150,13 @@ export const SettingsPage: React.FC = () => {
                     className="w-16 h-16 rounded-2xl p-1 bg-white/5 border border-white/10"
                   />
                   <div>
-                    <h2 className="text-xl font-bold text-white flex flex-wrap items-center gap-2">
+                    <h2 className="text-xl font-bold text-[#1D1D1F] dark:text-white flex flex-wrap items-center gap-2">
                       <span>Nocta · 诺塔</span>
-                      <span className="text-xs px-2 py-0.5 rounded-full bg-white/10 text-gray-200 font-mono font-normal">
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-black/[0.06] dark:bg-white/10 text-[#48484A] dark:text-gray-200 font-mono font-normal">
                         v{updater.runtimeVersion}
                       </span>
                       {updater.platformTarget && (
-                        <span className="text-[11px] px-2 py-0.5 rounded-full bg-sky-500/10 border border-sky-400/25 text-sky-300 font-mono font-normal">
+                        <span className="text-[11px] px-2 py-0.5 rounded-full bg-black/[0.06] dark:bg-white/10 border border-black/[0.08] dark:border-white/15 text-[#48484A] dark:text-white/80 font-mono font-normal">
                           {updater.platformTarget}
                         </span>
                       )}
@@ -3231,7 +3231,7 @@ export const SettingsPage: React.FC = () => {
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="flex items-center space-x-2">
                         <Sparkles className="w-4 h-4 text-sky-400" />
-                        <span className="text-sm font-bold text-white">
+                        <span className="text-sm font-bold text-[#1D1D1F] dark:text-white">
                           发现新版本 v{updater.updateInfo.version}
                         </span>
                         <span
@@ -3331,7 +3331,7 @@ export const SettingsPage: React.FC = () => {
               <div className="p-4 rounded-xl bg-white/[0.03] border border-white/10 space-y-4">
                 <div className="flex items-center justify-between gap-4">
                   <div>
-                    <h3 className="text-xs font-semibold text-white">启动时自动静默检查更新</h3>
+                    <h3 className="text-xs font-semibold text-[#1D1D1F] dark:text-white">启动时自动静默检查更新</h3>
                     <p className="text-[11px] text-gray-400 mt-0.5">
                       启动后延迟后台检查更新并智能复用全局代理，观影播放期间绝不打扰。
                     </p>
@@ -3351,7 +3351,7 @@ export const SettingsPage: React.FC = () => {
 
                 <div className="border-t border-white/[0.06] pt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div>
-                    <h3 className="text-xs font-semibold text-white">更新通道</h3>
+                    <h3 className="text-xs font-semibold text-[#1D1D1F] dark:text-white">更新通道</h3>
                     <p className="text-[11px] text-gray-400 mt-0.5">
                       Alpha / Beta 测试版默认订阅预发布通道，同时接收更高版本的正式版升级。
                     </p>
@@ -3383,7 +3383,7 @@ export const SettingsPage: React.FC = () => {
 
                 <div className="border-t border-white/[0.06] pt-4 space-y-2">
                   <div className="flex items-center justify-between">
-                    <h3 className="text-xs font-semibold text-white">
+                    <h3 className="text-xs font-semibold text-[#1D1D1F] dark:text-white">
                       GitHub 下载加速镜像前缀（可选）
                     </h3>
                     {updater.ignoredVersion && (
@@ -3416,7 +3416,7 @@ export const SettingsPage: React.FC = () => {
 
               {/* 快捷键速查表 */}
               <div className="space-y-3">
-                <h3 className="text-xs font-semibold text-white">快捷键指南</h3>
+                <h3 className="text-xs font-semibold text-[#1D1D1F] dark:text-white">快捷键指南</h3>
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-2.5 text-xs">
                   {[
                     { key: '空格 (Space)', desc: '播放 / 暂停' },

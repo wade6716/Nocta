@@ -3339,7 +3339,7 @@ export const PlayerPage: React.FC = () => {
             />
           )}
           <div className="relative z-10 flex flex-col items-center space-y-4 max-w-md w-full pt-16 pb-32 max-h-full overflow-y-auto">
-            <div className="w-12 h-12 border-3 border-[#1D1D1F] dark:border-white border-t-transparent rounded-full animate-spin shrink-0" />
+            <div className="w-12 h-12 border-[3px] border-[#1D1D1F] dark:border-white border-t-transparent rounded-full animate-spin shrink-0" />
             <div className="text-center space-y-1.5">
               <h2 className="text-base font-bold text-[#1D1D1F] dark:text-white tracking-wide">{item.Name}</h2>
               <p className="text-xs text-[#6E6E73] dark:text-white/65">

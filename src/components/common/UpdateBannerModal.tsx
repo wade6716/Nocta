@@ -362,7 +362,7 @@ export const UpdateBannerModal: React.FC = () => {
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
-                    <h3 className="text-sm font-bold text-white">
+                    <h3 className="text-sm font-bold text-[#1D1D1F] dark:text-white">
                       Nocta · 诺塔 v{updateInfo.version}
                     </h3>
                     <span

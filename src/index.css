@@ -386,31 +386,60 @@ html.light .nocta-theme-scope :where(.divide-white\/5):where(:not(.preserve-dark
 }
 
 /* Light-mode ink hierarchy (exact solid-background exclusions; specificity 0,1,1) */
-html.light :where(.nocta-theme-scope) :where(.text-white):where(
-  :not(.preserve-dark):not(.preserve-dark *)
-  :not(.bg-primary):not(.bg-primary *)
-  :not(.bg-primary\/80):not(.bg-primary\/80 *)
-  :not(.bg-\[\#38BDF8\]):not(.bg-\[\#38BDF8\] *)
-  :not(.bg-sky-500):not(.bg-sky-500 *)
-  :not(.bg-sky-600):not(.bg-sky-600 *)
-  :not(.bg-emerald-500):not(.bg-emerald-500 *)
-  :not(.bg-emerald-600):not(.bg-emerald-600 *)
-  :not(.bg-green-600):not(.bg-green-600 *)
-  :not(.bg-red-500):not(.bg-red-500 *)
-  :not(.bg-red-600):not(.bg-red-600 *)
-  :not(.bg-rose-500):not(.bg-rose-500 *)
-  :not(.bg-rose-600):not(.bg-rose-600 *)
-  :not(.bg-purple-500):not(.bg-purple-500 *)
-  :not(.bg-purple-600):not(.bg-purple-600 *)
-  :not(.bg-indigo-500):not(.bg-indigo-500 *)
-  :not(.bg-indigo-600):not(.bg-indigo-600 *)
-  :not(.bg-amber-500):not(.bg-amber-500 *)
-  :not(.bg-amber-600):not(.bg-amber-600 *)
-  :not(.bg-blue-500):not(.bg-blue-500 *)
-  :not(.bg-blue-600):not(.bg-blue-600 *)
-  :not(.from-purple-500):not(.from-purple-500 *)
-  :not(.from-primary):not(.from-primary *)
-) {
+html.light :where(.nocta-theme-scope) :where(.text-white):where(:not(
+  .preserve-dark,
+  .preserve-dark *,
+  .bg-primary,
+  .bg-primary *,
+  .bg-primary\/80,
+  .bg-primary\/80 *,
+  .bg-primary\/90,
+  .bg-primary\/90 *,
+  .bg-\[\#1D1D1F\],
+  .bg-\[\#1D1D1F\] *,
+  .bg-black,
+  .bg-black *,
+  .bg-\[\#38BDF8\],
+  .bg-\[\#38BDF8\] *,
+  .bg-sky-500,
+  .bg-sky-500 *,
+  .bg-sky-600,
+  .bg-sky-600 *,
+  .bg-emerald-500,
+  .bg-emerald-500 *,
+  .bg-emerald-600,
+  .bg-emerald-600 *,
+  .bg-green-600,
+  .bg-green-600 *,
+  .bg-red-500,
+  .bg-red-500 *,
+  .bg-red-600,
+  .bg-red-600 *,
+  .bg-rose-500,
+  .bg-rose-500 *,
+  .bg-rose-600,
+  .bg-rose-600 *,
+  .bg-purple-500,
+  .bg-purple-500 *,
+  .bg-purple-600,
+  .bg-purple-600 *,
+  .bg-indigo-500,
+  .bg-indigo-500 *,
+  .bg-indigo-600,
+  .bg-indigo-600 *,
+  .bg-amber-500,
+  .bg-amber-500 *,
+  .bg-amber-600,
+  .bg-amber-600 *,
+  .bg-blue-500,
+  .bg-blue-500 *,
+  .bg-blue-600,
+  .bg-blue-600 *,
+  .from-purple-500,
+  .from-purple-500 *,
+  .from-primary,
+  .from-primary *
+)) {
   color: #1D1D1F;
 }
 
@@ -459,7 +488,18 @@ html.light .nocta-theme-scope :where(
   .hover\:text-white:hover,
   .hover\:text-slate-100:hover,
   .hover\:text-slate-200:hover
-):where(:not(.preserve-dark):not(.preserve-dark *):not(.hover\:bg-red-600:hover):not(.hover\:bg-red-500:hover):not(.hover\:bg-primary:hover)) {
+):where(:not(
+  .preserve-dark,
+  .preserve-dark *,
+  .bg-\[\#1D1D1F\],
+  .bg-black,
+  .bg-primary,
+  .hover\:bg-red-600:hover,
+  .hover\:bg-red-500:hover,
+  .hover\:bg-primary:hover,
+  .hover\:bg-\[\#1D1D1F\]:hover,
+  .hover\:bg-black:hover
+)) {
   color: #1D1D1F;
 }
 
@@ -880,23 +920,44 @@ html.light .nocta-player-scope :where(
   border-color: rgba(0, 0, 0, 0.2);
 }
 
-html.light :where(.nocta-player-scope) :where(.text-white):where(
-  :not(.preserve-dark):not(.preserve-dark *)
-  :not(.bg-primary):not(.bg-primary *)
-  :not(.bg-\[\#1D1D1F\]):not(.bg-\[\#1D1D1F\] *)
-  :not(.bg-\[\#38BDF8\]):not(.bg-\[\#38BDF8\] *)
-  :not(.bg-sky-500):not(.bg-sky-500 *)
-  :not(.bg-sky-600):not(.bg-sky-600 *)
-  :not(.bg-emerald-500):not(.bg-emerald-500 *)
-  :not(.bg-emerald-600):not(.bg-emerald-600 *)
-  :not(.bg-green-600):not(.bg-green-600 *)
-  :not(.bg-red-500):not(.bg-red-500 *)
-  :not(.bg-red-600):not(.bg-red-600 *)
-  :not(.bg-rose-500):not(.bg-rose-500 *)
-  :not(.bg-rose-600):not(.bg-rose-600 *)
-  :not(.bg-amber-500):not(.bg-amber-500 *)
-  :not(.bg-amber-600):not(.bg-amber-600 *)
-) {
+html.light :where(.nocta-player-scope) :where(.text-white):where(:not(
+  .preserve-dark,
+  .preserve-dark *,
+  .bg-primary,
+  .bg-primary *,
+  .bg-primary\/80,
+  .bg-primary\/80 *,
+  .bg-primary\/90,
+  .bg-primary\/90 *,
+  .bg-\[\#1D1D1F\],
+  .bg-\[\#1D1D1F\] *,
+  .bg-black,
+  .bg-black *,
+  .bg-\[\#38BDF8\],
+  .bg-\[\#38BDF8\] *,
+  .bg-sky-500,
+  .bg-sky-500 *,
+  .bg-sky-600,
+  .bg-sky-600 *,
+  .bg-emerald-500,
+  .bg-emerald-500 *,
+  .bg-emerald-600,
+  .bg-emerald-600 *,
+  .bg-green-600,
+  .bg-green-600 *,
+  .bg-red-500,
+  .bg-red-500 *,
+  .bg-red-600,
+  .bg-red-600 *,
+  .bg-rose-500,
+  .bg-rose-500 *,
+  .bg-rose-600,
+  .bg-rose-600 *,
+  .bg-amber-500,
+  .bg-amber-500 *,
+  .bg-amber-600,
+  .bg-amber-600 *
+)) {
   color: #1D1D1F;
 }
 
@@ -904,7 +965,7 @@ html.light :where(.nocta-player-scope) :where(
   .text-slate-50,
   .text-slate-100,
   .text-gray-100
-):where(:not(.preserve-dark):not(.preserve-dark *):not(.bg-primary):not(.bg-primary *)) {
+):where(:not(.preserve-dark, .preserve-dark *, .bg-primary, .bg-primary *, .bg-\[\#1D1D1F\], .bg-\[\#1D1D1F\] *)) {
   color: #1D1D1F;
 }
 
@@ -946,11 +1007,22 @@ html.light .nocta-player-scope :where(
   .hover\:text-white:hover,
   .hover\:text-slate-100:hover,
   .hover\:text-slate-200:hover
-):where(:not(.preserve-dark):not(.preserve-dark *):not(.hover\:bg-red-600:hover):not(.hover\:bg-red-500:hover):not(.hover\:bg-primary:hover)) {
+):where(:not(
+  .preserve-dark,
+  .preserve-dark *,
+  .bg-\[\#1D1D1F\],
+  .bg-black,
+  .bg-primary,
+  .hover\:bg-red-600:hover,
+  .hover\:bg-red-500:hover,
+  .hover\:bg-primary:hover,
+  .hover\:bg-\[\#1D1D1F\]:hover,
+  .hover\:bg-black:hover
+)) {
   color: #1D1D1F;
 }
 
-html.light .nocta-player-scope .group:hover :where(.group-hover\:text-white):where(:not(.preserve-dark):not(.preserve-dark *):not(.group-hover\:bg-primary)) {
+html.light .nocta-player-scope .group:not(.hover\:bg-\[\#1D1D1F\]):not(.hover\:bg-black):not(.hover\:bg-primary):not(.bg-\[\#1D1D1F\]):hover :where(.group-hover\:text-white):where(:not(.preserve-dark, .preserve-dark *, .group-hover\:bg-primary)) {
   color: #1D1D1F;
 }
 

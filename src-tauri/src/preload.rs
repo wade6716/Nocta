@@ -62,6 +62,8 @@ pub struct StreamDiagnosticReport {
     pub total_size: Option<u64>,
     pub is_mkv: bool,
     pub has_mkv_cues: Option<bool>,
+    pub mkv_cues_status: Option<String>,
+    pub mkv_cues_coverage_sec: Option<f64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2190,8 +2192,139 @@ fn read_ebml_size(bytes: &[u8], pos: usize) -> Option<(Option<u64>, usize)> {
     Some((size, len))
 }
 
-/// 轻量只读探测 MKV 头部前 64 KB 是否包含 `Cues` 元素或由 `SeekHead` 指向 `Cues`（零二进制改写）。
-fn probe_mkv_head_has_cues(bytes: &[u8]) -> Option<bool> {
+fn read_ebml_uint_be(bytes: &[u8]) -> Option<u64> {
+    if bytes.is_empty() || bytes.len() > 8 {
+        return None;
+    }
+    let mut val = 0u64;
+    for &b in bytes {
+        val = (val << 8) | (b as u64);
+    }
+    Some(val)
+}
+
+fn read_ebml_float_be(bytes: &[u8]) -> Option<f64> {
+    match bytes.len() {
+        4 => Some(f32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as f64),
+        8 => Some(f64::from_be_bytes([
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+        ])),
+        _ => None,
+    }
+}
+
+/// 原地将任意长度 >= 2 的 EBML 元素覆写为等长 Void (0xEC)，保持后续元素偏移完全不变。
+fn write_ebml_void_in_place(buf: &mut [u8]) -> bool {
+    if buf.len() < 2 {
+        return false;
+    }
+    for w in 1..=8usize {
+        if 1 + w > buf.len() {
+            break;
+        }
+        let payload_len = (buf.len() - 1 - w) as u64;
+        let unknown_marker = if w == 8 {
+            (1u64 << 56) - 1
+        } else {
+            (1u64 << (7 * w)) - 1
+        };
+        if payload_len < unknown_marker {
+            buf[0] = 0xEC;
+            let mut rem = payload_len;
+            for idx in (0..w).rev() {
+                buf[1 + idx] = (rem & 0xFF) as u8;
+                rem >>= 8;
+            }
+            if w == 8 {
+                buf[1] |= 0x01;
+            } else {
+                buf[1] |= 1u8 << (8 - w);
+            }
+            buf[1 + w..].fill(0);
+            return true;
+        }
+    }
+    false
+}
+
+struct MkvHeadCueInspection {
+    segment_data_start: u64,
+    timestamp_scale_ns: u64,
+    duration_sec: Option<f64>,
+    inline_cues_range: Option<(usize, usize)>,
+    inline_cues_complete: bool,
+    cues_abs_offset: Option<u64>,
+    cues_seek_without_pos: bool,
+    secondary_seekhead_offset: Option<u64>,
+    reached_first_cluster: bool,
+}
+
+fn parse_seekhead_entries(
+    bytes: &[u8],
+    sh_data: usize,
+    sh_end: usize,
+    segment_data_start: u64,
+) -> (Option<u64>, bool, Option<u64>) {
+    let mut cues_abs_offset: Option<u64> = None;
+    let mut cues_seek_without_pos = false;
+    let mut secondary_seekhead_offset: Option<u64> = None;
+
+    let mut sp = sh_data;
+    while sp < sh_end {
+        let Some((sid, sil)) = read_ebml_id(bytes, sp) else {
+            break;
+        };
+        let Some((ssz_opt, ssl)) = read_ebml_size(bytes, sp + sil) else {
+            break;
+        };
+        let sdata = sp + sil + ssl;
+        let Some(ssz) = ssz_opt.and_then(|s| usize::try_from(s).ok()) else {
+            break;
+        };
+        let send = sdata.saturating_add(ssz).min(sh_end);
+        if sid == 0x4DBB {
+            let mut kp = sdata;
+            let mut seek_id_bytes: Option<&[u8]> = None;
+            let mut seek_pos: Option<u64> = None;
+            while kp < send {
+                let Some((kid, kil)) = read_ebml_id(bytes, kp) else {
+                    break;
+                };
+                let Some((ksz_opt, ksl)) = read_ebml_size(bytes, kp + kil) else {
+                    break;
+                };
+                let kdata = kp + kil + ksl;
+                let Some(ksz) = ksz_opt.and_then(|s| usize::try_from(s).ok()) else {
+                    break;
+                };
+                let kend = kdata.saturating_add(ksz).min(send);
+                if kid == 0x53AB && kdata + ksz <= send {
+                    seek_id_bytes = Some(&bytes[kdata..kend]);
+                } else if kid == 0x53AC && kdata + ksz <= send {
+                    seek_pos = read_ebml_uint_be(&bytes[kdata..kend]);
+                }
+                kp = kend;
+            }
+            if seek_id_bytes == Some(&[0x1C, 0x53, 0xBB, 0x6B]) {
+                if let Some(pos_rel) = seek_pos {
+                    cues_abs_offset = Some(segment_data_start.saturating_add(pos_rel));
+                } else {
+                    cues_seek_without_pos = true;
+                }
+            } else if seek_id_bytes == Some(&[0x11, 0x4D, 0x9B, 0x74]) && secondary_seekhead_offset.is_none() {
+                if let Some(pos_rel) = seek_pos {
+                    secondary_seekhead_offset = Some(segment_data_start.saturating_add(pos_rel));
+                }
+            }
+        }
+        sp = send;
+    }
+
+    (cues_abs_offset, cues_seek_without_pos, secondary_seekhead_offset)
+}
+
+/// 解析 MKV 头部，提取 Segment 偏移、时长、头部内联 Cues 以及 SeekHead 中的 Cues 绝对偏移。
+fn inspect_mkv_head_cues(bytes: &[u8]) -> Option<MkvHeadCueInspection> {
     if bytes.len() < 12 || bytes[0..4] != [0x1A, 0x45, 0xDF, 0xA3] {
         return None;
     }
@@ -2202,8 +2335,7 @@ fn probe_mkv_head_has_cues(bytes: &[u8]) -> Option<bool> {
     let (ebml_sz, sz_len) = read_ebml_size(bytes, id_len)?;
     let mut pos = id_len + sz_len + usize::try_from(ebml_sz?).ok()?;
 
-    // 定位顶层 Segment (0x18538067)
-    let seg_end = loop {
+    let (segment_data_start, seg_end) = loop {
         if pos >= bytes.len() {
             return None;
         }
@@ -2212,16 +2344,25 @@ fn probe_mkv_head_has_cues(bytes: &[u8]) -> Option<bool> {
         let data_start = pos + il + sl;
         if id == 0x1853_8067 {
             pos = data_start;
-            break match sz_opt.and_then(|s| usize::try_from(s).ok()) {
+            let end = match sz_opt.and_then(|s| usize::try_from(s).ok()) {
                 Some(s) => data_start.saturating_add(s).min(bytes.len()),
                 None => bytes.len(),
             };
+            break (data_start as u64, end);
         }
         let skip = usize::try_from(sz_opt?).ok()?;
         pos = data_start.checked_add(skip)?;
     };
 
-    // 遍历 Segment 头部子元素直到首个 Cluster
+    let mut ts_scale_ns: u64 = 1_000_000;
+    let mut duration_ticks: Option<f64> = None;
+    let mut inline_cues_range: Option<(usize, usize)> = None;
+    let mut inline_cues_complete = false;
+    let mut cues_abs_offset: Option<u64> = None;
+    let mut cues_seek_without_pos = false;
+    let mut secondary_seekhead_offset: Option<u64> = None;
+    let mut reached_first_cluster = false;
+
     while pos < seg_end {
         let Some((id, il)) = read_ebml_id(bytes, pos) else {
             break;
@@ -2230,66 +2371,368 @@ fn probe_mkv_head_has_cues(bytes: &[u8]) -> Option<bool> {
             break;
         };
         let data_start = pos + il + sl;
-        if id == 0x1C53_BB6B {
-            return Some(true);
-        }
         if id == 0x1F43_B675 {
-            return Some(false);
-        }
-        if id == 0x114D_9B74 {
-            let sh_end = match sz_opt.and_then(|s| usize::try_from(s).ok()) {
-                Some(s) => data_start.saturating_add(s).min(seg_end),
-                None => seg_end,
-            };
-            let mut sp = data_start;
-            while sp < sh_end {
-                let Some((sid, sil)) = read_ebml_id(bytes, sp) else {
-                    break;
-                };
-                let Some((ssz_opt, ssl)) = read_ebml_size(bytes, sp + sil) else {
-                    break;
-                };
-                let sdata = sp + sil + ssl;
-                let Some(ssz) = ssz_opt.and_then(|s| usize::try_from(s).ok()) else {
-                    break;
-                };
-                let send = sdata.saturating_add(ssz).min(sh_end);
-                if sid == 0x4DBB {
-                    let mut kp = sdata;
-                    while kp < send {
-                        let Some((kid, kil)) = read_ebml_id(bytes, kp) else {
-                            break;
-                        };
-                        let Some((ksz_opt, ksl)) = read_ebml_size(bytes, kp + kil) else {
-                            break;
-                        };
-                        let kdata = kp + kil + ksl;
-                        let Some(ksz) = ksz_opt.and_then(|s| usize::try_from(s).ok()) else {
-                            break;
-                        };
-                        if kid == 0x53AB
-                            && ksz == 4
-                            && kdata + 4 <= send
-                            && bytes[kdata..kdata + 4] == [0x1C, 0x53, 0xBB, 0x6B]
-                        {
-                            return Some(true);
-                        }
-                        kp = kdata.saturating_add(ksz);
-                    }
-                }
-                sp = send;
-            }
+            reached_first_cluster = true;
+            break;
         }
         let Some(sz) = sz_opt.and_then(|s| usize::try_from(s).ok()) else {
             break;
         };
+        let raw_end = data_start.saturating_add(sz);
+        let elem_end = raw_end.min(seg_end);
+
+        if id == 0x1549_A966 {
+            let mut ip = data_start;
+            while ip < elem_end {
+                let Some((iid, iil)) = read_ebml_id(bytes, ip) else {
+                    break;
+                };
+                let Some((isz_opt, isl)) = read_ebml_size(bytes, ip + iil) else {
+                    break;
+                };
+                let idata = ip + iil + isl;
+                let Some(isz) = isz_opt.and_then(|s| usize::try_from(s).ok()) else {
+                    break;
+                };
+                let iend = idata.saturating_add(isz).min(elem_end);
+                if iid == 0x2AD7_B1 {
+                    if let Some(v) = read_ebml_uint_be(&bytes[idata..iend]).filter(|&v| v > 0) {
+                        ts_scale_ns = v;
+                    }
+                } else if iid == 0x4489 {
+                    if let Some(d) = read_ebml_float_be(&bytes[idata..iend]).filter(|d| d.is_finite() && *d > 0.0) {
+                        duration_ticks = Some(d);
+                    }
+                }
+                ip = iend;
+            }
+        } else if id == 0x1C53_BB6B {
+            if inline_cues_range.is_none() {
+                inline_cues_range = Some((pos, elem_end));
+                inline_cues_complete = raw_end <= bytes.len();
+            }
+            if raw_end > bytes.len() && cues_abs_offset.is_none() {
+                cues_abs_offset = Some(pos as u64);
+            }
+        } else if id == 0x114D_9B74 {
+            let (found_cues, no_pos, sec_sh) =
+                parse_seekhead_entries(bytes, data_start, elem_end, segment_data_start);
+            if cues_abs_offset.is_none() {
+                cues_abs_offset = found_cues;
+            }
+            cues_seek_without_pos |= no_pos;
+            if secondary_seekhead_offset.is_none() {
+                secondary_seekhead_offset = sec_sh;
+            }
+        }
+
         if sz == 0 && data_start == pos {
             break;
         }
-        pos = data_start.saturating_add(sz);
+        if raw_end > seg_end {
+            break;
+        }
+        pos = elem_end;
     }
 
-    None
+    let duration_sec = duration_ticks.map(|t| (t * ts_scale_ns as f64) / 1_000_000_000.0);
+    Some(MkvHeadCueInspection {
+        segment_data_start,
+        timestamp_scale_ns: ts_scale_ns,
+        duration_sec,
+        inline_cues_range,
+        inline_cues_complete,
+        cues_abs_offset,
+        cues_seek_without_pos,
+        secondary_seekhead_offset,
+        reached_first_cluster,
+    })
+}
+
+/// 从 Cues 起始切片或 Cues 尾部切片提取有效 CuePoint 数量与最大 CueTime（秒）。
+fn extract_cue_points_max_time_sec(
+    bytes: &[u8],
+    ts_scale_ns: u64,
+    is_cues_start: bool,
+    max_valid_sec: Option<f64>,
+) -> (usize, Option<f64>) {
+    let mut count = 0usize;
+    let mut max_sec: Option<f64> = None;
+
+    if is_cues_start {
+        let Some((id, il)) = read_ebml_id(bytes, 0) else {
+            return (0, None);
+        };
+        if id != 0x1C53_BB6B {
+            return (0, None);
+        }
+        let Some((sz_opt, sl)) = read_ebml_size(bytes, il) else {
+            return (0, None);
+        };
+        let start = il + sl;
+        let end = match sz_opt.and_then(|s| usize::try_from(s).ok()) {
+            Some(sz) => start.saturating_add(sz).min(bytes.len()),
+            None => bytes.len(),
+        };
+        let mut pos = start;
+        while pos < end {
+            let Some((cid, cil)) = read_ebml_id(bytes, pos) else {
+                break;
+            };
+            let Some((csz_opt, csl)) = read_ebml_size(bytes, pos + cil) else {
+                break;
+            };
+            let cdata = pos + cil + csl;
+            let Some(csz) = csz_opt.and_then(|s| usize::try_from(s).ok()) else {
+                break;
+            };
+            let cend = cdata.saturating_add(csz);
+            if cend > end {
+                break;
+            }
+            if cid == 0xBB {
+                let mut kp = cdata;
+                while kp < cend {
+                    let Some((kid, kil)) = read_ebml_id(bytes, kp) else {
+                        break;
+                    };
+                    let Some((ksz_opt, ksl)) = read_ebml_size(bytes, kp + kil) else {
+                        break;
+                    };
+                    let kdata = kp + kil + ksl;
+                    let Some(ksz) = ksz_opt.and_then(|s| usize::try_from(s).ok()) else {
+                        break;
+                    };
+                    let kend = kdata.saturating_add(ksz);
+                    if kend > cend {
+                        break;
+                    }
+                    if kid == 0xB3 {
+                        if let Some(ticks) = read_ebml_uint_be(&bytes[kdata..kend]) {
+                            let ts = (ticks as f64) * (ts_scale_ns as f64) / 1_000_000_000.0;
+                            if ts.is_finite()
+                                && ts >= 0.0
+                                && max_valid_sec.map(|m| ts <= m).unwrap_or(true)
+                            {
+                                count += 1;
+                                max_sec = Some(max_sec.map(|m| m.max(ts)).unwrap_or(ts));
+                            }
+                        }
+                        break;
+                    }
+                    kp = kend;
+                }
+            } else if cid != 0xEC {
+                break;
+            }
+            pos = cend;
+        }
+        return (count, max_sec);
+    }
+
+    // 尾部切片扫描：查找 CuePoint (0xBB) -> CueTime (0xB3) -> CueTrackPositions (0xB7)
+    let mut i = 0usize;
+    while i + 6 <= bytes.len() {
+        if bytes[i] != 0xBB {
+            i += 1;
+            continue;
+        }
+        let Some((Some(sz), sl)) = read_ebml_size(bytes, i + 1) else {
+            i += 1;
+            continue;
+        };
+        if !(4..=256).contains(&sz) {
+            i += 1;
+            continue;
+        }
+        let cdata = i + 1 + sl;
+        let cend = cdata.saturating_add(sz as usize);
+        if cend > bytes.len() {
+            i += 1;
+            continue;
+        }
+        let Some((cid, cil)) = read_ebml_id(bytes, cdata) else {
+            i += 1;
+            continue;
+        };
+        if cid != 0xB3 {
+            i += 1;
+            continue;
+        }
+        let Some((Some(csz), csl)) = read_ebml_size(bytes, cdata + cil) else {
+            i += 1;
+            continue;
+        };
+        if !(1..=8).contains(&csz) {
+            i += 1;
+            continue;
+        }
+        let ct_data = cdata + cil + csl;
+        let ct_end = ct_data + csz as usize;
+        if ct_end > cend {
+            i += 1;
+            continue;
+        }
+        let next_is_track_pos = if ct_end < cend {
+            read_ebml_id(bytes, ct_end)
+                .map(|(nid, _)| nid == 0xB7)
+                .unwrap_or(false)
+        } else {
+            false
+        };
+        if !next_is_track_pos {
+            i += 1;
+            continue;
+        }
+        if let Some(ticks) = read_ebml_uint_be(&bytes[ct_data..ct_end]) {
+            let ts = (ticks as f64) * (ts_scale_ns as f64) / 1_000_000_000.0;
+            if ts.is_finite()
+                && ts >= 0.0
+                && max_valid_sec.map(|m| ts <= m).unwrap_or(true)
+            {
+                count += 1;
+                max_sec = Some(max_sec.map(|m| m.max(ts)).unwrap_or(ts));
+                i = cend;
+                continue;
+            }
+        }
+        i += 1;
+    }
+
+    (count, max_sec)
+}
+
+fn classify_cues_coverage(
+    cue_count: usize,
+    max_cue_sec: Option<f64>,
+    duration_sec: Option<f64>,
+    truncated: bool,
+) -> (bool, &'static str, Option<f64>) {
+    if truncated || cue_count == 0 {
+        return (false, "broken", None);
+    }
+    if let (Some(cov), Some(dur)) = (max_cue_sec, duration_sec) {
+        if dur > 60.0 && cov < dur * 0.85 && (dur - cov) > 30.0 {
+            return (false, "partial", Some(cov));
+        }
+    }
+    (true, "valid", max_cue_sec)
+}
+
+async fn probe_secondary_seekhead_for_cues(
+    client: &reqwest::Client,
+    url: &str,
+    headers: &HeaderMap,
+    is_same_origin: bool,
+    seekhead_offset: u64,
+    total_size: u64,
+    segment_data_start: u64,
+) -> Option<u64> {
+    if seekhead_offset >= total_size {
+        return None;
+    }
+    let end = seekhead_offset.saturating_add(4095).min(total_size - 1);
+    let rng = format!("bytes={seekhead_offset}-{end}");
+    let req = apply_origin_safe_headers(client.get(url), headers, is_same_origin).header(RANGE, rng);
+    let Ok(Ok(resp)) = tokio::time::timeout(Duration::from_secs(6), req.send()).await else {
+        return None;
+    };
+    if !matches!(resp.status().as_u16(), 200 | 206) {
+        return None;
+    }
+    let buf = read_limited_bytes(resp, 4096).await;
+    let (id, il) = read_ebml_id(&buf, 0)?;
+    if id != 0x114D_9B74 {
+        return None;
+    }
+    let (sz_opt, sl) = read_ebml_size(&buf, il)?;
+    let sh_data = il + sl;
+    let sh_end = match sz_opt.and_then(|s| usize::try_from(s).ok()) {
+        Some(s) => sh_data.saturating_add(s).min(buf.len()),
+        None => buf.len(),
+    };
+    let (cues_off, _, _) = parse_seekhead_entries(&buf, sh_data, sh_end, segment_data_start);
+    cues_off
+}
+
+async fn verify_mkv_cues_at_offset(
+    client: &reqwest::Client,
+    url: &str,
+    headers: &HeaderMap,
+    is_same_origin: bool,
+    cues_offset: u64,
+    total_size: u64,
+    ts_scale_ns: u64,
+    duration_sec: Option<f64>,
+) -> (bool, &'static str, Option<f64>) {
+    if cues_offset >= total_size {
+        return (false, "broken", None);
+    }
+    let head_end = cues_offset.saturating_add(4095).min(total_size - 1);
+    let head_rng = format!("bytes={cues_offset}-{head_end}");
+    let req = apply_origin_safe_headers(client.get(url), headers, is_same_origin)
+        .header(RANGE, head_rng);
+    let Ok(Ok(resp)) = tokio::time::timeout(Duration::from_secs(6), req.send()).await else {
+        return (false, "broken", None);
+    };
+    if resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+        return (false, "broken", None);
+    }
+    let head_bytes = read_limited_bytes(resp, 4096).await;
+    let Some((id, il)) = read_ebml_id(&head_bytes, 0) else {
+        return (false, "broken", None);
+    };
+    if id != 0x1C53_BB6B {
+        return (false, "broken", None);
+    }
+    let Some((sz_opt, sl)) = read_ebml_size(&head_bytes, il) else {
+        return (false, "broken", None);
+    };
+    if sz_opt == Some(0) {
+        return (false, "broken", None);
+    }
+    let hdr_len = (il + sl) as u64;
+    let cues_end = sz_opt.map(|sz| cues_offset.saturating_add(hdr_len).saturating_add(sz));
+    if cues_end.map(|e| e > total_size).unwrap_or(false) {
+        return (false, "broken", None);
+    }
+
+    let max_valid_sec = duration_sec.map(|d| d * 1.15 + 30.0);
+    let (head_count, mut max_sec) =
+        extract_cue_points_max_time_sec(&head_bytes, ts_scale_ns, true, max_valid_sec);
+    if head_count == 0 {
+        return (false, "broken", None);
+    }
+
+    let fetched_end = cues_offset.saturating_add(head_bytes.len() as u64);
+    if let Some(end_off) = cues_end.filter(|&e| e > fetched_end) {
+        let tail_start = end_off
+            .saturating_sub(4096)
+            .max(cues_offset.saturating_add(hdr_len));
+        if tail_start < end_off {
+            let tail_rng = format!("bytes={tail_start}-{}", end_off - 1);
+            let tail_req = apply_origin_safe_headers(client.get(url), headers, is_same_origin)
+                .header(RANGE, tail_rng);
+            if let Ok(Ok(tail_resp)) =
+                tokio::time::timeout(Duration::from_secs(6), tail_req.send()).await
+            {
+                if tail_resp.status() == reqwest::StatusCode::PARTIAL_CONTENT {
+                    let tail_bytes = read_limited_bytes(tail_resp, 4096).await;
+                    let (_tc, tail_max) = extract_cue_points_max_time_sec(
+                        &tail_bytes,
+                        ts_scale_ns,
+                        false,
+                        max_valid_sec,
+                    );
+                    if let Some(tm) = tail_max {
+                        max_sec = Some(max_sec.map(|m| m.max(tm)).unwrap_or(tm));
+                    }
+                }
+            }
+        }
+    }
+
+    classify_cues_coverage(head_count, max_sec, duration_sec, false)
 }
 
 #[tauri::command]
@@ -2326,6 +2769,8 @@ pub async fn diagnose_stream_url(
                 total_size: None,
                 is_mkv: false,
                 has_mkv_cues: None,
+                mkv_cues_status: None,
+                mkv_cues_coverage_sec: None,
             });
         }
     };
@@ -2494,6 +2939,8 @@ pub async fn diagnose_stream_url(
     let mut mid_range_supported: Option<bool> = None;
     let mut is_mkv = final_ct_lower.contains("matroska");
     let mut has_mkv_cues: Option<bool> = None;
+    let mut mkv_cues_status: Option<String> = None;
+    let mut mkv_cues_coverage_sec: Option<f64> = None;
 
     if reachable && final_status == Some(206) {
         let is_same = same_origin(&origin_url, &current_url);
@@ -2529,10 +2976,10 @@ pub async fn diagnose_stream_url(
                 &header_map,
                 is_same,
             )
-            .header(RANGE, "bytes=0-65535");
+            .header(RANGE, "bytes=0-131071");
             match tokio::time::timeout(Duration::from_secs(6), req.send()).await {
                 Ok(Ok(r)) if matches!(r.status().as_u16(), 200 | 206) => {
-                    read_limited_bytes(r, 65_536).await
+                    read_limited_bytes(r, 131_072).await
                 }
                 _ => Vec::new(),
             }
@@ -2542,7 +2989,84 @@ pub async fn diagnose_stream_url(
         mid_range_supported = mid_res;
         if head_bytes.len() >= 4 && head_bytes[0..4] == [0x1A, 0x45, 0xDF, 0xA3] {
             is_mkv = true;
-            has_mkv_cues = probe_mkv_head_has_cues(&head_bytes);
+            if let Some(info) = inspect_mkv_head_cues(&head_bytes) {
+                let max_valid_sec = info.duration_sec.map(|d| d * 1.15 + 30.0);
+                let verified: Option<(bool, &'static str, Option<f64>)> =
+                    if let Some((start, end)) = info.inline_cues_range.filter(|_| info.inline_cues_complete) {
+                        let (cnt, max_sec) = extract_cue_points_max_time_sec(
+                            &head_bytes[start..end],
+                            info.timestamp_scale_ns,
+                            true,
+                            max_valid_sec,
+                        );
+                        Some(classify_cues_coverage(cnt, max_sec, info.duration_sec, false))
+                    } else if let Some(cues_off) = info.cues_abs_offset {
+                        if let Some(ts) = total_size.filter(|_| mid_range_supported != Some(false)) {
+                            Some(
+                                verify_mkv_cues_at_offset(
+                                    &client,
+                                    current_url.as_str(),
+                                    &header_map,
+                                    is_same,
+                                    cues_off,
+                                    ts,
+                                    info.timestamp_scale_ns,
+                                    info.duration_sec,
+                                )
+                                .await,
+                            )
+                        } else if total_size.map(|ts| cues_off >= ts).unwrap_or(false) {
+                            Some((false, "broken", None))
+                        } else {
+                            None
+                        }
+                    } else if info.cues_seek_without_pos {
+                        Some((false, "broken", None))
+                    } else if let (Some(sec_sh), Some(ts)) = (
+                        info.secondary_seekhead_offset,
+                        total_size.filter(|_| mid_range_supported != Some(false)),
+                    ) {
+                        if let Some(cues_off) = probe_secondary_seekhead_for_cues(
+                            &client,
+                            current_url.as_str(),
+                            &header_map,
+                            is_same,
+                            sec_sh,
+                            ts,
+                            info.segment_data_start,
+                        )
+                        .await
+                        {
+                            Some(
+                                verify_mkv_cues_at_offset(
+                                    &client,
+                                    current_url.as_str(),
+                                    &header_map,
+                                    is_same,
+                                    cues_off,
+                                    ts,
+                                    info.timestamp_scale_ns,
+                                    info.duration_sec,
+                                )
+                                .await,
+                            )
+                        } else if info.reached_first_cluster {
+                            Some((false, "missing", None))
+                        } else {
+                            None
+                        }
+                    } else if info.reached_first_cluster {
+                        Some((false, "missing", None))
+                    } else {
+                        None
+                    };
+
+                if let Some((valid, status_str, cov)) = verified {
+                    has_mkv_cues = Some(valid);
+                    mkv_cues_status = Some(status_str.to_string());
+                    mkv_cues_coverage_sec = cov;
+                }
+            }
         }
     } else if reachable && final_status == Some(200) {
         mid_range_supported = Some(false);
@@ -2564,28 +3088,9 @@ pub async fn diagnose_stream_url(
         total_size,
         is_mkv,
         has_mkv_cues,
+        mkv_cues_status,
+        mkv_cues_coverage_sec,
     })
-}
-
-fn read_ebml_uint_be(bytes: &[u8]) -> Option<u64> {
-    if bytes.is_empty() || bytes.len() > 8 {
-        return None;
-    }
-    let mut val = 0u64;
-    for &b in bytes {
-        val = (val << 8) | (b as u64);
-    }
-    Some(val)
-}
-
-fn read_ebml_float_be(bytes: &[u8]) -> Option<f64> {
-    match bytes.len() {
-        4 => Some(f32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as f64),
-        8 => Some(f64::from_be_bytes([
-            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-        ])),
-        _ => None,
-    }
 }
 
 struct MkvSliceHead {
@@ -2595,7 +3100,7 @@ struct MkvSliceHead {
     duration_sec: Option<f64>,
 }
 
-/// 解析 MKV 头部并生成仅将顶层 Segment Size 原地改为 Unknown Size 的前缀切片（零字节位移、不破坏任何 CRC/Info/Tracks）。
+/// 解析 MKV 头部并生成切片前缀：将 Segment Size 改为 Unknown Size，并原地 Void 化旧 SeekHead/Cues 防止越界寻址。
 fn parse_mkv_slice_head(bytes: &[u8]) -> Option<MkvSliceHead> {
     if bytes.len() < 16 || bytes[0..4] != [0x1A, 0x45, 0xDF, 0xA3] {
         return None;
@@ -2630,6 +3135,7 @@ fn parse_mkv_slice_head(bytes: &[u8]) -> Option<MkvSliceHead> {
     let mut ts_scale_ns: u64 = 1_000_000;
     let mut duration_ticks: Option<f64> = None;
     let mut first_cluster_offset: Option<usize> = None;
+    let mut void_ranges: Vec<(usize, usize)> = Vec::new();
 
     while pos < seg_end {
         let Some((id, il)) = read_ebml_id(bytes, pos) else {
@@ -2646,8 +3152,14 @@ fn parse_mkv_slice_head(bytes: &[u8]) -> Option<MkvSliceHead> {
         let Some(sz) = sz_opt.and_then(|s| usize::try_from(s).ok()) else {
             break;
         };
-        let elem_end = data_start.saturating_add(sz).min(seg_end);
-        if id == 0x1549_A966 {
+        let raw_end = data_start.saturating_add(sz);
+        if raw_end > seg_end {
+            break;
+        }
+        let elem_end = raw_end;
+        if id == 0x114D_9B74 || id == 0x1C53_BB6B {
+            void_ranges.push((pos, elem_end));
+        } else if id == 0x1549_A966 {
             // Info: 读取 TimestampScale (0x2AD7B1) 与 Duration (0x4489)
             let mut ip = data_start;
             while ip < elem_end {
@@ -2683,7 +3195,7 @@ fn parse_mkv_slice_head(bytes: &[u8]) -> Option<MkvSliceHead> {
     }
 
     let mut head_prefix = bytes[..first_cluster].to_vec();
-    // 原地将 Segment Size 改为同宽度 Unknown Size，保证内部所有偏移 0 变动
+    // 原地将 Segment Size 改为同宽度 Unknown Size，并 Void 化旧 SeekHead / Cues，保证其余偏移 0 变动
     head_prefix[seg_size_pos] = if seg_size_len == 8 {
         0x01
     } else {
@@ -2691,6 +3203,11 @@ fn parse_mkv_slice_head(bytes: &[u8]) -> Option<MkvSliceHead> {
     };
     for b in &mut head_prefix[seg_size_pos + 1..seg_size_pos + seg_size_len] {
         *b = 0xFF;
+    }
+    for (s, e) in void_ranges {
+        if e <= head_prefix.len() {
+            write_ebml_void_in_place(&mut head_prefix[s..e]);
+        }
     }
 
     let duration_sec = duration_ticks.map(|t| (t * ts_scale_ns as f64) / 1_000_000_000.0);
@@ -2802,7 +3319,7 @@ async fn stream_probe_cluster_at(
     let end = probe_offset + window_len - 1;
     let rng = format!("bytes={probe_offset}-{end}");
     let Ok((mut resp, _)) = tokio::time::timeout(
-        Duration::from_secs(4),
+        Duration::from_secs(6),
         send_with_cached_redirects(client, origin_url, headers, Some(&rng), false, resolved_cache),
     )
     .await
@@ -2818,7 +3335,7 @@ async fn stream_probe_cluster_at(
     let mut buf: Vec<u8> = Vec::with_capacity(256 * 1024);
     let mut scan_from = 0usize;
     while buf.len() < max_bytes {
-        match tokio::time::timeout(Duration::from_secs(3), resp.chunk()).await {
+        match tokio::time::timeout(Duration::from_secs(4), resp.chunk()).await {
             Ok(Ok(Some(chunk))) => {
                 let take = (max_bytes - buf.len()).min(chunk.len());
                 buf.extend_from_slice(&chunk[..take]);
@@ -2842,7 +3359,7 @@ async fn stream_probe_cluster_at(
     None
 }
 
-/// 插值二分定位目标时间之前最近的合法 MKV Cluster，最多 4 轮流式早停小 Range 请求（总耗时 ~1–2 秒）。
+/// 插值二分定位目标时间之前最近的合法 MKV Cluster，最多 6 轮流式早停小 Range 请求。
 async fn locate_mkv_cluster_for_time(
     client: &reqwest::Client,
     origin_url: &str,
@@ -2851,11 +3368,11 @@ async fn locate_mkv_cluster_for_time(
     target_sec: f64,
     fallback_duration_sec: Option<f64>,
 ) -> Option<MkvSliceOverlay> {
-    if !target_sec.is_finite() || target_sec < 30.0 {
+    if !target_sec.is_finite() || target_sec < 25.0 {
         return None;
     }
 
-    // 1. 拉取前 128 KB 解析文件头（大多数 MKV 头部 < 64 KB）；同时从 Content-Range 获取精确总大小
+    // 1. 拉取前 128 KB 解析文件头；若内嵌字体/附件导致头部超过 128 KB，自动回退拉取 1 MB
     let (head_resp, _) = send_with_cached_redirects(
         client,
         origin_url,
@@ -2878,12 +3395,34 @@ async fn locate_mkv_cluster_for_time(
         return None;
     }
     let head_bytes = read_limited_bytes(head_resp, 131_072).await;
-    let slice_head = parse_mkv_slice_head(&head_bytes)?;
+    let slice_head = match parse_mkv_slice_head(&head_bytes) {
+        Some(h) => h,
+        None if head_bytes.len() >= 131_072 && total_size > 131_072 => {
+            let ext_end = total_size.min(1_048_576) - 1;
+            let ext_rng = format!("bytes=0-{ext_end}");
+            let (ext_resp, _) = send_with_cached_redirects(
+                client,
+                origin_url,
+                headers,
+                Some(&ext_rng),
+                false,
+                resolved_cache,
+            )
+            .await
+            .ok()?;
+            if !matches!(ext_resp.status().as_u16(), 200 | 206) {
+                return None;
+            }
+            let ext_bytes = read_limited_bytes(ext_resp, 1_048_576).await;
+            parse_mkv_slice_head(&ext_bytes)?
+        }
+        None => return None,
+    };
 
     let duration_sec = slice_head
         .duration_sec
         .or(fallback_duration_sec)
-        .filter(|d| d.is_finite() && *d > 30.0)?;
+        .filter(|d| d.is_finite() && *d > 25.0)?;
     if target_sec >= duration_sec - 2.0 {
         return None;
     }
@@ -2895,9 +3434,10 @@ async fn locate_mkv_cluster_for_time(
     let mut hi_ts = duration_sec;
     let aim_sec = (target_sec - 6.0).max(0.0);
     let mut best_before: Option<(u64, f64)> = None;
+    let mut best_after: Option<(u64, f64)> = None;
 
-    // 2. 最多 4 轮插值二分，收敛至目标时间前 0~12 秒窗口内（宁早勿晚，绝不跳过未看剧情）
-    for _round in 0..4 {
+    // 2. 最多 6 轮插值二分，收敛至目标时间前 0~12 秒窗口内（宁早勿晚，绝不跳过未看剧情）
+    for _round in 0..6 {
         if hi_off <= lo_off.saturating_add(512 * 1024) || hi_ts <= lo_ts + 1.0 {
             break;
         }
@@ -2931,19 +3471,51 @@ async fn locate_mkv_cluster_for_time(
             } else {
                 break;
             }
-        } else if cl_off < hi_off {
-            hi_off = cl_off;
-            hi_ts = cl_ts;
         } else {
-            break;
+            if best_after.map(|(_, t)| cl_ts < t).unwrap_or(true) {
+                best_after = Some((cl_off, cl_ts));
+            }
+            if cl_off < hi_off {
+                hi_off = cl_off;
+                hi_ts = cl_ts;
+            } else if probe_off < hi_off && probe_off > lo_off {
+                // 4 MB 探测窗向后跨过 hi_off 时，仍收缩上界至 probe_off 避免过早放弃
+                hi_off = probe_off;
+                hi_ts = hi_ts.min(cl_ts);
+            } else {
+                break;
+            }
         }
     }
 
-    let (cut_offset, slice_start_sec) = best_before?;
-    // 安全门控：至少跳过 2 MiB 且相对从头扫流省去 20% 以上数据才启用切片
+    if best_before.is_none() && hi_off > lo_off.saturating_add(512 * 1024) {
+        let mid_off = lo_off + (hi_off - lo_off) / 2;
+        if let Some((cl_off, cl_ts)) = stream_probe_cluster_at(
+            client,
+            origin_url,
+            headers,
+            resolved_cache,
+            mid_off,
+            total_size,
+            slice_head.timestamp_scale_ns,
+            max_valid_sec,
+        )
+        .await
+        {
+            if cl_ts <= target_sec {
+                best_before = Some((cl_off, cl_ts));
+            } else if best_after.map(|(_, t)| cl_ts < t).unwrap_or(true) {
+                best_after = Some((cl_off, cl_ts));
+            }
+        }
+    }
+
+    let (cut_offset, slice_start_sec) = best_before
+        .or_else(|| best_after.filter(|(_, ts)| *ts - target_sec <= 8.0))?;
+    // 安全门控：至少跳过 1 MiB 才启用切片
     let min_meaningful_cut = slice_head
         .first_cluster_offset
-        .saturating_add(2 * 1024 * 1024);
+        .saturating_add(1 * 1024 * 1024);
     if cut_offset <= min_meaningful_cut || cut_offset >= total_size {
         return None;
     }
@@ -2967,10 +3539,10 @@ pub async fn start_stream_relay(request: StartRelayRequest) -> Result<StartedRel
 
     let slice = if let Some(target_sec) = request
         .slice_target_sec
-        .filter(|s| s.is_finite() && *s >= 30.0)
+        .filter(|s| s.is_finite() && *s >= 25.0)
     {
         tokio::time::timeout(
-            Duration::from_secs(10),
+            Duration::from_secs(18),
             locate_mkv_cluster_for_time(
                 &client,
                 &request.url,
@@ -3297,60 +3869,129 @@ mod tests {
     }
 
     #[test]
-    fn test_probe_mkv_head_has_cues_variants() {
-        assert_eq!(probe_mkv_head_has_cues(b"not an mkv file"), None);
-
-        // EBML header (empty payload) + Segment (unknown size) + Cues -> Some(true)
-        let head_cues: Vec<u8> = vec![
-            0x1A, 0x45, 0xDF, 0xA3, 0x80, // EBML len=0
-            0x18, 0x53, 0x80, 0x67, 0xFF, // Segment unknown len
-            0x1C, 0x53, 0xBB, 0x6B, 0x80, // Cues len=0
-        ];
-        assert_eq!(probe_mkv_head_has_cues(&head_cues), Some(true));
-
-        // EBML + Segment + SeekHead -> Seek -> SeekID(Cues) + Cluster -> Some(true)
-        let seek_head_cues: Vec<u8> = vec![
-            0x1A, 0x45, 0xDF, 0xA3, 0x80, // EBML len=0
-            0x18, 0x53, 0x80, 0x67, 0xFF, // Segment unknown len
-            0x11, 0x4D, 0x9B, 0x74, 0x8A, // SeekHead len=10
-            0x4D, 0xBB, 0x87, // Seek len=7
-            0x53, 0xAB, 0x84, 0x1C, 0x53, 0xBB, 0x6B, // SeekID = Cues
-            0x1F, 0x43, 0xB6, 0x75, 0x80, // Cluster
-        ];
-        assert_eq!(probe_mkv_head_has_cues(&seek_head_cues), Some(true));
-
-        // EBML + Segment + Info + Cluster (no Cues, no SeekHead Cues) -> Some(false)
-        let no_cues: Vec<u8> = vec![
-            0x1A, 0x45, 0xDF, 0xA3, 0x80, // EBML len=0
-            0x18, 0x53, 0x80, 0x67, 0xFF, // Segment unknown len
-            0x15, 0x49, 0xA9, 0x66, 0x80, // Info len=0
-            0x1F, 0x43, 0xB6, 0x75, 0x80, // Cluster len=0
-        ];
-        assert_eq!(probe_mkv_head_has_cues(&no_cues), Some(false));
+    fn test_write_ebml_void_in_place_exact_lengths() {
+        for len in [2usize, 3, 15, 128, 129, 250, 20000] {
+            let mut buf = vec![0xAAu8; len];
+            assert!(write_ebml_void_in_place(&mut buf), "len={len} should succeed");
+            let (id, il) = read_ebml_id(&buf, 0).expect("valid Void ID");
+            assert_eq!(id, 0xEC);
+            let (sz, sl) = read_ebml_size(&buf, il).expect("valid Void size");
+            assert_eq!(il + sl + (sz.unwrap() as usize), len);
+        }
+        let mut too_short = vec![0xAAu8; 1];
+        assert!(!write_ebml_void_in_place(&mut too_short));
     }
 
     #[test]
-    fn test_parse_mkv_slice_head_patches_segment_unknown_size() {
-        // EBML (empty) + Segment (fixed 2-byte size 0x40, 0x20 = 32) + Info (TimestampScale=1_000_000, Duration=1827000.0 f32) + Cluster
+    fn test_inspect_mkv_head_cues_extracts_seek_position_and_validates_cues_block() {
+        assert!(inspect_mkv_head_cues(b"not an mkv file").is_none());
+
+        // 1. SeekHead 指向 SeekID=Cues + SeekPosition=500000 -> 解析为 segment_data_start + 500000
+        let pos_bytes = 500_000u32.to_be_bytes();
+        let seek_head_cues: Vec<u8> = vec![
+            0x1A, 0x45, 0xDF, 0xA3, 0x80, // EBML len=0 (5 bytes)
+            0x18, 0x53, 0x80, 0x67, 0xFF, // Segment unknown len (5 bytes -> segment_data_start=10)
+            0x11, 0x4D, 0x9B, 0x74, 0x91, // SeekHead len=17
+            0x4D, 0xBB, 0x8E, // Seek len=14
+            0x53, 0xAB, 0x84, 0x1C, 0x53, 0xBB, 0x6B, // SeekID = Cues (7 bytes)
+            0x53, 0xAC, 0x84, pos_bytes[0], pos_bytes[1], pos_bytes[2], pos_bytes[3], // SeekPosition (7 bytes)
+            0x1F, 0x43, 0xB6, 0x75, 0x80, // Cluster
+        ];
+        let info = inspect_mkv_head_cues(&seek_head_cues).expect("should inspect");
+        assert_eq!(info.segment_data_start, 10);
+        assert_eq!(info.cues_abs_offset, Some(500_010));
+        assert!(info.reached_first_cluster);
+
+        // 2. 空 Cues 块（0 CuePoint）应判为 broken
+        let empty_cues = vec![0x1C, 0x53, 0xBB, 0x6B, 0x80];
+        let (cnt0, max0) = extract_cue_points_max_time_sec(&empty_cues, 1_000_000, true, None);
+        assert_eq!(classify_cues_coverage(cnt0, max0, Some(1800.0), false), (false, "broken", None));
+
+        // 3. 构建合法 Cues（覆盖至 1750s / 总长 1800s -> valid；仅至 600s / 总长 1800s -> partial）
+        let build_cue_point = |ms: u32| -> Vec<u8> {
+            let b = ms.to_be_bytes();
+            vec![
+                0xBB, 0x8B, // CuePoint len=11
+                0xB3, 0x84, b[0], b[1], b[2], b[3], // CueTime len=4
+                0xB7, 0x83, 0xF7, 0x81, 0x01, // CueTrackPositions
+            ]
+        };
+        let mut partial_cues = vec![0x1C, 0x53, 0xBB, 0x6B, 0x9A]; // Cues len=26 (2 CuePoints)
+        partial_cues.extend_from_slice(&build_cue_point(10_000));
+        partial_cues.extend_from_slice(&build_cue_point(600_000));
+        let (cnt_p, max_p) = extract_cue_points_max_time_sec(&partial_cues, 1_000_000, true, Some(2100.0));
+        assert_eq!(cnt_p, 2);
+        let (valid_p, status_p, cov_p) = classify_cues_coverage(cnt_p, max_p, Some(1800.0), false);
+        assert!(!valid_p);
+        assert_eq!(status_p, "partial");
+        assert!((cov_p.unwrap() - 600.0).abs() < 0.01);
+
+        // 尾部切片扫描命中 1750s -> valid
+        let tail_chunk = build_cue_point(1_750_000);
+        let (cnt_t, max_t) = extract_cue_points_max_time_sec(&tail_chunk, 1_000_000, false, Some(2100.0));
+        assert_eq!(cnt_t, 1);
+        let (valid_v, status_v, _) = classify_cues_coverage(cnt_p + cnt_t, max_t, Some(1800.0), false);
+        assert!(valid_v);
+        assert_eq!(status_v, "valid");
+
+        // 4. 无 Cues 且无 SeekHead 指向 Cues -> reached_first_cluster=true, cues_abs_offset=None
+        let no_cues: Vec<u8> = vec![
+            0x1A, 0x45, 0xDF, 0xA3, 0x80,
+            0x18, 0x53, 0x80, 0x67, 0xFF,
+            0x15, 0x49, 0xA9, 0x66, 0x80,
+            0x1F, 0x43, 0xB6, 0x75, 0x80,
+        ];
+        let info_missing = inspect_mkv_head_cues(&no_cues).expect("should inspect");
+        assert!(info_missing.reached_first_cluster);
+        assert!(info_missing.cues_abs_offset.is_none());
+        assert!(info_missing.inline_cues_range.is_none());
+    }
+
+    #[test]
+    fn test_parse_mkv_slice_head_voids_seekhead_and_cues_in_place() {
+        // EBML (empty) + Segment (fixed 2-byte size) + SeekHead + Info + Cues + Cluster
         let dur_bytes = (1_827_000.0f32).to_be_bytes();
+        let seekhead = vec![
+            0x11, 0x4D, 0x9B, 0x74, 0x8A, // SeekHead len=10 (total 15 bytes)
+            0x4D, 0xBB, 0x87,
+            0x53, 0xAB, 0x84, 0x1C, 0x53, 0xBB, 0x6B,
+        ];
+        let info = vec![
+            0x15, 0x49, 0xA9, 0x66, 0x8E, // Info len=14 (total 19 bytes)
+            0x2A, 0xD7, 0xB1, 0x83, 0x0F, 0x42, 0x40,
+            0x44, 0x89, 0x84, dur_bytes[0], dur_bytes[1], dur_bytes[2], dur_bytes[3],
+        ];
+        let inline_cues = vec![0x1C, 0x53, 0xBB, 0x6B, 0x83, 0xAA, 0xBB, 0xCC]; // total 8 bytes
+        let seg_payload_len = (seekhead.len() + info.len() + inline_cues.len() + 6) as u16;
+        let seg_sz_bytes = (seg_payload_len | 0x4000).to_be_bytes();
+
         let mut mkv: Vec<u8> = vec![
             0x1A, 0x45, 0xDF, 0xA3, 0x80, // EBML len=0 (5 bytes)
-            0x18, 0x53, 0x80, 0x67, 0x40, 0x20, // Segment len=32 (2-byte VINT at offset 9..11)
-            0x15, 0x49, 0xA9, 0x66, 0x8E, // Info len=14
-            0x2A, 0xD7, 0xB1, 0x83, 0x0F, 0x42, 0x40, // TimestampScale = 1_000_000 (7 bytes)
-            0x44, 0x89, 0x84, dur_bytes[0], dur_bytes[1], dur_bytes[2], dur_bytes[3], // Duration (7 bytes)
-            0x1F, 0x43, 0xB6, 0x75, 0x90, // Cluster at offset 30
+            0x18, 0x53, 0x80, 0x67, seg_sz_bytes[0], seg_sz_bytes[1], // Segment (6 bytes)
         ];
-        mkv.extend_from_slice(&[0u8; 16]);
+        let sh_start = mkv.len();
+        mkv.extend_from_slice(&seekhead);
+        let info_start = mkv.len();
+        mkv.extend_from_slice(&info);
+        let cues_start = mkv.len();
+        mkv.extend_from_slice(&inline_cues);
+        let cluster_start = mkv.len();
+        mkv.extend_from_slice(&[0x1F, 0x43, 0xB6, 0x75, 0x90, 0xE7, 0x81, 0x00]);
+
         let parsed = parse_mkv_slice_head(&mkv).expect("should parse slice head");
-        assert_eq!(parsed.first_cluster_offset, 30);
-        assert_eq!(parsed.head_prefix.len(), 30);
+        assert_eq!(parsed.first_cluster_offset, cluster_start as u64);
+        assert_eq!(parsed.head_prefix.len(), cluster_start);
         assert_eq!(parsed.timestamp_scale_ns, 1_000_000);
         assert!((parsed.duration_sec.unwrap() - 1827.0).abs() < 0.5);
-        // Segment size VINT (2 bytes at 9..11) should now decode as unknown size (None)
+        // Segment size VINT (2 bytes at 9..11) -> unknown size
         assert_eq!(read_ebml_size(&parsed.head_prefix, 9), Some((None, 2)));
-        // Info payload untouched
-        assert_eq!(&parsed.head_prefix[11..30], &mkv[11..30]);
+        // SeekHead 与 Cues 均原地替换为等长 Void (0xEC)，Info 原封不动
+        assert_eq!(read_ebml_id(&parsed.head_prefix, sh_start), Some((0xEC, 1)));
+        assert_eq!(read_ebml_id(&parsed.head_prefix, cues_start), Some((0xEC, 1)));
+        assert_eq!(
+            &parsed.head_prefix[info_start..info_start + info.len()],
+            &info[..]
+        );
     }
 
     #[test]

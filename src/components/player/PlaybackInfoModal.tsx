@@ -19,6 +19,7 @@ import {
   PlayerTelemetry,
   ResolvedStreamProxyInfo,
 } from '../../player/types';
+import type { MkvCuesStatus } from '../../player/playbackStateGuard';
 import { formatNetworkSpeed, formatTime } from './PlayerOsd';
 import { usePlayerStore } from '../../stores/usePlayerStore';
 import {
@@ -52,6 +53,8 @@ interface PlaybackInfoModalProps {
   userAgent?: string;
   nextPreloadStatus?: NextEpisodePreloadStatus | null;
   mkvCuesStatus?: boolean | null;
+  mkvCuesStatusDetail?: MkvCuesStatus | null;
+  mkvCuesCoverageSec?: number | null;
 }
 
 function formatBytes(bytes?: number): string {
@@ -112,6 +115,8 @@ export const PlaybackInfoModal: React.FC<PlaybackInfoModalProps> = ({
   userAgent,
   nextPreloadStatus,
   mkvCuesStatus = null,
+  mkvCuesStatusDetail = null,
+  mkvCuesCoverageSec = null,
 }) => {
   const [copied, setCopied] = useState(false);
   const playerPreferences = usePlayerStore((s) => s.playerPreferences);
@@ -161,8 +166,21 @@ export const PlaybackInfoModal: React.FC<PlaybackInfoModalProps> = ({
     containerLower.includes('mkv') ||
     containerLower.includes('matroska') ||
     Boolean(mediaSource?.Path && /\.mkv(\?|$)/i.test(mediaSource.Path));
+  const effectiveCuesStatus: MkvCuesStatus | null =
+    mkvCuesStatusDetail ??
+    (mkvCuesStatus === true ? 'valid' : mkvCuesStatus === false ? 'missing' : null);
   const mkvCuesLabel =
-    mkvCuesStatus === true ? '正常' : mkvCuesStatus === false ? '缺失' : '未探测';
+    effectiveCuesStatus === 'valid'
+      ? '正常'
+      : effectiveCuesStatus === 'partial'
+      ? mkvCuesCoverageSec != null && Number.isFinite(mkvCuesCoverageSec)
+        ? `残缺 (仅至 ${formatTime(mkvCuesCoverageSec)})`
+        : '残缺'
+      : effectiveCuesStatus === 'broken'
+      ? '损坏'
+      : effectiveCuesStatus === 'missing'
+      ? '缺失'
+      : '未探测';
 
   const handleCopyInfo = async () => {
     const lines = [
@@ -465,9 +483,11 @@ export const PlaybackInfoModal: React.FC<PlaybackInfoModalProps> = ({
                       <span className="text-slate-500 block text-[11px]">MKV 索引 (Cues)</span>
                       <span
                         className={`font-mono font-semibold ${
-                          mkvCuesStatus === true
+                          effectiveCuesStatus === 'valid'
                             ? 'text-emerald-400'
-                            : mkvCuesStatus === false
+                            : effectiveCuesStatus === 'partial' ||
+                              effectiveCuesStatus === 'broken' ||
+                              effectiveCuesStatus === 'missing'
                             ? 'text-amber-300'
                             : 'text-slate-400'
                         }`}

@@ -370,9 +370,10 @@ export class MpvPlayerEngine implements IPlayerEngine {
       await setProperty('demuxer-mkv-subtitle-preroll', 'no').catch(() => {}); // 杜绝 MKV 内嵌字幕反向扫描拖垮网络流
       await setProperty('demuxer-mkv-probe-start-time', 'no').catch(() => {}); // 避免开播探测首帧时间触发额外跨流 Seek
       await setProperty('demuxer-mkv-probe-video-duration', 'no').catch(() => {}); // 避免点播起播额外探测尾端时长
+      await setProperty('network-timeout', 15).catch(() => {});
       await setProperty(
         'stream-lavf-o',
-        'reconnect=1,reconnect_on_network_error=1,reconnect_delay_max=5'
+        'reconnect=1,reconnect_on_network_error=1,reconnect_delay_max=5,rw_timeout=15000000'
       ).catch(() => {});
       if (IS_MACOS) {
         await setProperty('title', MPV_EMBED_WINDOW_TITLE).catch(() => {});
@@ -1071,9 +1072,10 @@ export class MpvPlayerEngine implements IPlayerEngine {
       'rebase-start-time',
       options.preserveStreamTimestamps ? 'no' : 'yes'
     ).catch(() => {});
+    await setProperty('network-timeout', 15).catch(() => {});
     const lavfReconnectOpts = options.isLive
-      ? 'reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=5'
-      : 'reconnect=1,reconnect_on_network_error=1,reconnect_delay_max=5';
+      ? 'reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=5,rw_timeout=15000000'
+      : 'reconnect=1,reconnect_on_network_error=1,reconnect_delay_max=5,rw_timeout=15000000';
     await setProperty('stream-lavf-o', lavfReconnectOpts).catch(() => {});
     await this.applyNetworkHeadersToMpv(options.userAgent, options.headers);
 
@@ -1113,6 +1115,13 @@ export class MpvPlayerEngine implements IPlayerEngine {
           await this.init(null);
           await this.applyBufferConfigToMpv();
           await setProperty('http-proxy', mpvEffectiveProxy).catch(() => {});
+          await setProperty('demuxer-mkv-probe-video-duration', 'no').catch(() => {});
+          await setProperty(
+            'rebase-start-time',
+            options.preserveStreamTimestamps ? 'no' : 'yes'
+          ).catch(() => {});
+          await setProperty('network-timeout', 15).catch(() => {});
+          await setProperty('stream-lavf-o', lavfReconnectOpts).catch(() => {});
           await this.applyNetworkHeadersToMpv(options.userAgent, options.headers);
           if (this.pendingSeekTime && this.pendingSeekTime > 0) {
             await setProperty('start', `+${Math.floor(this.pendingSeekTime)}`).catch(() => {});

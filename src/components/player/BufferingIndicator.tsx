@@ -5,6 +5,7 @@ import { formatNetworkSpeed } from './PlayerOsd';
 interface BufferingIndicatorProps {
   visible: boolean;
   networkSpeed: number;
+  isSeeking?: boolean;
 }
 
 /**
@@ -13,15 +14,21 @@ interface BufferingIndicatorProps {
 export const BufferingIndicator: React.FC<BufferingIndicatorProps> = ({
   visible,
   networkSpeed,
+  isSeeking = false,
 }) => {
   if (!visible) return null;
+
+  const statusText =
+    (!networkSpeed || networkSpeed <= 0) && isSeeking
+      ? '定位中'
+      : formatNetworkSpeed(networkSpeed);
 
   return (
     <div className="fixed inset-0 z-30 pointer-events-none select-none flex items-center justify-center">
       <div className="flex items-center space-x-2 px-3.5 py-1.5 rounded-full bg-white/[0.94] dark:bg-[#141416]/[0.92] border border-black/[0.12] dark:border-white/[0.12]">
         <Loader2 className="w-3.5 h-3.5 text-[#1D1D1F] dark:text-white animate-spin shrink-0" />
         <span className="text-xs font-mono font-semibold tabular-nums text-[#1D1D1F] dark:text-white tracking-wide">
-          {formatNetworkSpeed(networkSpeed)}
+          {statusText}
         </span>
       </div>
     </div>

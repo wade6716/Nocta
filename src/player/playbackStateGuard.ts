@@ -22,6 +22,8 @@ export interface KeyframeSeekParams {
   isInitialSeek?: boolean;
 }
 
+export type MkvCuesStatus = 'valid' | 'partial' | 'missing' | 'broken';
+
 export interface StallRecoveryParams {
   elapsedMs: number;
   hasFirstFrame: boolean;
@@ -35,6 +37,9 @@ export interface StallRecoveryParams {
   diagnosticFinalStatus?: number | null;
   midRangeSupported?: boolean | null;
   hasMkvCues?: boolean | null;
+  isMkvMedia?: boolean;
+  mkvCuesStatus?: MkvCuesStatus | null;
+  mkvCuesCoverageSec?: number | null;
   demuxerOpened?: boolean;
   seekable?: boolean;
   isSeeking?: boolean;
@@ -49,6 +54,49 @@ export type StallRecoveryAction =
   | 'show_seeking_prompt'
   | 'show_non_range_prompt'
   | 'show_manual_prompt';
+
+export interface ProactiveSeekSliceParams {
+  isTauri: boolean;
+  engineType: 'mpv' | 'html5';
+  isMkvMedia: boolean;
+  activeSliceStartSec: number | null;
+  targetSeconds: number;
+  currentSeconds: number;
+  bufferedEndSeconds?: number;
+  midRangeSupported?: boolean | null;
+  hasMkvCues?: boolean | null;
+  mkvCuesStatus?: MkvCuesStatus | null;
+  mkvCuesCoverageSec?: number | null;
+}
+
+export type ProactiveSeekSliceDecision = 'normal' | 'slice' | 'exit_slice_to_direct';
+
+export interface MidSeekRecoveryParams {
+  elapsedMs: number;
+  isMpv: boolean;
+  hasFirstFrame: boolean;
+  hasError: boolean;
+  isSeeking: boolean;
+  isBuffering: boolean;
+  cacheDuration: number;
+  activeDownloadSpeed: number;
+  targetSeconds: number;
+  isMkvMedia: boolean;
+  midRangeSupported?: boolean | null;
+  hasMkvCues?: boolean | null;
+  mkvCuesStatus?: MkvCuesStatus | null;
+  mkvCuesCoverageSec?: number | null;
+  usingRelay: boolean;
+  sliceAlreadyAttempted: boolean;
+  relayAlreadyAttempted: boolean;
+}
+
+export type MidSeekRecoveryAction =
+  | 'none'
+  | 'try_mkv_slice'
+  | 'try_relay'
+  | 'show_non_range_hint'
+  | 'show_manual_hint';
 
 const MAX_STREAM_POS_SPEED_BYTES_PER_SEC = 300 * 1024 * 1024;
 
@@ -156,12 +204,23 @@ export function decideStallRecoveryAction(
     return 'show_non_range_prompt';
   }
 
-  // 方式 B：实锤无 Cues MKV 且支持中段 Range、且目标续播超过 3 分钟 (> 180s) -> 自动按需 Cluster 切片直跳
+  // 方式 B：实锤无/坏/残缺 Cues MKV（或 0 KB/s 停滞深跳 MKV）且支持中段 Range -> 自动按需 Cluster 切片直跳
+  const partialExceeded =
+    params.mkvCuesStatus === 'partial' &&
+    typeof params.mkvCuesCoverageSec === 'number' &&
+    params.targetInitialTime > params.mkvCuesCoverageSec + 5 &&
+    params.targetInitialTime >= 30;
+  const stalledDeepMkvSeek =
+    Boolean(params.isMkvMedia) &&
+    params.targetInitialTime > 180 &&
+    params.activeDownloadSpeed !== undefined &&
+    params.activeDownloadSpeed < 256 * 1024;
   if (
-    params.hasMkvCues === false &&
     params.midRangeSupported !== false &&
     !params.sliceAlreadyAttempted &&
-    params.targetInitialTime > 180
+    ((params.hasMkvCues === false && params.targetInitialTime > 180) ||
+      partialExceeded ||
+      stalledDeepMkvSeek)
   ) {
     return 'try_mkv_slice';
   }
@@ -187,4 +246,116 @@ export function decideStallRecoveryAction(
   }
 
   return 'show_manual_prompt';
+}
+
+/**
+ * 播放中拖动进度条（handleSeek）的主动切片决策：
+ * - 切片模式下回拖至 < 30s 自动退出切片模式，重载原流定位；
+ * - 已确认缺失/损坏 Cues（或超出残缺 Cues 覆盖范围）且跨度超出缓冲时，主动直切 MKV Cluster，免除从头扫流或卡死。
+ */
+export function shouldProactivelySliceOnSeek(
+  params: ProactiveSeekSliceParams
+): ProactiveSeekSliceDecision {
+  if (!params.isTauri || params.engineType !== 'mpv') {
+    return 'normal';
+  }
+
+  const bufferedFar = Math.max(params.currentSeconds, params.bufferedEndSeconds || 0);
+  if (params.activeSliceStartSec !== null) {
+    if (params.targetSeconds < 30) {
+      return 'exit_slice_to_direct';
+    }
+    if (
+      params.targetSeconds < params.activeSliceStartSec - 2 ||
+      params.targetSeconds > bufferedFar + 60
+    ) {
+      return 'slice';
+    }
+    return 'normal';
+  }
+
+  if (!params.isMkvMedia || params.midRangeSupported === false || params.targetSeconds < 30) {
+    return 'normal';
+  }
+
+  if (
+    params.targetSeconds >= params.currentSeconds - 5 &&
+    params.targetSeconds <= bufferedFar + 15
+  ) {
+    return 'normal';
+  }
+
+  if (
+    params.mkvCuesStatus === 'partial' &&
+    typeof params.mkvCuesCoverageSec === 'number'
+  ) {
+    return params.targetSeconds > params.mkvCuesCoverageSec + 5 ? 'slice' : 'normal';
+  }
+
+  const cuesDeficient =
+    params.mkvCuesStatus === 'missing' ||
+    params.mkvCuesStatus === 'broken' ||
+    params.hasMkvCues === false;
+  if (
+    cuesDeficient &&
+    (params.targetSeconds > bufferedFar + 60 || params.targetSeconds < params.currentSeconds - 60)
+  ) {
+    return 'slice';
+  }
+
+  return 'normal';
+}
+
+/**
+ * 播放中拖动进度条卡滞看门狗（8s / 15s）的恢复决策：
+ * 即使片源曾被误判或发生代理半开连接假死，8s 停滞 (< 256 KB/s) 或 15s 慢扫未出帧即切入 Rust 切片或透明中转。
+ */
+export function decideMidSeekRecoveryAction(
+  params: MidSeekRecoveryParams
+): MidSeekRecoveryAction {
+  if (
+    !params.isMpv ||
+    !params.hasFirstFrame ||
+    params.hasError ||
+    params.cacheDuration > 0.2 ||
+    (!params.isSeeking && !params.isBuffering) ||
+    params.elapsedMs < 8000
+  ) {
+    return 'none';
+  }
+
+  if (params.midRangeSupported === false) {
+    return 'show_non_range_hint';
+  }
+
+  const isStalled = params.activeDownloadSpeed < 256 * 1024;
+  const cuesDeficient =
+    params.hasMkvCues === false ||
+    params.mkvCuesStatus === 'missing' ||
+    params.mkvCuesStatus === 'broken' ||
+    (params.mkvCuesStatus === 'partial' &&
+      typeof params.mkvCuesCoverageSec === 'number' &&
+      params.targetSeconds > params.mkvCuesCoverageSec + 5);
+
+  if (
+    params.isMkvMedia &&
+    params.targetSeconds >= 30 &&
+    !params.sliceAlreadyAttempted &&
+    (cuesDeficient || isStalled || params.elapsedMs >= 15000)
+  ) {
+    return 'try_mkv_slice';
+  }
+
+  if (!params.usingRelay && !params.relayAlreadyAttempted && isStalled) {
+    return 'try_relay';
+  }
+
+  if (
+    params.elapsedMs >= 15000 &&
+    (params.sliceAlreadyAttempted || params.relayAlreadyAttempted || !params.isMkvMedia)
+  ) {
+    return 'show_manual_hint';
+  }
+
+  return 'none';
 }

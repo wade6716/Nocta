@@ -21,6 +21,8 @@ import {
   isMusicLibraryView,
 } from '../api/embyClient';
 import { MediaCard } from '../components/media/MediaCard';
+import { PosterGridSkeleton } from '../components/common/Skeletons';
+import { buildServerScopedKey, libraryPageCache } from '../services/pageCache';
 
 type WatchStatusFilter = 'all' | 'unplayed' | 'played' | 'favorite';
 type SortOptionId = 'date_desc' | 'premiere_desc' | 'rating_desc' | 'name_asc';
@@ -53,6 +55,7 @@ export const LibraryPage: React.FC = () => {
   const [items, setItems] = useState<EmbyItem[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -66,6 +69,8 @@ export const LibraryPage: React.FC = () => {
 
   const reqIdRef = useRef(0);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const genresRef = useRef<string[]>([]);
+  genresRef.current = genres;
 
   const yearOptions = useMemo(() => {
     const currentYear = new Date().getFullYear();
@@ -92,9 +97,26 @@ export const LibraryPage: React.FC = () => {
     setSelectedYear('');
     setSearchInput('');
     setDebouncedSearch('');
-    setItems([]);
-    setTotalCount(0);
     setErrorMsg(null);
+
+    const defaultCached =
+      currentServer?.id && libraryId
+        ? libraryPageCache.get(
+            buildServerScopedKey(currentServer.id, libraryId, 'all', 'date_desc')
+          )
+        : null;
+    if (defaultCached) {
+      setItems(defaultCached.data.items);
+      setTotalCount(defaultCached.data.totalCount);
+      if (defaultCached.data.genres.length > 0) {
+        setGenres(defaultCached.data.genres);
+      }
+      setLoading(false);
+    } else {
+      setItems([]);
+      setTotalCount(0);
+      setLoading(true);
+    }
 
     const matched = views.find((v) => v.Id === libraryId) || null;
     setLibraryView(matched);
@@ -131,15 +153,37 @@ export const LibraryPage: React.FC = () => {
   }, [currentServer?.id, currentServer?.url, currentServer?.accessToken, libraryId]);
 
   const fetchPage = useCallback(
-    async (startIndex: number, append: boolean) => {
+    async (startIndex: number, append: boolean, forceReload = false) => {
       if (!currentServer || !libraryId) return;
       const reqId = ++reqIdRef.current;
+      const cacheKey = buildServerScopedKey(
+        currentServer.id,
+        libraryId,
+        statusFilter,
+        sortOption,
+        selectedGenre,
+        selectedYear,
+        debouncedSearch
+      );
 
       if (append) {
         setLoadingMore(true);
       } else {
-        setLoading(true);
         setErrorMsg(null);
+        const cached = libraryPageCache.get(cacheKey);
+        if (cached && !forceReload) {
+          setItems(cached.data.items);
+          setTotalCount(cached.data.totalCount);
+          if (cached.data.genres.length > 0 && genresRef.current.length === 0) {
+            setGenres(cached.data.genres);
+          }
+          setLoading(false);
+          setRefreshing(true);
+        } else if (forceReload) {
+          setRefreshing(true);
+        } else {
+          setLoading(true);
+        }
       }
 
       const sortCfg = SORT_OPTIONS.find((s) => s.id === sortOption) || SORT_OPTIONS[0];
@@ -181,12 +225,22 @@ export const LibraryPage: React.FC = () => {
           return merged;
         });
         setTotalCount(res.TotalRecordCount);
+        if (!append) {
+          libraryPageCache.set(cacheKey, {
+            items: res.Items,
+            totalCount: res.TotalRecordCount,
+            genres: genresRef.current,
+          });
+        }
       } catch (err: any) {
         if (reqId !== reqIdRef.current) return;
-        setErrorMsg(err?.message || '加载媒体库失败');
+        if (items.length === 0) {
+          setErrorMsg(err?.message || '加载媒体库失败');
+        }
       } finally {
         if (reqId === reqIdRef.current) {
           setLoading(false);
+          setRefreshing(false);
           setLoadingMore(false);
         }
       }
@@ -293,12 +347,14 @@ export const LibraryPage: React.FC = () => {
 
             <button
               type="button"
-              onClick={() => fetchPage(0, false)}
-              disabled={loading}
+              onClick={() => fetchPage(0, false, true)}
+              disabled={loading || refreshing}
               className="p-2 rounded-full bg-white/[0.05] hover:bg-white/[0.1] border border-white/[0.08] text-slate-300 hover:text-white transition cursor-pointer disabled:opacity-50"
               title="刷新"
             >
-              <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin text-[#38BDF8]' : ''}`} />
+              <RefreshCw
+                className={`w-3.5 h-3.5 ${loading || refreshing ? 'animate-spin text-[#38BDF8]' : ''}`}
+              />
             </button>
           </div>
         </div>
@@ -406,15 +462,7 @@ export const LibraryPage: React.FC = () => {
             </button>
           </div>
         ) : loading ? (
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 gap-5 animate-pulse">
-            {Array.from({ length: 18 }).map((_, idx) => (
-              <div key={idx} className="space-y-2.5">
-                <div className="aspect-[2/3] rounded-xl bg-white/[0.05]" />
-                <div className="h-4 w-4/5 rounded bg-white/[0.06]" />
-                <div className="h-3 w-1/2 rounded bg-white/[0.04]" />
-              </div>
-            ))}
-          </div>
+          <PosterGridSkeleton count={18} variant="poster" />
         ) : items.length === 0 ? (
           <div className="py-24 text-center space-y-3">
             <p className="text-sm text-slate-400">当前筛选条件下没有找到影视作品</p>
@@ -436,7 +484,9 @@ export const LibraryPage: React.FC = () => {
                   key={item.Id}
                   item={item}
                   serverUrl={currentServer?.url || ''}
-                  onClick={(it) => navigate(`/detail/${it.Id}`)}
+                  onClick={(it) =>
+                    navigate(`/detail/${it.Id}`, { state: { previewItem: it } })
+                  }
                   aspectRatio="poster"
                 />
               ))}

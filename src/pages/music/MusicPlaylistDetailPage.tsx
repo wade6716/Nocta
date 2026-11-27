@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, ListMusic, Play, Shuffle } from 'lucide-react';
 import { EmbyItem } from '../../api/embyClient';
 import {
@@ -12,16 +12,33 @@ import {
 import { useAuthStore } from '../../stores/useAuthStore';
 import { MusicServerContext, useMusicPlayerStore } from '../../stores/useMusicPlayerStore';
 import { MusicTrackTable } from '../../components/music/MusicTrackTable';
+import {
+  MusicDetailSkeleton,
+  MusicTrackTableSkeleton,
+} from '../../components/common/Skeletons';
+import { buildServerScopedKey, musicDetailCache } from '../../services/pageCache';
 
 export const MusicPlaylistDetailPage: React.FC = () => {
   const { playlistId } = useParams<{ playlistId: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const currentServer = useAuthStore((s) => s.getCurrentServer());
   const playTracks = useMusicPlayerStore((s) => s.playTracks);
 
-  const [playlist, setPlaylist] = useState<EmbyItem | null>(null);
-  const [tracks, setTracks] = useState<EmbyItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const routePreview = (location.state as { previewItem?: EmbyItem } | null)?.previewItem ?? null;
+  const cacheKey =
+    currentServer?.id && playlistId
+      ? buildServerScopedKey(currentServer.id, 'playlist', playlistId)
+      : null;
+  const initialCache = cacheKey ? musicDetailCache.get(cacheKey)?.data : null;
+  const initialPreview =
+    initialCache?.detail || (routePreview?.Id === playlistId ? routePreview : null);
+
+  const [playlist, setPlaylist] = useState<EmbyItem | null>(initialPreview);
+  const [tracks, setTracks] = useState<EmbyItem[]>(() => initialCache?.tracks ?? []);
+  const [loading, setLoading] = useState(!initialPreview);
+  const [tracksLoading, setTracksLoading] = useState(!initialCache?.tracks);
+  const reqIdRef = useRef(0);
 
   const serverCtx: MusicServerContext | null = useMemo(() => {
     if (!currentServer) return null;
@@ -39,24 +56,53 @@ export const MusicPlaylistDetailPage: React.FC = () => {
       navigate('/music');
       return;
     }
-    let cancelled = false;
-    setLoading(true);
-    Promise.all([
-      getMusicItemDetail(currentServer.url, currentServer.userId, playlistId, currentServer.accessToken),
-      getPlaylistTracks(currentServer.url, currentServer.userId, playlistId, currentServer.accessToken),
-    ])
-      .then(([detail, list]) => {
-        if (cancelled) return;
+    const reqId = ++reqIdRef.current;
+    const isStale = () => reqId !== reqIdRef.current;
+    const key = buildServerScopedKey(currentServer.id, 'playlist', playlistId);
+    const cached = musicDetailCache.get(key)?.data;
+    const preview =
+      cached?.detail || (routePreview?.Id === playlistId ? routePreview : null);
+
+    setPlaylist(preview);
+    setTracks(cached?.tracks ?? []);
+    setLoading(!preview);
+    setTracksLoading(!cached?.tracks);
+
+    let nextDetail: EmbyItem | undefined = cached?.detail;
+    let nextTracks: EmbyItem[] | undefined = cached?.tracks;
+    const flush = () => {
+      if (!isStale() && nextDetail) {
+        musicDetailCache.set(key, { detail: nextDetail, tracks: nextTracks });
+      }
+    };
+
+    getMusicItemDetail(currentServer.url, currentServer.userId, playlistId, currentServer.accessToken)
+      .then((detail) => {
+        if (isStale()) return;
+        nextDetail = detail;
         setPlaylist(detail);
+        setLoading(false);
+        flush();
+      })
+      .catch((err) => {
+        console.error(err);
+        if (!isStale()) setLoading(false);
+      });
+
+    getPlaylistTracks(currentServer.url, currentServer.userId, playlistId, currentServer.accessToken)
+      .then((list) => {
+        if (isStale()) return;
+        nextTracks = list;
         setTracks(list);
+        flush();
       })
       .catch(console.error)
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!isStale()) setTracksLoading(false);
       });
 
     return () => {
-      cancelled = true;
+      reqIdRef.current += 1;
     };
   }, [playlistId, currentServer?.id, navigate]);
 
@@ -66,11 +112,7 @@ export const MusicPlaylistDetailPage: React.FC = () => {
   );
 
   if (loading || !playlist || !serverCtx) {
-    return (
-      <div className="py-32 flex justify-center">
-        <div className="w-8 h-8 border-2 border-purple-400 border-t-transparent rounded-full animate-spin" />
-      </div>
-    );
+    return <MusicDetailSkeleton variant="playlist" onBack={() => navigate(-1)} />;
   }
 
   const coverUrl = resolveMusicCoverUrl(currentServer!.url, playlist, {
@@ -148,7 +190,11 @@ export const MusicPlaylistDetailPage: React.FC = () => {
           </div>
         </div>
 
-        <MusicTrackTable tracks={tracks} server={serverCtx} showCover showAlbumColumn />
+        {tracksLoading && tracks.length === 0 ? (
+          <MusicTrackTableSkeleton rows={8} />
+        ) : (
+          <MusicTrackTable tracks={tracks} server={serverCtx} showCover showAlbumColumn />
+        )}
       </div>
     </div>
   );

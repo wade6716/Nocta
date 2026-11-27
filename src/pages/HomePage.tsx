@@ -343,20 +343,23 @@ export const HomePage: React.FC<{ isActive?: boolean }> = ({ isActive = true }) 
 
   const handleCardClick = (item: EmbyItem) => {
     saveHomeScroll();
-    navigate(`/detail/${item.Id}`);
+    navigate(`/detail/${item.Id}`, { state: { previewItem: item } });
   };
 
   const handleSpotlightDetail = (item: EmbyItem) => {
     saveHomeScroll();
     const targetId = item.Type === 'Episode' && item.SeriesId ? item.SeriesId : item.Id;
-    navigate(`/detail/${targetId}`);
+    navigate(
+      `/detail/${targetId}`,
+      targetId === item.Id ? { state: { previewItem: item } } : undefined
+    );
   };
 
   const handleSpotlightPlay = async (item: EmbyItem) => {
     if (!currentServer || startingSpotlightPlay) return;
     saveHomeScroll();
     if (item.Type !== 'Movie' && item.Type !== 'Episode') {
-      navigate(`/detail/${item.Id}`);
+      navigate(`/detail/${item.Id}`, { state: { previewItem: item } });
       return;
     }
     try {

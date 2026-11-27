@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Disc3, Heart, ListMusic, Mic2, Play, Shuffle } from 'lucide-react';
 import { EmbyItem } from '../../api/embyClient';
@@ -14,6 +14,11 @@ import { useAuthStore } from '../../stores/useAuthStore';
 import { useMediaStore } from '../../stores/useMediaStore';
 import { MusicServerContext, useMusicPlayerStore } from '../../stores/useMusicPlayerStore';
 import { MusicTrackTable } from '../../components/music/MusicTrackTable';
+import {
+  MusicTrackTableSkeleton,
+  PosterGridSkeleton,
+} from '../../components/common/Skeletons';
+import { buildServerScopedKey, musicBrowseCache } from '../../services/pageCache';
 
 export type MusicBrowseMode = 'albums' | 'artists' | 'playlists' | 'favorites' | 'library';
 
@@ -29,6 +34,7 @@ export const MusicBrowsePage: React.FC<{ mode: MusicBrowseMode }> = ({ mode }) =
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [sortBy, setSortBy] = useState<'DateCreated' | 'SortName' | 'ProductionYear'>('DateCreated');
+  const reqIdRef = useRef(0);
 
   const serverCtx: MusicServerContext | null = useMemo(() => {
     if (!currentServer) return null;
@@ -57,8 +63,21 @@ export const MusicBrowsePage: React.FC<{ mode: MusicBrowseMode }> = ({ mode }) =
   const fetchPage = useCallback(
     async (startIndex: number, append: boolean) => {
       if (!currentServer) return;
-      if (append) setLoadingMore(true);
-      else setLoading(true);
+      const reqId = ++reqIdRef.current;
+      const cacheKey = buildServerScopedKey(currentServer.id, mode, libraryId, sortBy);
+
+      if (append) {
+        setLoadingMore(true);
+      } else {
+        const cached = musicBrowseCache.get(cacheKey);
+        if (cached) {
+          setItems(cached.data.items);
+          setTotal(cached.data.total);
+          setLoading(false);
+        } else {
+          setLoading(true);
+        }
+      }
 
       try {
         let res: { Items: EmbyItem[]; TotalRecordCount: number };
@@ -93,12 +112,19 @@ export const MusicBrowsePage: React.FC<{ mode: MusicBrowseMode }> = ({ mode }) =
           });
         }
 
+        if (reqId !== reqIdRef.current) return;
         const fetched = res.Items || [];
-        setTotal(res.TotalRecordCount || fetched.length);
+        const nextTotal = res.TotalRecordCount || fetched.length;
+        setTotal(nextTotal);
         setItems((prev) => (append ? [...prev, ...fetched] : fetched));
+        if (!append) {
+          musicBrowseCache.set(cacheKey, { items: fetched, total: nextTotal });
+        }
       } finally {
-        setLoading(false);
-        setLoadingMore(false);
+        if (reqId === reqIdRef.current) {
+          setLoading(false);
+          setLoadingMore(false);
+        }
       }
     },
     [currentServer, mode, libraryId, sortBy]
@@ -181,9 +207,13 @@ export const MusicBrowsePage: React.FC<{ mode: MusicBrowseMode }> = ({ mode }) =
       </div>
 
       {loading ? (
-        <div className="py-28 flex justify-center">
-          <div className="w-8 h-8 border-2 border-purple-400 border-t-transparent rounded-full animate-spin" />
-        </div>
+        mode === 'favorites' ? (
+          <MusicTrackTableSkeleton rows={10} />
+        ) : mode === 'artists' ? (
+          <PosterGridSkeleton count={14} variant="circle" />
+        ) : (
+          <PosterGridSkeleton count={18} variant="square" />
+        )
       ) : items.length === 0 ? (
         <div className="py-24 text-center text-sm text-slate-400">暂无内容</div>
       ) : mode === 'favorites' && serverCtx ? (
@@ -209,7 +239,7 @@ export const MusicBrowsePage: React.FC<{ mode: MusicBrowseMode }> = ({ mode }) =
             return (
               <div
                 key={artist.Id}
-                onClick={() => navigate(`/music/artist/${artist.Id}`)}
+                onClick={() => navigate(`/music/artist/${artist.Id}`, { state: { previewItem: artist } })}
                 className="group cursor-pointer text-center"
               >
                 <div className="aspect-square rounded-full overflow-hidden bg-[#141828] border border-white/[0.08] group-hover:border-purple-400/50 shadow-lg">
@@ -245,7 +275,7 @@ export const MusicBrowsePage: React.FC<{ mode: MusicBrowseMode }> = ({ mode }) =
             return (
               <div
                 key={item.Id}
-                onClick={() => navigate(targetPath)}
+                onClick={() => navigate(targetPath, { state: { previewItem: item } })}
                 className="group cursor-pointer transition-transform duration-200 hover:-translate-y-1"
               >
                 <div className="aspect-square rounded-2xl overflow-hidden bg-[#141828] border border-white/[0.08] group-hover:border-purple-400/45 shadow-lg">

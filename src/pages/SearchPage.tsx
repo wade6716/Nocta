@@ -305,7 +305,7 @@ export const SearchPage: React.FC<{ isActive?: boolean }> = ({ isActive = true }
         setCurrentServer(target.id);
       }
     }
-    navigate(`/detail/${item.Id}`);
+    navigate(`/detail/${item.Id}`, { state: { previewItem: item } });
   };
 
   // 结果前端动态过滤（服务器二次筛选与媒体库二次筛选）

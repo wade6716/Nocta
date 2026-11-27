@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Disc3, Mic2, Play } from 'lucide-react';
 import { EmbyItem } from '../../api/embyClient';
 import {
@@ -11,18 +11,37 @@ import {
 import { useAuthStore } from '../../stores/useAuthStore';
 import { MusicServerContext, useMusicPlayerStore } from '../../stores/useMusicPlayerStore';
 import { MusicTrackTable } from '../../components/music/MusicTrackTable';
+import {
+  MusicDetailSkeleton,
+  MusicTrackTableSkeleton,
+  PosterGridSkeleton,
+} from '../../components/common/Skeletons';
+import { buildServerScopedKey, musicDetailCache } from '../../services/pageCache';
 
 export const MusicArtistDetailPage: React.FC = () => {
   const { artistId } = useParams<{ artistId: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const currentServer = useAuthStore((s) => s.getCurrentServer());
   const playTracks = useMusicPlayerStore((s) => s.playTracks);
 
-  const [artist, setArtist] = useState<EmbyItem | null>(null);
-  const [topTracks, setTopTracks] = useState<EmbyItem[]>([]);
-  const [albums, setAlbums] = useState<EmbyItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const routePreview = (location.state as { previewItem?: EmbyItem } | null)?.previewItem ?? null;
+  const cacheKey =
+    currentServer?.id && artistId
+      ? buildServerScopedKey(currentServer.id, 'artist', artistId)
+      : null;
+  const initialCache = cacheKey ? musicDetailCache.get(cacheKey)?.data : null;
+  const initialPreview =
+    initialCache?.detail || (routePreview?.Id === artistId ? routePreview : null);
+
+  const [artist, setArtist] = useState<EmbyItem | null>(initialPreview);
+  const [topTracks, setTopTracks] = useState<EmbyItem[]>(() => initialCache?.tracks ?? []);
+  const [albums, setAlbums] = useState<EmbyItem[]>(() => initialCache?.albums ?? []);
+  const [loading, setLoading] = useState(!initialPreview);
+  const [tracksLoading, setTracksLoading] = useState(!initialCache?.tracks);
+  const [albumsLoading, setAlbumsLoading] = useState(!initialCache?.albums);
   const [bioExpanded, setBioExpanded] = useState(false);
+  const reqIdRef = useRef(0);
 
   const serverCtx: MusicServerContext | null = useMemo(() => {
     if (!currentServer) return null;
@@ -40,35 +59,78 @@ export const MusicArtistDetailPage: React.FC = () => {
       navigate('/music');
       return;
     }
-    let cancelled = false;
-    setLoading(true);
-    Promise.all([
-      getMusicItemDetail(currentServer.url, currentServer.userId, artistId, currentServer.accessToken),
-      getArtistTopTracks(currentServer.url, currentServer.userId, artistId, currentServer.accessToken, 10),
-      getArtistAlbums(currentServer.url, currentServer.userId, artistId, currentServer.accessToken),
-    ])
-      .then(([detail, tracks, albumList]) => {
-        if (cancelled) return;
+    const reqId = ++reqIdRef.current;
+    const isStale = () => reqId !== reqIdRef.current;
+    const key = buildServerScopedKey(currentServer.id, 'artist', artistId);
+    const cached = musicDetailCache.get(key)?.data;
+    const preview =
+      cached?.detail || (routePreview?.Id === artistId ? routePreview : null);
+
+    setBioExpanded(false);
+    setArtist(preview);
+    setTopTracks(cached?.tracks ?? []);
+    setAlbums(cached?.albums ?? []);
+    setLoading(!preview);
+    setTracksLoading(!cached?.tracks);
+    setAlbumsLoading(!cached?.albums);
+
+    let nextDetail: EmbyItem | undefined = cached?.detail;
+    let nextTracks: EmbyItem[] | undefined = cached?.tracks;
+    let nextAlbums: EmbyItem[] | undefined = cached?.albums;
+    const flush = () => {
+      if (!isStale() && nextDetail) {
+        musicDetailCache.set(key, {
+          detail: nextDetail,
+          tracks: nextTracks,
+          albums: nextAlbums,
+        });
+      }
+    };
+
+    getMusicItemDetail(currentServer.url, currentServer.userId, artistId, currentServer.accessToken)
+      .then((detail) => {
+        if (isStale()) return;
+        nextDetail = detail;
         setArtist(detail);
+        setLoading(false);
+        flush();
+      })
+      .catch((err) => {
+        console.error(err);
+        if (!isStale()) setLoading(false);
+      });
+
+    getArtistTopTracks(currentServer.url, currentServer.userId, artistId, currentServer.accessToken, 10)
+      .then((tracks) => {
+        if (isStale()) return;
+        nextTracks = tracks;
         setTopTracks(tracks);
-        setAlbums(albumList);
+        flush();
       })
       .catch(console.error)
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!isStale()) setTracksLoading(false);
+      });
+
+    getArtistAlbums(currentServer.url, currentServer.userId, artistId, currentServer.accessToken)
+      .then((albumList) => {
+        if (isStale()) return;
+        nextAlbums = albumList;
+        setAlbums(albumList);
+        flush();
+      })
+      .catch(console.error)
+      .finally(() => {
+        if (!isStale()) setAlbumsLoading(false);
       });
 
     return () => {
-      cancelled = true;
+      reqIdRef.current += 1;
     };
   }, [artistId, currentServer?.id, navigate]);
 
   if (loading || !artist || !serverCtx) {
-    return (
-      <div className="py-32 flex justify-center">
-        <div className="w-8 h-8 border-2 border-purple-400 border-t-transparent rounded-full animate-spin" />
-      </div>
-    );
+    return <MusicDetailSkeleton variant="artist" onBack={() => navigate(-1)} />;
   }
 
   const avatarUrl = resolveMusicCoverUrl(currentServer!.url, artist, { maxWidth: 600, quality: 90 });
@@ -142,14 +204,24 @@ export const MusicArtistDetailPage: React.FC = () => {
           </div>
         </div>
 
-        {topTracks.length > 0 && (
+        {tracksLoading && topTracks.length === 0 ? (
+          <section className="space-y-3">
+            <h2 className="text-lg font-semibold text-white">热门曲目</h2>
+            <MusicTrackTableSkeleton rows={5} />
+          </section>
+        ) : topTracks.length > 0 && (
           <section className="space-y-3">
             <h2 className="text-lg font-semibold text-white">热门曲目</h2>
             <MusicTrackTable tracks={topTracks} server={serverCtx} showCover showAlbumColumn />
           </section>
         )}
 
-        {albums.length > 0 && (
+        {albumsLoading && albums.length === 0 ? (
+          <section className="space-y-4">
+            <h2 className="text-lg font-semibold text-white">全部专辑</h2>
+            <PosterGridSkeleton count={6} variant="square" />
+          </section>
+        ) : albums.length > 0 && (
           <section className="space-y-4">
             <h2 className="text-lg font-semibold text-white">全部专辑 ({albums.length})</h2>
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-5">
@@ -161,7 +233,7 @@ export const MusicArtistDetailPage: React.FC = () => {
                 return (
                   <div
                     key={alb.Id}
-                    onClick={() => navigate(`/music/album/${alb.Id}`)}
+                    onClick={() => navigate(`/music/album/${alb.Id}`, { state: { previewItem: alb } })}
                     className="group cursor-pointer transition-transform duration-200 hover:-translate-y-1"
                   >
                     <div className="aspect-square rounded-2xl overflow-hidden bg-[#141828] border border-white/[0.08] group-hover:border-purple-400/45 shadow-lg">

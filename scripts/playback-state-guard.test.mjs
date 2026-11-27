@@ -210,4 +210,113 @@ test('decideStallRecoveryAction supports relay fallback, non-Range mid-file, and
     }),
     'show_non_range_prompt'
   );
+
+  // Container already opened & actively seeking on direct stream -> DO NOT interrupt with try_relay
+  assert.equal(
+    decideStallRecoveryAction({
+      elapsedMs: 8500,
+      hasFirstFrame: false,
+      cacheDuration: 0,
+      isMpv: true,
+      hasError: false,
+      usingRelay: false,
+      relayAlreadyAttempted: false,
+      diagnosticReachable: true,
+      diagnosticFinalStatus: 206,
+      midRangeSupported: true,
+      demuxerOpened: true,
+      seekable: true,
+      isSeeking: true,
+      targetInitialTime: 110,
+    }),
+    'show_seeking_prompt'
+  );
+
+  // Actively downloading at high speed -> DO NOT interrupt with try_relay
+  assert.equal(
+    decideStallRecoveryAction({
+      elapsedMs: 8500,
+      hasFirstFrame: false,
+      cacheDuration: 0,
+      isMpv: true,
+      hasError: false,
+      usingRelay: false,
+      relayAlreadyAttempted: false,
+      diagnosticReachable: true,
+      diagnosticFinalStatus: 206,
+      midRangeSupported: true,
+      activeDownloadSpeed: 4 * 1024 * 1024,
+      targetInitialTime: 110,
+    }),
+    'show_seeking_prompt'
+  );
+
+  // Mode B: Cue-less MKV with deep resume (> 180s, e.g. 28:00) -> auto try_mkv_slice
+  assert.equal(
+    decideStallRecoveryAction({
+      elapsedMs: 8500,
+      hasFirstFrame: false,
+      cacheDuration: 0,
+      isMpv: true,
+      hasError: false,
+      usingRelay: false,
+      relayAlreadyAttempted: false,
+      sliceAlreadyAttempted: false,
+      diagnosticReachable: true,
+      diagnosticFinalStatus: 206,
+      midRangeSupported: true,
+      hasMkvCues: false,
+      demuxerOpened: true,
+      seekable: true,
+      isSeeking: true,
+      targetInitialTime: 1680,
+    }),
+    'try_mkv_slice'
+  );
+
+  // Mode B: Cue-less MKV with short skip (<= 180s, e.g. 01:50 intro skip) -> keep natural scan (show_seeking_prompt)
+  assert.equal(
+    decideStallRecoveryAction({
+      elapsedMs: 8500,
+      hasFirstFrame: false,
+      cacheDuration: 0,
+      isMpv: true,
+      hasError: false,
+      usingRelay: false,
+      relayAlreadyAttempted: false,
+      sliceAlreadyAttempted: false,
+      diagnosticReachable: true,
+      diagnosticFinalStatus: 206,
+      midRangeSupported: true,
+      hasMkvCues: false,
+      demuxerOpened: true,
+      seekable: true,
+      isSeeking: true,
+      targetInitialTime: 110,
+    }),
+    'show_seeking_prompt'
+  );
+
+  // Already attempted slice -> do NOT loop try_mkv_slice
+  assert.equal(
+    decideStallRecoveryAction({
+      elapsedMs: 8500,
+      hasFirstFrame: false,
+      cacheDuration: 0,
+      isMpv: true,
+      hasError: false,
+      usingRelay: true,
+      relayAlreadyAttempted: true,
+      sliceAlreadyAttempted: true,
+      diagnosticReachable: true,
+      diagnosticFinalStatus: 206,
+      midRangeSupported: true,
+      hasMkvCues: false,
+      demuxerOpened: true,
+      seekable: true,
+      isSeeking: true,
+      targetInitialTime: 1680,
+    }),
+    'show_seeking_prompt'
+  );
 });

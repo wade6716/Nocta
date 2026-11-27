@@ -30,15 +30,23 @@ export interface StallRecoveryParams {
   hasError: boolean;
   usingRelay: boolean;
   relayAlreadyAttempted: boolean;
+  sliceAlreadyAttempted?: boolean;
   diagnosticReachable?: boolean;
   diagnosticFinalStatus?: number | null;
   midRangeSupported?: boolean | null;
+  hasMkvCues?: boolean | null;
+  demuxerOpened?: boolean;
+  seekable?: boolean;
+  isSeeking?: boolean;
+  activeDownloadSpeed?: number;
   targetInitialTime: number;
 }
 
 export type StallRecoveryAction =
   | 'none'
   | 'try_relay'
+  | 'try_mkv_slice'
+  | 'show_seeking_prompt'
   | 'show_non_range_prompt'
   | 'show_manual_prompt';
 
@@ -124,7 +132,9 @@ export function computeStreamPosSpeed(
 /**
  * 8 秒 0 首帧卡滞看门狗的恢复决策：
  * - 上游中段不支持 Range：禁止反复重启打断，直接提示从 00:00 播放；
- * - 常规 302 卡滞：优先切换内置中转。
+ * - 已打开容器且正在寻址（demuxerOpened && seekable && isSeeking）或正在高速拉流：
+ *   证明链路已连通，禁止切中转掐断已下载数据重扫，仅给出温和定位提示；
+ * - 常规 302/握手卡滞：优先切换内置中转。
  */
 export function decideStallRecoveryAction(
   params: StallRecoveryParams
@@ -144,6 +154,27 @@ export function decideStallRecoveryAction(
     params.targetInitialTime > 15
   ) {
     return 'show_non_range_prompt';
+  }
+
+  // 方式 B：实锤无 Cues MKV 且支持中段 Range、且目标续播超过 3 分钟 (> 180s) -> 自动按需 Cluster 切片直跳
+  if (
+    params.hasMkvCues === false &&
+    params.midRangeSupported !== false &&
+    !params.sliceAlreadyAttempted &&
+    params.targetInitialTime > 180
+  ) {
+    return 'try_mkv_slice';
+  }
+
+  const activelySeekingOpenedStream =
+    Boolean(params.demuxerOpened) &&
+    params.seekable !== false &&
+    Boolean(params.isSeeking);
+  const activelyDownloading =
+    Boolean(params.activeDownloadSpeed && params.activeDownloadSpeed >= 256 * 1024);
+
+  if (params.targetInitialTime > 15 && (activelySeekingOpenedStream || activelyDownloading)) {
+    return 'show_seeking_prompt';
   }
 
   if (

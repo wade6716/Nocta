@@ -816,7 +816,11 @@ export const PlayerOsd: React.FC<PlayerOsdProps> = ({
                     : 'text-[#1D1D1F] dark:text-white/80'
                 }`}
               />
-              <span className="tabular-nums">{formatNetworkSpeed(networkSpeed)}</span>
+              <span className="tabular-nums">
+                {(!networkSpeed || networkSpeed <= 0) && Boolean(telemetry?.isSeeking)
+                  ? '定位中'
+                  : formatNetworkSpeed(networkSpeed)}
+              </span>
               <span
                 className={
                   isNetworkPopoverOpen

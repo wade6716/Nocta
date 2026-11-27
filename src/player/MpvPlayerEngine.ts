@@ -369,9 +369,10 @@ export class MpvPlayerEngine implements IPlayerEngine {
       await setProperty('hr-seek-framedrop', 'yes').catch(() => {}); // 4K 60fps HEVC HDR 跳转避免解码器拥塞黑屏
       await setProperty('demuxer-mkv-subtitle-preroll', 'no').catch(() => {}); // 杜绝 MKV 内嵌字幕反向扫描拖垮网络流
       await setProperty('demuxer-mkv-probe-start-time', 'no').catch(() => {}); // 避免开播探测首帧时间触发额外跨流 Seek
+      await setProperty('demuxer-mkv-probe-video-duration', 'no').catch(() => {}); // 避免点播起播额外探测尾端时长
       await setProperty(
         'stream-lavf-o',
-        'reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=5'
+        'reconnect=1,reconnect_on_network_error=1,reconnect_delay_max=5'
       ).catch(() => {});
       if (IS_MACOS) {
         await setProperty('title', MPV_EMBED_WINDOW_TITLE).catch(() => {});
@@ -850,8 +851,8 @@ export class MpvPlayerEngine implements IPlayerEngine {
         void (async () => {
           try {
             const posRaw = await getProperty('stream-pos', 'int64').catch(() => null);
-            const pos = typeof posRaw === 'number' ? posRaw : Number(posRaw);
-            if (!this.isDestroyed && Number.isFinite(pos) && pos >= 0) {
+            const pos = posRaw !== null && posRaw !== undefined ? Number(posRaw) : NaN;
+            if (!this.isDestroyed && Number.isFinite(pos) && pos > 0) {
               this._telemetry.streamPos = pos;
               const sampledAt = Date.now();
               if (!this._lastStreamPosSample) {
@@ -874,7 +875,7 @@ export class MpvPlayerEngine implements IPlayerEngine {
               }
               if (!this._telemetry.fileSize) {
                 const fzRaw = await getProperty('file-size', 'int64').catch(() => null);
-                const fz = typeof fzRaw === 'number' ? fzRaw : Number(fzRaw);
+                const fz = fzRaw !== null && fzRaw !== undefined ? Number(fzRaw) : NaN;
                 if (!this.isDestroyed && Number.isFinite(fz) && fz > 0) {
                   this._telemetry.fileSize = fz;
                 }
@@ -1065,10 +1066,15 @@ export class MpvPlayerEngine implements IPlayerEngine {
     await setProperty('hr-seek-framedrop', 'yes').catch(() => {});
     await setProperty('demuxer-mkv-subtitle-preroll', 'no').catch(() => {});
     await setProperty('demuxer-mkv-probe-start-time', 'no').catch(() => {});
+    await setProperty('demuxer-mkv-probe-video-duration', 'no').catch(() => {});
     await setProperty(
-      'stream-lavf-o',
-      'reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=5'
+      'rebase-start-time',
+      options.preserveStreamTimestamps ? 'no' : 'yes'
     ).catch(() => {});
+    const lavfReconnectOpts = options.isLive
+      ? 'reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=5'
+      : 'reconnect=1,reconnect_on_network_error=1,reconnect_delay_max=5';
+    await setProperty('stream-lavf-o', lavfReconnectOpts).catch(() => {});
     await this.applyNetworkHeadersToMpv(options.userAgent, options.headers);
 
     this._pausedForCache = false;
@@ -1077,7 +1083,10 @@ export class MpvPlayerEngine implements IPlayerEngine {
     this.bufferingFreezeTimePos = null;
     this.clearSeekBufferTimer();
     this.setState('loading');
-    this.pendingSeekTime = this.initialTargetTime > 0 ? this.initialTargetTime : null;
+    this.pendingSeekTime =
+      !options.preserveStreamTimestamps && this.initialTargetTime > 0
+        ? this.initialTargetTime
+        : null;
     this._currentTime = 0;
     this._duration = 0;
 

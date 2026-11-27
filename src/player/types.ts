@@ -75,6 +75,7 @@ export interface PlayerLoadOptions {
   isLive?: boolean;
   proxyOverride?: StreamProxyOverride;
   bufferConfig?: BufferConfigOptions;
+  preserveStreamTimestamps?: boolean;
 }
 
 export interface IPlayerEngine {

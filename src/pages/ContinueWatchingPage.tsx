@@ -32,6 +32,7 @@ import {
   ticksToSeconds,
 } from '../api/embyClient';
 import { fetchAndPreparePlaybackSession } from '../player/playbackSessionService';
+import { ContinueWatchingSkeleton } from '../components/common/Skeletons';
 
 type HistoryStatusFilter = 'all' | 'in_progress' | 'completed';
 
@@ -213,7 +214,7 @@ export const ContinueWatchingPage: React.FC<{ isActive?: boolean }> = ({
 
   const handleOpenDetail = (item: EmbyItem) => {
     syncServerIfNeeded(item);
-    navigate(`/detail/${item.Id}`);
+    navigate(`/detail/${item.Id}`, { state: { previewItem: item } });
   };
 
   const handlePlayItem = async (item: EmbyItem) => {
@@ -419,10 +420,7 @@ export const ContinueWatchingPage: React.FC<{ isActive?: boolean }> = ({
 
       {/* 播放记录列表正文 */}
       {loading ? (
-        <div className="flex flex-col items-center justify-center py-28 space-y-3">
-          <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-          <p className="text-xs text-slate-400 font-medium">正在同步多台 Emby 服务器观看记录...</p>
-        </div>
+        <ContinueWatchingSkeleton count={6} />
       ) : displayedItems.length === 0 ? (
         <div className="py-24 rounded-2xl border border-white/[0.06] bg-white/[0.02] flex flex-col items-center justify-center text-center px-6 space-y-2">
           <History className="w-8 h-8 text-slate-600 mb-1" />

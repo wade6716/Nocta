@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft,
   Check,
@@ -13,7 +13,17 @@ import {
   Volume2,
 } from 'lucide-react';
 import { useAuthStore } from '../stores/useAuthStore';
+import { findCachedItemById, useMediaStore } from '../stores/useMediaStore';
 import { usePlayerStore } from '../stores/usePlayerStore';
+import {
+  DetailPageSkeleton,
+  EpisodeGridSkeleton,
+} from '../components/common/Skeletons';
+import {
+  buildServerScopedKey,
+  detailPageCache,
+  DetailPageCacheData,
+} from '../services/pageCache';
 import {
   EmbyItem,
   EmbyMediaSource,
@@ -124,33 +134,121 @@ function resolveDefaultEpisode(episodes: EmbyItem[]): EmbyItem | null {
   return episodes[0];
 }
 
+interface InitialDetailSnapshot {
+  fromCache: boolean;
+  item: EmbyItem | null;
+  seriesItem: EmbyItem | null;
+  seasons: EmbyItem[];
+  selectedSeasonId: string | null;
+  episodes: EmbyItem[];
+  similarItems: EmbyItem[];
+  loading: boolean;
+  episodesLoading: boolean;
+}
+
+function resolveInitialDetailSnapshot(
+  serverId: string | undefined,
+  itemId: string | undefined,
+  routePreview: EmbyItem | null,
+  cachedPlayerItem: EmbyItem | null
+): InitialDetailSnapshot {
+  if (serverId && itemId) {
+    const cacheHit = detailPageCache.get(buildServerScopedKey(serverId, itemId));
+    if (cacheHit) {
+      return {
+        fromCache: true,
+        item: cacheHit.data.item,
+        seriesItem: cacheHit.data.seriesItem,
+        seasons: cacheHit.data.seasons,
+        selectedSeasonId: cacheHit.data.selectedSeasonId,
+        episodes: cacheHit.data.episodes,
+        similarItems: cacheHit.data.similarItems,
+        loading: false,
+        episodesLoading: false,
+      };
+    }
+  }
+
+  const preview =
+    (routePreview?.Id === itemId ? routePreview : null) ||
+    (cachedPlayerItem?.Id === itemId ? cachedPlayerItem : null) ||
+    findCachedItemById(serverId, itemId);
+
+  if (preview) {
+    const hasSeries =
+      preview.Type === 'Series' || (preview.Type === 'Episode' && !!preview.SeriesId);
+    return {
+      fromCache: false,
+      item: preview,
+      seriesItem: null,
+      seasons: [],
+      selectedSeasonId: null,
+      episodes: [],
+      similarItems: [],
+      loading: false,
+      episodesLoading: hasSeries,
+    };
+  }
+
+  return {
+    fromCache: false,
+    item: null,
+    seriesItem: null,
+    seasons: [],
+    selectedSeasonId: null,
+    episodes: [],
+    similarItems: [],
+    loading: true,
+    episodesLoading: false,
+  };
+}
+
 export const DetailPage: React.FC = () => {
   const { itemId } = useParams<{ itemId: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const currentServer = useAuthStore((s) => s.getCurrentServer());
   const setPlaybackContext = usePlayerStore((s) => s.setPlaybackContext);
+  const playbackDirtyRevision = useMediaStore((s) => s.playbackDirtyRevision);
 
   const cachedPlayerItem = usePlayerStore((s) => s.item);
-  const isCachedItem = cachedPlayerItem?.Id === itemId;
-  const [item, setItem] = useState<EmbyItem | null>(() => (isCachedItem ? cachedPlayerItem : null));
-  const [seriesItem, setSeriesItem] = useState<EmbyItem | null>(null);
+  const routePreview = (location.state as { previewItem?: EmbyItem } | null)?.previewItem ?? null;
+
+  const bootSnapRef = useRef<InitialDetailSnapshot | null>(null);
+  if (!bootSnapRef.current) {
+    bootSnapRef.current = resolveInitialDetailSnapshot(
+      currentServer?.id,
+      itemId,
+      routePreview,
+      cachedPlayerItem
+    );
+  }
+  const bootSnap = bootSnapRef.current;
+
+  const [item, setItem] = useState<EmbyItem | null>(bootSnap.item);
+  const [seriesItem, setSeriesItem] = useState<EmbyItem | null>(bootSnap.seriesItem);
   const [backdropStage, setBackdropStage] = useState(0);
-  const [loading, setLoading] = useState(!isCachedItem);
-  const [seasons, setSeasons] = useState<EmbyItem[]>([]);
-  const [selectedSeasonId, setSelectedSeasonId] = useState<string | null>(null);
-  const [episodes, setEpisodes] = useState<EmbyItem[]>([]);
-  const [episodesLoading, setEpisodesLoading] = useState(false);
-  const [similarItems, setSimilarItems] = useState<EmbyItem[]>([]);
+  const [loading, setLoading] = useState(bootSnap.loading);
+  const [seasons, setSeasons] = useState<EmbyItem[]>(bootSnap.seasons);
+  const [selectedSeasonId, setSelectedSeasonId] = useState<string | null>(
+    bootSnap.selectedSeasonId
+  );
+  const [episodes, setEpisodes] = useState<EmbyItem[]>(bootSnap.episodes);
+  const [episodesLoading, setEpisodesLoading] = useState(bootSnap.episodesLoading);
+  const [similarItems, setSimilarItems] = useState<EmbyItem[]>(bootSnap.similarItems);
   const [startingPlay, setStartingPlay] = useState(false);
   const [overviewExpanded, setOverviewExpanded] = useState(false);
   const [overviewMode, setOverviewMode] = useState<'episode' | 'series'>('episode');
-  const [selectedEpisode, setSelectedEpisode] = useState<EmbyItem | null>(null);
+  const [selectedEpisode, setSelectedEpisode] = useState<EmbyItem | null>(() =>
+    bootSnap.item?.Type === 'Episode' ? bootSnap.item : null
+  );
   const [loadingEpisodeDetail, setLoadingEpisodeDetail] = useState(false);
   const [selectedMediaSourceId, setSelectedMediaSourceId] = useState<string | undefined>(undefined);
   const loadReqIdRef = useRef(0);
   const episodeDetailReqIdRef = useRef(0);
   const prevVersionItemIdRef = useRef<string | undefined>(undefined);
+  const prevRouteKeyRef = useRef<string | null>(null);
   const heroRef = useRef<HTMLElement | null>(null);
 
   const hasSeriesContext =
@@ -180,23 +278,48 @@ export const DetailPage: React.FC = () => {
   }, [activePlayableItem?.Id, sortedItemMediaSources]);
 
   useEffect(() => {
-    setOverviewExpanded(false);
-    setOverviewMode('episode');
-    setSeriesItem(null);
-    setSelectedEpisode(null);
-    setSimilarItems([]);
-    setLoadingEpisodeDetail(false);
-    setBackdropStage(0);
     if (!currentServer || !itemId) {
       navigate('/');
       return;
     }
-    loadItemDetail();
+
+    const routeKey = `${currentServer.id}::${itemId}`;
+    const routeChanged = prevRouteKeyRef.current !== routeKey;
+    prevRouteKeyRef.current = routeKey;
+
+    if (routeChanged) {
+      setOverviewExpanded(false);
+      setOverviewMode('episode');
+      setLoadingEpisodeDetail(false);
+      setBackdropStage(0);
+
+      const snap = resolveInitialDetailSnapshot(
+        currentServer.id,
+        itemId,
+        routePreview,
+        cachedPlayerItem
+      );
+      setItem(snap.item);
+      setSeriesItem(snap.seriesItem);
+      setSeasons(snap.seasons);
+      setSelectedSeasonId(snap.selectedSeasonId);
+      setEpisodes(snap.episodes);
+      setSimilarItems(snap.similarItems);
+      setLoading(snap.loading);
+      setEpisodesLoading(snap.episodesLoading);
+      setSelectedEpisode(snap.item?.Type === 'Episode' ? snap.item : null);
+
+      loadItemDetail(snap.item, snap.fromCache);
+    } else {
+      // 仅 playbackDirtyRevision 变更（从播放页返回）：静默刷新最新进度，不闪烁骨架屏
+      loadItemDetail(item, true);
+    }
+
     return () => {
       loadReqIdRef.current += 1;
       episodeDetailReqIdRef.current += 1;
     };
-  }, [itemId, currentServer?.id]);
+  }, [itemId, currentServer?.id, playbackDirtyRevision]);
 
   const fetchEpisodeFullDetail = async (ep: EmbyItem) => {
     if (!currentServer) return;
@@ -220,94 +343,202 @@ export const DetailPage: React.FC = () => {
     }
   };
 
-  const loadItemDetail = async () => {
+  const loadItemDetail = async (
+    initialPreview: EmbyItem | null,
+    isBackgroundRefresh: boolean
+  ) => {
     if (!currentServer || !itemId) return;
     const reqId = ++loadReqIdRef.current;
     const isStale = () => reqId !== loadReqIdRef.current;
+    const cacheKey = buildServerScopedKey(currentServer.id, itemId);
+    const existingCache = detailPageCache.get(cacheKey)?.data;
 
-    try {
-      if (!item || item.Id !== itemId) {
-        setLoading(true);
-      }
-      const [detail, initialSimilar] = await Promise.all([
-        getItemDetail(
-          currentServer.url,
-          currentServer.userId,
-          itemId,
-          currentServer.accessToken
-        ),
-        getSimilarItems(
-          currentServer.url,
-          currentServer.userId,
-          itemId,
-          currentServer.accessToken,
-          14
-        ).catch(() => [] as EmbyItem[]),
-      ]);
-      if (isStale()) return;
-      setItem(detail);
-      setSimilarItems(initialSimilar);
-      const initialEp = detail.Type === 'Episode' ? detail : null;
-      setSelectedEpisode(initialEp);
-      setBackdropStage(0);
+    const cacheSnap: Partial<DetailPageCacheData> = existingCache
+      ? { ...existingCache }
+      : initialPreview
+      ? { item: initialPreview }
+      : {};
 
-      // If it's a TV Series or Episode, fetch seasons, episode list & parent series detail
-      const targetSeriesId = detail.Type === 'Series' ? detail.Id : detail.SeriesId;
-      if (targetSeriesId) {
-        const [seasonsRes, parentSeries, seriesSimilar] = await Promise.all([
+    const flushCache = () => {
+      if (isStale() || !cacheSnap.item) return;
+      detailPageCache.set(cacheKey, {
+        item: cacheSnap.item,
+        seriesItem: cacheSnap.seriesItem ?? null,
+        seasons: cacheSnap.seasons ?? [],
+        selectedSeasonId: cacheSnap.selectedSeasonId ?? null,
+        episodes: cacheSnap.episodes ?? [],
+        similarItems: cacheSnap.similarItems ?? [],
+      });
+    };
+
+    if (!initialPreview && !isBackgroundRefresh) {
+      setLoading(true);
+    }
+
+    const similarPromise = getSimilarItems(
+      currentServer.url,
+      currentServer.userId,
+      itemId,
+      currentServer.accessToken,
+      14
+    )
+      .then((sim) => {
+        if (!isStale()) {
+          setSimilarItems(sim);
+          cacheSnap.similarItems = sim;
+          flushCache();
+        }
+        return sim;
+      })
+      .catch(() => [] as EmbyItem[]);
+
+    let startedSeriesForId: string | null = null;
+
+    const runSeriesContext = async (
+      targetSeriesId: string,
+      isEpisode: boolean,
+      seasonIdHint?: string,
+      hasInitialEpisode?: boolean
+    ) => {
+      try {
+        const [seasonsRes, parentSeries] = await Promise.all([
           getSeriesSeasons(
             currentServer.url,
             currentServer.userId,
             targetSeriesId,
             currentServer.accessToken
           ),
-          detail.Type === 'Episode' && detail.SeriesId
+          isEpisode
             ? getItemDetail(
                 currentServer.url,
                 currentServer.userId,
-                detail.SeriesId,
+                targetSeriesId,
                 currentServer.accessToken
               ).catch(() => null)
             : Promise.resolve(null),
-          detail.Type === 'Episode' && detail.SeriesId && initialSimilar.length === 0
-            ? getSimilarItems(
-                currentServer.url,
-                currentServer.userId,
-                detail.SeriesId,
-                currentServer.accessToken,
-                14
-              ).catch(() => [] as EmbyItem[])
-            : Promise.resolve(null),
         ]);
         if (isStale()) return;
-        setSeriesItem(parentSeries);
-        if (seriesSimilar && seriesSimilar.length > 0) {
-          setSimilarItems(seriesSimilar);
+
+        if (isEpisode) {
+          setSeriesItem(parentSeries);
+          cacheSnap.seriesItem = parentSeries;
         }
 
         const seasonList = seasonsRes.Items || [];
         setSeasons(seasonList);
+        cacheSnap.seasons = seasonList;
+
         if (seasonList.length > 0) {
           const matchSeason =
-            seasonList.find((s) => s.Id === detail.SeasonId) || seasonList[0];
+            seasonList.find((s) => s.Id === seasonIdHint) || seasonList[0];
           setSelectedSeasonId(matchSeason.Id);
-          loadEpisodes(targetSeriesId, matchSeason.Id, reqId, !initialEp);
+          cacheSnap.selectedSeasonId = matchSeason.Id;
+          flushCache();
+          loadEpisodes(
+            targetSeriesId,
+            matchSeason.Id,
+            reqId,
+            !hasInitialEpisode,
+            isBackgroundRefresh,
+            (eps) => {
+              cacheSnap.episodes = eps;
+              flushCache();
+            }
+          );
         } else {
           setSelectedSeasonId(null);
           setEpisodes([]);
+          setEpisodesLoading(false);
+          cacheSnap.selectedSeasonId = null;
+          cacheSnap.episodes = [];
+          flushCache();
+        }
+      } catch (err) {
+        if (!isStale()) {
+          console.error('获取剧集季信息失败', err);
+          setEpisodesLoading(false);
+        }
+      }
+    };
+
+    const previewSeriesId = initialPreview
+      ? initialPreview.Type === 'Series'
+        ? initialPreview.Id
+        : initialPreview.SeriesId
+      : undefined;
+
+    if (previewSeriesId && !isBackgroundRefresh) {
+      startedSeriesForId = previewSeriesId;
+      void runSeriesContext(
+        previewSeriesId,
+        initialPreview?.Type === 'Episode',
+        initialPreview?.SeasonId,
+        initialPreview?.Type === 'Episode'
+      );
+    }
+
+    try {
+      const detail = await getItemDetail(
+        currentServer.url,
+        currentServer.userId,
+        itemId,
+        currentServer.accessToken
+      );
+      if (isStale()) return;
+
+      setItem(detail);
+      setLoading(false);
+      setBackdropStage(0);
+      cacheSnap.item = detail;
+
+      const initialEp = detail.Type === 'Episode' ? detail : null;
+      if (initialEp) {
+        setSelectedEpisode((prev) => (prev && prev.Id !== initialEp.Id ? prev : initialEp));
+      }
+      flushCache();
+
+      const targetSeriesId = detail.Type === 'Series' ? detail.Id : detail.SeriesId;
+      if (targetSeriesId) {
+        if (startedSeriesForId !== targetSeriesId) {
+          void runSeriesContext(
+            targetSeriesId,
+            detail.Type === 'Episode' && Boolean(detail.SeriesId),
+            detail.SeasonId,
+            Boolean(initialEp)
+          );
+        }
+        if (detail.Type === 'Episode' && detail.SeriesId) {
+          const initialSimilar = await similarPromise;
+          if (!isStale() && initialSimilar.length === 0) {
+            const seriesSimilar = await getSimilarItems(
+              currentServer.url,
+              currentServer.userId,
+              detail.SeriesId,
+              currentServer.accessToken,
+              14
+            ).catch(() => [] as EmbyItem[]);
+            if (!isStale() && seriesSimilar.length > 0) {
+              setSimilarItems(seriesSimilar);
+              cacheSnap.similarItems = seriesSimilar;
+              flushCache();
+            }
+          }
         }
       } else {
         setSeriesItem(null);
         setSeasons([]);
         setSelectedSeasonId(null);
         setEpisodes([]);
+        setEpisodesLoading(false);
+        cacheSnap.seriesItem = null;
+        cacheSnap.seasons = [];
+        cacheSnap.selectedSeasonId = null;
+        cacheSnap.episodes = [];
+        flushCache();
       }
     } catch (err: any) {
       if (!isStale()) {
         console.error('获取条目详情失败', err);
-      }
-    } finally {
-      if (!isStale()) {
         setLoading(false);
       }
     }
@@ -317,11 +548,15 @@ export const DetailPage: React.FC = () => {
     seriesId: string,
     seasonId: string,
     reqId?: number,
-    autoFocusDefault = false
+    autoFocusDefault = false,
+    silent = false,
+    onLoaded?: (eps: EmbyItem[]) => void
   ) => {
     if (!currentServer) return;
     try {
-      setEpisodesLoading(true);
+      if (!silent) {
+        setEpisodesLoading(true);
+      }
       const res = await getSeriesEpisodes(
         currentServer.url,
         currentServer.userId,
@@ -332,11 +567,14 @@ export const DetailPage: React.FC = () => {
       if (reqId !== undefined && reqId !== loadReqIdRef.current) return;
       const list = res.Items || [];
       setEpisodes(list);
+      onLoaded?.(list);
 
       if (autoFocusDefault && list.length > 0) {
         const defaultEp = resolveDefaultEpisode(list);
         if (defaultEp) {
-          setSelectedEpisode(defaultEp);
+          setSelectedEpisode((prev) =>
+            prev && list.some((e) => e.Id === prev.Id) ? prev : defaultEp
+          );
           fetchEpisodeFullDetail(defaultEp);
         }
       }
@@ -403,11 +641,7 @@ export const DetailPage: React.FC = () => {
   };
 
   if (loading || !item) {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-      </div>
-    );
+    return <DetailPageSkeleton onBack={() => navigate(-1)} />;
   }
 
   const isSeries = item.Type === 'Series';
@@ -936,7 +1170,7 @@ export const DetailPage: React.FC = () => {
       {hasSeriesContext && (
         <div className="w-full max-w-[1440px] mx-auto px-8 lg:px-12 mt-8">
           {episodesLoading ? (
-            <div className="py-16 text-center text-xs text-slate-400">正在同步分集列表...</div>
+            <EpisodeGridSkeleton count={8} />
           ) : (
             <EpisodeGrid
               episodes={episodes}
@@ -990,7 +1224,11 @@ export const DetailPage: React.FC = () => {
                     <MediaCard
                       item={sim}
                       serverUrl={currentServer.url}
-                      onClick={(clicked) => navigate(`/detail/${clicked.Id}`)}
+                      onClick={(clicked) =>
+                        navigate(`/detail/${clicked.Id}`, {
+                          state: { previewItem: clicked },
+                        })
+                      }
                       aspectRatio="poster"
                     />
                   </div>

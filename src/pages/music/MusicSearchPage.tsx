@@ -359,7 +359,7 @@ export const MusicSearchPage: React.FC = () => {
                       key={`${alb.ServerId || 'local'}-${alb.Id}`}
                       onClick={() => {
                         ensureServerForItem(alb);
-                        navigate(`/music/album/${alb.Id}`);
+                        navigate(`/music/album/${alb.Id}`, { state: { previewItem: alb } });
                       }}
                       className="group cursor-pointer"
                     >
@@ -398,7 +398,7 @@ export const MusicSearchPage: React.FC = () => {
                       key={`${art.ServerId || 'local'}-${art.Id}`}
                       onClick={() => {
                         ensureServerForItem(art);
-                        navigate(`/music/artist/${art.Id}`);
+                        navigate(`/music/artist/${art.Id}`, { state: { previewItem: art } });
                       }}
                       className="group cursor-pointer text-center"
                     >
@@ -434,7 +434,7 @@ export const MusicSearchPage: React.FC = () => {
                       key={`${pl.ServerId || 'local'}-${pl.Id}`}
                       onClick={() => {
                         ensureServerForItem(pl);
-                        navigate(`/music/playlist/${pl.Id}`);
+                        navigate(`/music/playlist/${pl.Id}`, { state: { previewItem: pl } });
                       }}
                       className="group cursor-pointer"
                     >

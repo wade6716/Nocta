@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Disc3,
@@ -30,6 +30,8 @@ import { useAuthStore } from '../../stores/useAuthStore';
 import { useMediaStore } from '../../stores/useMediaStore';
 import { MusicServerContext, useMusicPlayerStore } from '../../stores/useMusicPlayerStore';
 import { MusicEqualizerBars } from '../../components/music/MusicEqualizerBars';
+import { MusicHomeSkeleton } from '../../components/common/Skeletons';
+import { buildServerScopedKey, musicHomeCache } from '../../services/pageCache';
 
 export const MusicHomePage: React.FC<{ isActive?: boolean }> = ({ isActive = true }) => {
   const navigate = useNavigate();
@@ -41,14 +43,23 @@ export const MusicHomePage: React.FC<{ isActive?: boolean }> = ({ isActive = tru
   const togglePlay = useMusicPlayerStore((s) => s.togglePlay);
   const setActiveSpace = useMusicPlayerStore((s) => s.setActiveSpace);
 
-  const [loading, setLoading] = useState(true);
+  const initialCache = currentServer?.id
+    ? musicHomeCache.get(buildServerScopedKey(currentServer.id))
+    : null;
+
+  const [loading, setLoading] = useState(!initialCache);
   const [refreshing, setRefreshing] = useState(false);
-  const [musicLibs, setMusicLibs] = useState<EmbyItem[]>([]);
-  const [recentTracks, setRecentTracks] = useState<EmbyItem[]>([]);
-  const [latestAlbums, setLatestAlbums] = useState<EmbyItem[]>([]);
-  const [artists, setArtists] = useState<EmbyItem[]>([]);
-  const [playlists, setPlaylists] = useState<EmbyItem[]>([]);
+  const [musicLibs, setMusicLibs] = useState<EmbyItem[]>(() => initialCache?.data.musicLibs ?? []);
+  const [recentTracks, setRecentTracks] = useState<EmbyItem[]>(
+    () => initialCache?.data.recentTracks ?? []
+  );
+  const [latestAlbums, setLatestAlbums] = useState<EmbyItem[]>(
+    () => initialCache?.data.latestAlbums ?? []
+  );
+  const [artists, setArtists] = useState<EmbyItem[]>(() => initialCache?.data.artists ?? []);
+  const [playlists, setPlaylists] = useState<EmbyItem[]>(() => initialCache?.data.playlists ?? []);
   const [roamingLoading, setRoamingLoading] = useState(false);
+  const reqIdRef = useRef(0);
 
   const serverCtx: MusicServerContext | null = useMemo(() => {
     if (!currentServer) return null;
@@ -64,8 +75,23 @@ export const MusicHomePage: React.FC<{ isActive?: boolean }> = ({ isActive = tru
   const loadMusicHome = useCallback(
     async (isManual = false) => {
       if (!currentServer) return;
-      if (isManual) setRefreshing(true);
-      else setLoading(true);
+      const reqId = ++reqIdRef.current;
+      const cacheKey = buildServerScopedKey(currentServer.id);
+      const cached = musicHomeCache.get(cacheKey);
+
+      if (cached && !isManual) {
+        setMusicLibs(cached.data.musicLibs);
+        setRecentTracks(cached.data.recentTracks);
+        setLatestAlbums(cached.data.latestAlbums);
+        setArtists(cached.data.artists);
+        setPlaylists(cached.data.playlists);
+        setLoading(false);
+        setRefreshing(true);
+      } else if (isManual) {
+        setRefreshing(true);
+      } else {
+        setLoading(true);
+      }
 
       try {
         const libs = await getMusicLibraries(
@@ -74,6 +100,7 @@ export const MusicHomePage: React.FC<{ isActive?: boolean }> = ({ isActive = tru
           currentServer.accessToken,
           false
         );
+        if (reqId !== reqIdRef.current) return;
         setMusicLibs(libs);
 
         if (libs.length === 0) {
@@ -81,6 +108,13 @@ export const MusicHomePage: React.FC<{ isActive?: boolean }> = ({ isActive = tru
           setLatestAlbums([]);
           setArtists([]);
           setPlaylists([]);
+          musicHomeCache.set(cacheKey, {
+            musicLibs: [],
+            recentTracks: [],
+            latestAlbums: [],
+            artists: [],
+            playlists: [],
+          });
           return;
         }
 
@@ -107,14 +141,31 @@ export const MusicHomePage: React.FC<{ isActive?: boolean }> = ({ isActive = tru
             limit: 12,
           }),
         ]);
+        if (reqId !== reqIdRef.current) return;
 
-        setRecentTracks(recentRes.status === 'fulfilled' ? recentRes.value : []);
-        setLatestAlbums(albumsRes.status === 'fulfilled' ? albumsRes.value : []);
-        setArtists(artistsRes.status === 'fulfilled' ? artistsRes.value.Items || [] : []);
-        setPlaylists(playlistsRes.status === 'fulfilled' ? playlistsRes.value.Items || [] : []);
+        const nextRecent = recentRes.status === 'fulfilled' ? recentRes.value : [];
+        const nextAlbums = albumsRes.status === 'fulfilled' ? albumsRes.value : [];
+        const nextArtists = artistsRes.status === 'fulfilled' ? artistsRes.value.Items || [] : [];
+        const nextPlaylists =
+          playlistsRes.status === 'fulfilled' ? playlistsRes.value.Items || [] : [];
+
+        setRecentTracks(nextRecent);
+        setLatestAlbums(nextAlbums);
+        setArtists(nextArtists);
+        setPlaylists(nextPlaylists);
+
+        musicHomeCache.set(cacheKey, {
+          musicLibs: libs,
+          recentTracks: nextRecent,
+          latestAlbums: nextAlbums,
+          artists: nextArtists,
+          playlists: nextPlaylists,
+        });
       } finally {
-        setLoading(false);
-        setRefreshing(false);
+        if (reqId === reqIdRef.current) {
+          setLoading(false);
+          setRefreshing(false);
+        }
       }
     },
     [currentServer]
@@ -147,10 +198,10 @@ export const MusicHomePage: React.FC<{ isActive?: boolean }> = ({ isActive = tru
       if (tracks.length > 0) {
         playTracks(tracks, 0, serverCtx);
       } else {
-        navigate(`/music/album/${album.Id}`);
+        navigate(`/music/album/${album.Id}`, { state: { previewItem: album } });
       }
     } catch {
-      navigate(`/music/album/${album.Id}`);
+      navigate(`/music/album/${album.Id}`, { state: { previewItem: album } });
     }
   };
 
@@ -205,10 +256,7 @@ export const MusicHomePage: React.FC<{ isActive?: boolean }> = ({ isActive = tru
       </div>
 
       {loading ? (
-        <div className="flex flex-col items-center justify-center py-32 space-y-3">
-          <div className="w-8 h-8 border-2 border-purple-400 border-t-transparent rounded-full animate-spin" />
-          <p className="text-xs text-slate-400">正在加载音乐曲库...</p>
-        </div>
+        <MusicHomeSkeleton />
       ) : musicLibs.length === 0 ? (
         <div className="rounded-3xl bg-white/[0.03] border border-white/[0.07] p-14 text-center max-w-xl mx-auto space-y-4">
           <div className="w-16 h-16 rounded-2xl bg-purple-500/15 border border-purple-400/30 mx-auto flex items-center justify-center text-purple-300">
@@ -248,7 +296,7 @@ export const MusicHomePage: React.FC<{ isActive?: boolean }> = ({ isActive = tru
 
               <div className="relative z-10 flex items-center gap-7 w-full">
                 <div
-                  onClick={() => navigate(`/music/album/${heroAlbum.Id}`)}
+                  onClick={() => navigate(`/music/album/${heroAlbum.Id}`, { state: { previewItem: heroAlbum } })}
                   className="w-40 h-40 sm:w-48 sm:h-48 rounded-2xl overflow-hidden border border-white/[0.14] shadow-2xl flex-shrink-0 cursor-pointer bg-[#181E30]"
                 >
                   {heroCover ? (
@@ -270,7 +318,7 @@ export const MusicHomePage: React.FC<{ isActive?: boolean }> = ({ isActive = tru
                     <span>最新入库专辑</span>
                   </div>
                   <h2
-                    onClick={() => navigate(`/music/album/${heroAlbum.Id}`)}
+                    onClick={() => navigate(`/music/album/${heroAlbum.Id}`, { state: { previewItem: heroAlbum } })}
                     className="text-2xl sm:text-3xl font-extrabold text-white truncate cursor-pointer hover:text-purple-300 transition"
                   >
                     {heroAlbum.Name}
@@ -389,7 +437,7 @@ export const MusicHomePage: React.FC<{ isActive?: boolean }> = ({ isActive = tru
                   return (
                     <div
                       key={album.Id}
-                      onClick={() => navigate(`/music/album/${album.Id}`)}
+                      onClick={() => navigate(`/music/album/${album.Id}`, { state: { previewItem: album } })}
                       className="group cursor-pointer transition-transform duration-200 hover:-translate-y-1"
                     >
                       <div className="relative aspect-square rounded-2xl overflow-hidden bg-[#141828] border border-white/[0.08] group-hover:border-purple-400/45 shadow-lg shadow-black/40">
@@ -451,7 +499,7 @@ export const MusicHomePage: React.FC<{ isActive?: boolean }> = ({ isActive = tru
                   return (
                     <div
                       key={artist.Id}
-                      onClick={() => navigate(`/music/artist/${artist.Id}`)}
+                      onClick={() => navigate(`/music/artist/${artist.Id}`, { state: { previewItem: artist } })}
                       className="group cursor-pointer text-center"
                     >
                       <div className="aspect-square rounded-full overflow-hidden bg-[#141828] border border-white/[0.08] group-hover:border-purple-400/50 shadow-lg mx-auto">
@@ -502,7 +550,7 @@ export const MusicHomePage: React.FC<{ isActive?: boolean }> = ({ isActive = tru
                   return (
                     <div
                       key={pl.Id}
-                      onClick={() => navigate(`/music/playlist/${pl.Id}`)}
+                      onClick={() => navigate(`/music/playlist/${pl.Id}`, { state: { previewItem: pl } })}
                       className="group cursor-pointer transition-transform duration-200 hover:-translate-y-1"
                     >
                       <div className="aspect-square rounded-2xl overflow-hidden bg-[#141828] border border-white/[0.08] group-hover:border-purple-400/45 shadow-lg">

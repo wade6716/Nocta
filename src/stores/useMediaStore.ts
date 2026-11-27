@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { EmbyItem, FederatedHistoryServerStat, ViewCounts } from '../api/embyClient';
+import { clearAllPageCaches } from '../services/pageCache';
 
 export interface ContinueWatchingCacheData {
   serverKey: string;
@@ -119,7 +120,8 @@ export const useMediaStore = create<MediaStoreState>((set) => ({
   setHomeScrollY: (homeScrollY) =>
     set({ homeScrollY }),
 
-  clearMediaCache: () =>
+  clearMediaCache: () => {
+    clearAllPageCaches();
     set((state) => ({
       serverId: null,
       resumeItems: [],
@@ -134,6 +136,39 @@ export const useMediaStore = create<MediaStoreState>((set) => ({
       isRefreshing: false,
       homeScrollY: 0,
       cacheVersion: state.cacheVersion + 1,
-    })),
+    }));
+  },
 }));
+
+/**
+ * 从已缓存的首页/续播列表中零网络延迟反查预览条目，严格校对 serverId 防串服。
+ */
+export function findCachedItemById(
+  serverId: string | undefined,
+  itemId: string | undefined
+): EmbyItem | null {
+  if (!serverId || !itemId) return null;
+  const state = useMediaStore.getState();
+
+  if (state.serverId === serverId) {
+    const pools = [
+      state.resumeItems,
+      state.nextUpItems,
+      state.recentlyPlayedItems,
+      ...Object.values(state.latestMap),
+    ];
+    for (const list of pools) {
+      const hit = list.find((it) => it.Id === itemId);
+      if (hit) return hit;
+    }
+  }
+
+  const cwItems = state.continueWatchingCache?.items;
+  if (cwItems?.length) {
+    const hit = cwItems.find((it) => it.Id === itemId && it.ServerId === serverId);
+    if (hit) return hit;
+  }
+
+  return null;
+}
 

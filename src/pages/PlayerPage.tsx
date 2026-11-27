@@ -36,8 +36,14 @@ import {
   resolveEmbyFallbackStreamCandidates,
   EMBY_USER_AGENT_PRESETS,
   DEFAULT_EMBY_USER_AGENT,
+  formatFileSize,
 } from '../api/embyClient';
 import { resolveMpvProxyDetailed } from '../player/MpvPlayerEngine';
+import {
+  buildBufferingStatusHint,
+  decideStallRecoveryAction,
+  shouldDanmakuRun,
+} from '../player/playbackStateGuard';
 import {
   IPlayerEngine,
   PlayerTelemetry,
@@ -49,7 +55,7 @@ import { PlayerEngineFactory } from '../player/PlayerEngineFactory';
 import { isTauriEnvironment } from '../api/http';
 import { MpvDanmakuBridge } from '../components/player/MpvDanmakuBridge';
 import { DanmakuLayer } from '../components/player/DanmakuLayer';
-import { PlayerOsd, formatTime } from '../components/player/PlayerOsd';
+import { PlayerOsd, formatNetworkSpeed, formatTime } from '../components/player/PlayerOsd';
 import { DanmakuDrawer } from '../components/player/DanmakuDrawer';
 import { PlaybackInfoModal } from '../components/player/PlaybackInfoModal';
 import { BufferingIndicator } from '../components/player/BufferingIndicator';
@@ -114,6 +120,31 @@ interface StreamDiagnosticReport {
   userAgent: string;
   summary: string;
   hops: DiagnosticHop[];
+  midRangeSupported?: boolean | null;
+  totalSize?: number | null;
+  isMkv?: boolean;
+  hasMkvCues?: boolean | null;
+  mkvHeadSummary?: string | null;
+  fileTruncated?: boolean;
+  expectedSize?: number | null;
+  maxPlayableSec?: number | null;
+}
+
+interface RelayStats {
+  token: string;
+  bytesSent: number;
+  requestCount: number;
+  lastStatus?: number | null;
+  lastRange?: string | null;
+  lastContentRange?: string | null;
+  lastError?: string | null;
+  virtualCuesActive: boolean;
+  virtualCuesCount: number;
+  virtualCuesReason?: string | null;
+  fileTruncated?: boolean;
+  expectedSize?: number | null;
+  maxPlayableSec?: number | null;
+  recentRequests: string[];
 }
 
 function redactUrlForReport(raw?: string | null): string {
@@ -200,11 +231,17 @@ export const PlayerPage: React.FC = () => {
   const [reloadToken, setReloadToken] = useState(0);
   const [isLoadingVideo, setIsLoadingVideo] = useState(true);
   const [isBuffering, setIsBuffering] = useState(false);
+  const [hasFirstFrame, setHasFirstFrame] = useState(false);
+  const [demuxerMode, setDemuxerMode] = useState<'auto' | 'lavf'>('auto');
+  const [stallNotice, setStallNotice] = useState<string | null>(null);
+  const [stallReport, setStallReport] = useState<StreamDiagnosticReport | null>(null);
   const [videoError, setVideoError] = useState<string | null>(null);
   const [diagnosticReport, setDiagnosticReport] = useState<StreamDiagnosticReport | null>(null);
   const [diagnosingStream, setDiagnosingStream] = useState(false);
   const [diagnosticCopied, setDiagnosticCopied] = useState(false);
   const [usingRelayStream, setUsingRelayStream] = useState(false);
+  const [relayVirtualCuesCount, setRelayVirtualCuesCount] = useState(0);
+  const [relayStats, setRelayStats] = useState<RelayStats | null>(null);
   const [videoDimensions, setVideoDimensions] = useState<{ width: number; height: number } | null>(null);
   const [networkSpeed, setNetworkSpeed] = useState<number>(0);
   const [speedHistory, setSpeedHistory] = useState<number[]>([]);
@@ -227,6 +264,16 @@ export const PlayerPage: React.FC = () => {
 
   // Refs to prevent stale closures, race conditions & accidental 0s progress wipe
   const hasInitialSeekedRef = useRef(false);
+  const hasFirstFrameRef = useRef(false);
+  const isLoadingVideoRef = useRef(true);
+  const isBufferingRef = useRef(false);
+  const pausedRef = useRef(paused);
+  const videoErrorRef = useRef<string | null>(null);
+  const telemetryRef = useRef<PlayerTelemetry>({});
+  const demuxerModeRef = useRef<'auto' | 'lavf'>('auto');
+  const lavfFallbackAttemptedRef = useRef(false);
+  const skipInitialIntroOnceRef = useRef(false);
+  const seekingTargetRef = useRef<number | undefined>(undefined);
   const initialTimeRef = useRef<number>(initialTime);
   const lastValidTimeRef = useRef<number>(initialTime);
   const lastStoreTimeUpdateRef = useRef<{ at: number; time: number; dur: number }>({
@@ -240,6 +287,10 @@ export const PlayerPage: React.FC = () => {
   const storeRevisionRef = useRef(1);
   const applyingOverlayPatchRef = useRef(false);
   const networkSpeedRef = useRef(0);
+  const usingRelayStreamRef = useRef(false);
+  const lastMpvNonZeroSpeedAtRef = useRef(0);
+  const relayVirtualCuesCountRef = useRef(0);
+  const relayStatsSampleRef = useRef<{ bytes: number; at: number } | null>(null);
   const handleVideoErrorRef = useRef<(errMsg?: string) => void>(() => {});
   const runStreamDiagnosticRef = useRef<(autoRelay: boolean) => void>(() => {});
   const relayFallbackAttemptedRef = useRef(false);
@@ -259,6 +310,11 @@ export const PlayerPage: React.FC = () => {
   const switchToEpisodeRef = useRef<(targetEp: EmbyItem) => Promise<void>>(async () => {});
 
   cancelAutoNextRef.current = cancelAutoNext;
+  pausedRef.current = paused;
+  videoErrorRef.current = videoError;
+  isLoadingVideoRef.current = isLoadingVideo;
+  isBufferingRef.current = isBuffering;
+  telemetryRef.current = telemetry;
 
   useEffect(() => {
     proxyOverrideRef.current = proxyOverride;
@@ -454,13 +510,35 @@ export const PlayerPage: React.FC = () => {
     showMiniHud,
   });
 
+  const setLoadingState = useCallback((loading: boolean) => {
+    isLoadingVideoRef.current = loading;
+    setIsLoadingVideo(loading);
+  }, []);
+
+  const setFirstFrameState = useCallback((ready: boolean) => {
+    hasFirstFrameRef.current = ready;
+    setHasFirstFrame(ready);
+  }, []);
+
   const updateBuffering = useCallback(
     (next: boolean) => {
+      isBufferingRef.current = next;
       setIsBuffering(next);
       setBuffering(next);
     },
     [setBuffering]
   );
+
+  const syncBridgePlaybackState = useCallback(() => {
+    const canRun = shouldDanmakuRun({
+      paused: pausedRef.current,
+      isLoadingVideo: isLoadingVideoRef.current,
+      isBuffering: isBufferingRef.current,
+      hasFirstFrame: hasFirstFrameRef.current,
+      hasError: Boolean(videoErrorRef.current),
+    });
+    bridge.onMpvPauseChange(!canRun);
+  }, [bridge]);
 
   // Sync streamUrl when store changes
   useEffect(() => {
@@ -471,7 +549,15 @@ export const PlayerPage: React.FC = () => {
       if (!/\/relay\//.test(streamUrl)) {
         relayFallbackAttemptedRef.current = false;
         altCandidateFallbackAttemptedRef.current = false;
+        lavfFallbackAttemptedRef.current = false;
+        demuxerModeRef.current = 'auto';
+        setDemuxerMode('auto');
+        usingRelayStreamRef.current = false;
         setUsingRelayStream(false);
+        relayVirtualCuesCountRef.current = 0;
+        setRelayVirtualCuesCount(0);
+        setRelayStats(null);
+        relayStatsSampleRef.current = null;
         setDiagnosticReport(null);
         setDiagnosticCopied(false);
         if (isTauriEnvironment() && activeRelayTokenRef.current) {
@@ -480,9 +566,14 @@ export const PlayerPage: React.FC = () => {
         }
       }
       setCurrentStreamUrl(streamUrl);
-      setIsLoadingVideo(true);
+      setFirstFrameState(false);
+      setLoadingState(true);
       updateBuffering(false);
+      setStallNotice(null);
+      setStallReport(null);
       setVideoError(null);
+      videoErrorRef.current = null;
+      seekingTargetRef.current = undefined;
       setAbLoopA(null);
       setAbLoopB(null);
       setCancelAutoNext(false);
@@ -492,8 +583,16 @@ export const PlayerPage: React.FC = () => {
       appliedPrefTrackUrlRef.current = null;
       lastStoreTimeUpdateRef.current = { at: 0, time: 0, dur: 0 };
       resetOutroForNewStream();
+      syncBridgePlaybackState();
     }
-  }, [streamUrl, resetOutroForNewStream, updateBuffering]);
+  }, [
+    streamUrl,
+    resetOutroForNewStream,
+    setFirstFrameState,
+    setLoadingState,
+    syncBridgePlaybackState,
+    updateBuffering,
+  ]);
 
   // 采样 30 秒实时下载速率历史曲线
   useEffect(() => {
@@ -559,9 +658,23 @@ export const PlayerPage: React.FC = () => {
       if (!hasInitialSeekedRef.current && targetInitSec > 0 && cur < 1) {
         return;
       }
+      // MPV 首帧就绪门控：引擎仍处于 loading 且尚未确认首帧/VO 时，禁止仅凭静态 time-pos 撤掉加载页
+      if (
+        engineType === 'mpv' &&
+        engine.state === 'loading' &&
+        !telemetryRef.current.firstFrameReady &&
+        !telemetryRef.current.voConfigured
+      ) {
+        return;
+      }
       hasInitialSeekedRef.current = true;
       lastValidTimeRef.current = cur;
-      setIsLoadingVideo(false);
+      seekingTargetRef.current = undefined;
+      setFirstFrameState(true);
+      setLoadingState(false);
+      setStallNotice(null);
+      setStallReport(null);
+      syncBridgePlaybackState();
       bridge.onMpvTimePos(cur);
       checkOutroAtTime(cur, dur);
 
@@ -586,42 +699,54 @@ export const PlayerPage: React.FC = () => {
       if (!active || isSwitchingEpisodeRef.current) return;
       switch (st) {
         case 'loading':
-          setIsLoadingVideo(true);
+          setFirstFrameState(false);
+          setLoadingState(true);
           updateBuffering(false);
           setVideoError(null);
+          videoErrorRef.current = null;
+          syncBridgePlaybackState();
           break;
         case 'playing':
           updateBuffering(false);
-          if (!hasInitialSeekedRef.current && initialTimeRef.current > 0) {
-            setPaused(false);
-            bridge.onMpvPauseChange(false);
-            break;
-          }
-          setIsLoadingVideo(false);
+          pausedRef.current = false;
           setPaused(false);
-          bridge.onMpvPauseChange(false);
+          if (
+            (engineType === 'html5' ||
+              telemetryRef.current.firstFrameReady ||
+              telemetryRef.current.voConfigured ||
+              hasInitialSeekedRef.current) &&
+            !(!hasInitialSeekedRef.current && initialTimeRef.current > 0)
+          ) {
+            setFirstFrameState(true);
+            setLoadingState(false);
+            setStallNotice(null);
+            setStallReport(null);
+          }
+          syncBridgePlaybackState();
           break;
         case 'paused':
           updateBuffering(false);
-          if (!hasInitialSeekedRef.current && initialTimeRef.current > 0) {
-            setPaused(true);
-            bridge.onMpvPauseChange(true);
-            break;
-          }
-          setIsLoadingVideo(false);
+          pausedRef.current = true;
           setPaused(true);
-          bridge.onMpvPauseChange(true);
+          if (
+            (hasFirstFrameRef.current || engineType === 'html5') &&
+            !(!hasInitialSeekedRef.current && initialTimeRef.current > 0)
+          ) {
+            setLoadingState(false);
+          }
+          syncBridgePlaybackState();
           break;
         case 'buffering':
           updateBuffering(true);
-          bridge.onMpvPauseChange(true);
+          syncBridgePlaybackState();
           break;
         case 'ended':
-          setIsLoadingVideo(false);
+          setLoadingState(false);
           updateBuffering(false);
+          pausedRef.current = true;
           setPaused(true);
           clearOutroOnEnded();
-          bridge.onMpvPauseChange(true);
+          syncBridgePlaybackState();
           if (
             nextEpisodeRef.current &&
             usePlayerStore.getState().playerPreferences.autoPlayNext &&
@@ -678,12 +803,22 @@ export const PlayerPage: React.FC = () => {
 
     const unlistenSpeed = engine.onNetworkSpeed?.((spd) => {
       if (!active) return;
+      if (spd > 0) {
+        lastMpvNonZeroSpeedAtRef.current = Date.now();
+      } else if (
+        usingRelayStreamRef.current &&
+        relayStatsSampleRef.current &&
+        Date.now() - relayStatsSampleRef.current.at < 1500
+      ) {
+        return;
+      }
       networkSpeedRef.current = spd;
       setNetworkSpeed(spd);
     });
 
     const unlistenTelemetry = engine.onTelemetry?.((t) => {
       if (!active) return;
+      telemetryRef.current = t;
       setTelemetry(t);
     });
 
@@ -706,13 +841,17 @@ export const PlayerPage: React.FC = () => {
       engine.destroy();
       engineRef.current = null;
     };
-  }, [engineType, updateBuffering]);
+  }, [engineType, setFirstFrameState, setLoadingState, syncBridgePlaybackState, updateBuffering]);
 
   // Sync streamUrl / reloadToken into active engine
   useEffect(() => {
     if (currentStreamUrl && engineRef.current) {
-      const resolved = resolveInitialPlaybackTime(initialTimeRef.current);
+      const resolved = skipInitialIntroOnceRef.current
+        ? { seconds: 0, skippedIntro: false }
+        : resolveInitialPlaybackTime(initialTimeRef.current);
+      skipInitialIntroOnceRef.current = false;
       initialTimeRef.current = resolved.seconds;
+      seekingTargetRef.current = resolved.seconds > 0 ? resolved.seconds : undefined;
       const prefs = usePlayerStore.getState().playerPreferences;
       const liveServer = useAuthStore.getState().getCurrentServer();
       const effectiveUserAgent = resolveEmbyUserAgent(liveServer?.userAgent, liveServer?.url);
@@ -733,6 +872,7 @@ export const PlayerPage: React.FC = () => {
           userAgent: effectiveUserAgent,
           headers: streamHeaders,
           proxyOverride: proxyOverrideRef.current,
+          demuxer: demuxerModeRef.current,
           bufferConfig: {
             bufferDurationSeconds: prefs.bufferDurationSeconds,
             mediaBitrateBps: effectiveBitrateBpsRef.current,
@@ -745,7 +885,7 @@ export const PlayerPage: React.FC = () => {
     }
   }, [currentStreamUrl, reloadToken, resolveInitialPlaybackTime]);
 
-  // 收集当前播放涉及的视频直链、.strm 路径、外挂字幕，并在后台静默探测 302 重定向链
+  // 收集当前播放涉及的视频直链、.strm 路径、外挂字幕（静态 URL 立即记录，302 并发探测延后至首帧就绪后避免干扰起播）
   useEffect(() => {
     const liveServer = useAuthStore.getState().getCurrentServer();
     if (!liveServer?.id) return;
@@ -781,13 +921,19 @@ export const PlayerPage: React.FC = () => {
     }
 
     setCurrentRedirectHosts([]);
+  }, [currentStreamUrl, mediaSource?.Id, item?.Id]);
 
-    if (
-      !isTauriEnvironment() ||
-      !hostsState.settings.probePlaybackRedirects ||
-      !targetStreamUrl ||
-      !/^https?:\/\//i.test(targetStreamUrl)
-    ) {
+  // 首帧出画后再静默探测 302 重定向链以收集 CDN/网盘域名，避免起播期并发请求干扰单连接 302 节点
+  useEffect(() => {
+    if (!hasFirstFrame) return;
+    const liveServer = useAuthStore.getState().getCurrentServer();
+    if (!liveServer?.id) return;
+
+    const hostsState = useEmbyHostsStore.getState();
+    if (!hostsState.settings.enabled || !hostsState.settings.probePlaybackRedirects) return;
+
+    const targetStreamUrl = upstreamStreamUrlRef.current || currentStreamUrl;
+    if (!isTauriEnvironment() || !targetStreamUrl || !/^https?:\/\//i.test(targetStreamUrl)) {
       return;
     }
 
@@ -850,7 +996,7 @@ export const PlayerPage: React.FC = () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [currentStreamUrl, mediaSource?.Id, item?.Id]);
+  }, [hasFirstFrame, currentStreamUrl, mediaSource?.Id, item?.Id]);
 
   // 响应缓冲时长与内存上限实时变化
   useEffect(() => {
@@ -1106,7 +1252,9 @@ export const PlayerPage: React.FC = () => {
       currentTime,
       duration: effectiveDuration,
       paused,
-      isLoadingVideo: isLoadingVideo || isBuffering,
+      isLoadingVideo,
+      isBuffering,
+      hasFirstFrame,
       videoError,
       telemetry,
       proxyOverride,
@@ -1129,11 +1277,19 @@ export const PlayerPage: React.FC = () => {
 
       const reqId = ++episodeSwitchReqIdRef.current;
       try {
-        setIsLoadingVideo(true);
+        setFirstFrameState(false);
+        setLoadingState(true);
         updateBuffering(false);
+        setStallNotice(null);
+        setStallReport(null);
         setVideoError(null);
+        videoErrorRef.current = null;
+        lavfFallbackAttemptedRef.current = false;
+        demuxerModeRef.current = 'auto';
+        setDemuxerMode('auto');
         setActivePanel('none');
         setAutoNextCountdown(null);
+        syncBridgePlaybackState();
 
         // 立刻暂停旧流，防止在拉取 Emby 会话期间继续触发旧流进度或 EOF 事件
         engineRef.current?.pause().catch(() => {});
@@ -1200,7 +1356,9 @@ export const PlayerPage: React.FC = () => {
         isSwitchingEpisodeRef.current = false;
         switchingTargetIdRef.current = null;
         setVideoError(err?.message || '切换剧集失败');
-        setIsLoadingVideo(false);
+        videoErrorRef.current = err?.message || '切换剧集失败';
+        setLoadingState(false);
+        syncBridgePlaybackState();
       }
     },
     [
@@ -1212,7 +1370,10 @@ export const PlayerPage: React.FC = () => {
       reportStoppedNow,
       consumePreloadedSession,
       setPlaybackContext,
+      setFirstFrameState,
+      setLoadingState,
       showMiniHud,
+      syncBridgePlaybackState,
       updateBuffering,
       updateTime,
     ]
@@ -1244,9 +1405,17 @@ export const PlayerPage: React.FC = () => {
 
       initialTimeRef.current = liveSec;
       hasInitialSeekedRef.current = liveSec <= 0;
-      setIsLoadingVideo(true);
+      setFirstFrameState(false);
+      setLoadingState(true);
       updateBuffering(false);
+      setStallNotice(null);
+      setStallReport(null);
       setVideoError(null);
+      videoErrorRef.current = null;
+      lavfFallbackAttemptedRef.current = false;
+      demuxerModeRef.current = 'auto';
+      setDemuxerMode('auto');
+      syncBridgePlaybackState();
       setPlaybackContext({
         item,
         mediaSource: ms,
@@ -1273,8 +1442,11 @@ export const PlayerPage: React.FC = () => {
       currentTime,
       engineType,
       releaseActivePreload,
+      setFirstFrameState,
+      setLoadingState,
       setPlaybackContext,
       showMiniHud,
+      syncBridgePlaybackState,
       updateBuffering,
     ]
   );
@@ -1394,8 +1566,9 @@ export const PlayerPage: React.FC = () => {
   const applyPlaybackPaused = useCallback(
     (nextPaused: boolean, fromKeyboard = false) => {
       if (isLoadingVideo || videoError) return;
+      pausedRef.current = nextPaused;
       setPaused(nextPaused);
-      bridge.onMpvPauseChange(nextPaused);
+      syncBridgePlaybackState();
 
       if (engineRef.current) {
         nextPaused ? engineRef.current.pause() : engineRef.current.play();
@@ -1408,7 +1581,14 @@ export const PlayerPage: React.FC = () => {
       const liveTime = lastValidTimeRef.current || usePlayerStore.getState().currentTime;
       reportEventProgress(liveTime, nextPaused, nextPaused ? 'Pause' : 'Unpause');
     },
-    [isLoadingVideo, videoError, setPaused, bridge, resetHideTimer, reportEventProgress]
+    [
+      isLoadingVideo,
+      videoError,
+      setPaused,
+      syncBridgePlaybackState,
+      resetHideTimer,
+      reportEventProgress,
+    ]
   );
 
   const handleTogglePlay = (fromKeyboard = false) => {
@@ -1451,6 +1631,7 @@ export const PlayerPage: React.FC = () => {
 
   const handleSeek = (targetSeconds: number) => {
     const clamped = Math.max(0, effectiveDuration > 0 ? Math.min(effectiveDuration, targetSeconds) : targetSeconds);
+    seekingTargetRef.current = clamped;
     lastValidTimeRef.current = clamped;
     lastStoreTimeUpdateRef.current = {
       at: Date.now(),
@@ -1745,9 +1926,14 @@ export const PlayerPage: React.FC = () => {
       diagReqIdRef.current += 1;
       relayFallbackAttemptedRef.current = false;
       altCandidateFallbackAttemptedRef.current = false;
+      lavfFallbackAttemptedRef.current = false;
+      demuxerModeRef.current = 'auto';
+      setDemuxerMode('auto');
       setUsingRelayStream(false);
       setDiagnosticReport(null);
       setDiagnosticCopied(false);
+      setStallNotice(null);
+      setStallReport(null);
       if (isTauriEnvironment() && activeRelayTokenRef.current) {
         invoke('stop_stream_relay', { token: activeRelayTokenRef.current }).catch(() => {});
         activeRelayTokenRef.current = null;
@@ -1756,9 +1942,12 @@ export const PlayerPage: React.FC = () => {
       const liveSec = lastValidTimeRef.current || engineRef.current.currentTime || currentTime;
       initialTimeRef.current = liveSec;
       hasInitialSeekedRef.current = liveSec <= 0;
-      setIsLoadingVideo(true);
+      setFirstFrameState(false);
+      setLoadingState(true);
       updateBuffering(false);
       setVideoError(null);
+      videoErrorRef.current = null;
+      syncBridgePlaybackState();
       if (upstreamStreamUrlRef.current && upstreamStreamUrlRef.current !== currentStreamUrl) {
         releaseActivePreload();
         setCurrentStreamUrl(upstreamStreamUrlRef.current);
@@ -1775,7 +1964,16 @@ export const PlayerPage: React.FC = () => {
             : '正按全局代理配置重连...',
       });
     },
-    [currentStreamUrl, currentTime, releaseActivePreload, showMiniHud, updateBuffering]
+    [
+      currentStreamUrl,
+      currentTime,
+      releaseActivePreload,
+      setFirstFrameState,
+      setLoadingState,
+      showMiniHud,
+      syncBridgePlaybackState,
+      updateBuffering,
+    ]
   );
 
   const handleToggleFullscreen = async () => {
@@ -2120,12 +2318,17 @@ export const PlayerPage: React.FC = () => {
     (errMsg?: string) => {
       console.warn('[Video Error Event] engine:', engineType, 'err:', errMsg);
 
-      setIsLoadingVideo(false);
+      setLoadingState(false);
+      setFirstFrameState(false);
       updateBuffering(false);
+      pausedRef.current = true;
       setPaused(true);
 
       if (!currentServer || !item || !mediaSource || !playSessionId) {
-        setVideoError('未获取到媒体播放会话信息');
+        const msg = '未获取到媒体播放会话信息';
+        videoErrorRef.current = msg;
+        setVideoError(msg);
+        syncBridgePlaybackState();
         return;
       }
 
@@ -2134,28 +2337,43 @@ export const PlayerPage: React.FC = () => {
         const videoCodec = (
           mediaSource.MediaStreams?.find((s) => s.Type === 'Video')?.Codec || ''
         ).toUpperCase();
-        setVideoError(
-          `当前片源为 ${container}${videoCodec ? ` (${videoCodec})` : ''} 格式，HTML5 浏览器内核无法直接解码播放。客户端已严格禁止触发 Emby 服务端转码以保护服务器性能。请使用 MPV 原生硬解引擎播放原画。`
-        );
+        const msg = `当前片源为 ${container}${videoCodec ? ` (${videoCodec})` : ''} 格式，HTML5 浏览器内核无法直接解码播放。客户端已严格禁止触发 Emby 服务端转码以保护服务器性能。请使用 MPV 原生硬解引擎播放原画。`;
+        videoErrorRef.current = msg;
+        setVideoError(msg);
+        syncBridgePlaybackState();
         return;
       }
 
       if (errMsg && (errMsg.includes('初始化 libmpv') || errMsg.includes('FFI error'))) {
+        videoErrorRef.current = errMsg;
         setVideoError(errMsg);
+        syncBridgePlaybackState();
         return;
       }
 
-      setVideoError(
-        errMsg
-          ? `直连媒体流播放中断 (${errMsg})。请检查网络连接或代理配置。`
-          : '无法打开该媒体直连流，请检查网络连接、代理路由或重试。'
-      );
+      const msg = errMsg
+        ? `直连媒体流播放中断 (${errMsg})。请检查网络连接或代理配置。`
+        : '无法打开该媒体直连流，请检查网络连接、代理路由或重试。';
+      videoErrorRef.current = msg;
+      setVideoError(msg);
+      syncBridgePlaybackState();
 
       if (isTauriEnvironment()) {
         runStreamDiagnosticRef.current(true);
       }
     },
-    [currentServer, item, mediaSource, playSessionId, engineType, setPaused, updateBuffering]
+    [
+      currentServer,
+      item,
+      mediaSource,
+      playSessionId,
+      engineType,
+      setFirstFrameState,
+      setLoadingState,
+      setPaused,
+      syncBridgePlaybackState,
+      updateBuffering,
+    ]
   );
 
   useEffect(() => {
@@ -2200,11 +2418,16 @@ export const PlayerPage: React.FC = () => {
       invoke('stop_stream_relay', { token: activeRelayTokenRef.current }).catch(() => {});
       activeRelayTokenRef.current = null;
     }
+    usingRelayStreamRef.current = false;
     setUsingRelayStream(false);
+    relayVirtualCuesCountRef.current = 0;
+    setRelayVirtualCuesCount(0);
+    setRelayStats(null);
+    relayStatsSampleRef.current = null;
   }, []);
 
   const startRelayPlayback = useCallback(
-    async (targetUrl?: string) => {
+    async (targetUrl?: string, opts?: { enableMkvVirtualCues?: boolean }) => {
       const liveServer = useAuthStore.getState().getCurrentServer();
       const target =
         targetUrl ||
@@ -2218,7 +2441,12 @@ export const PlayerPage: React.FC = () => {
         serverUrl: liveServer.url,
       });
       const resolvedProxy = await resolveMpvProxyDetailed(target, proxyOverrideRef.current);
-      const started = await invoke<{ token: string; localUrl: string }>('start_stream_relay', {
+      const started = await invoke<{
+        token: string;
+        localUrl: string;
+        virtualCuesActive?: boolean;
+        virtualCuesCount?: number;
+      }>('start_stream_relay', {
         request: {
           url: target,
           proxyUrl: (resolvedProxy.rustProxy ?? resolvedProxy.effectiveProxy) || null,
@@ -2226,24 +2454,208 @@ export const PlayerPage: React.FC = () => {
             'User-Agent': ua,
             ...streamHeaders,
           },
+          initialTimeSec: initialTimeRef.current || 0,
+          durationSec: effectiveDuration || 0,
+          enableMkvVirtualCues: opts?.enableMkvVirtualCues ?? true,
         },
       });
 
+      const cuesCount = started.virtualCuesActive ? started.virtualCuesCount || 0 : 0;
       activeRelayTokenRef.current = started.token;
+      usingRelayStreamRef.current = true;
       setUsingRelayStream(true);
+      relayVirtualCuesCountRef.current = cuesCount;
+      setRelayVirtualCuesCount(cuesCount);
+      setRelayStats(null);
+      relayStatsSampleRef.current = { bytes: 0, at: Date.now() };
       setVideoError(null);
+      videoErrorRef.current = null;
       setDiagnosticReport(null);
       setDiagnosticCopied(false);
-      setIsLoadingVideo(true);
+      setStallNotice(null);
+      setStallReport(null);
+      setFirstFrameState(false);
+      setLoadingState(true);
       updateBuffering(false);
       hasInitialSeekedRef.current = false;
       resetOutroForNewStream();
-      const resolvedInit = resolveInitialPlaybackTime(initialTimeRef.current);
+      const resolvedInit = skipInitialIntroOnceRef.current
+        ? { seconds: 0, skippedIntro: false }
+        : resolveInitialPlaybackTime(initialTimeRef.current);
       initialTimeRef.current = resolvedInit.seconds;
+      syncBridgePlaybackState();
       setCurrentStreamUrl(started.localUrl);
       setReloadToken((t) => t + 1);
+      return cuesCount;
     },
-    [currentStreamUrl, resetOutroForNewStream, resolveInitialPlaybackTime, updateBuffering]
+    [
+      currentStreamUrl,
+      effectiveDuration,
+      resetOutroForNewStream,
+      resolveInitialPlaybackTime,
+      setFirstFrameState,
+      setLoadingState,
+      syncBridgePlaybackState,
+      updateBuffering,
+    ]
+  );
+
+  // 内置中转活跃且尚未稳定出画时，轮询 Rust 中转流量统计，补齐解复用前 0 KB/s 的真实读取速率与 Range 轨迹
+  useEffect(() => {
+    if (
+      !isTauriEnvironment() ||
+      !usingRelayStream ||
+      !activeRelayTokenRef.current ||
+      (hasFirstFrame && !isLoadingVideo && !isBuffering)
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    const poll = async () => {
+      const token = activeRelayTokenRef.current;
+      if (!token || cancelled) return;
+      try {
+        const stats = await invoke<RelayStats | null>('get_stream_relay_stats', { token });
+        if (cancelled || !stats) return;
+        setRelayStats(stats);
+        if (stats.virtualCuesActive && stats.virtualCuesCount > 0) {
+          relayVirtualCuesCountRef.current = stats.virtualCuesCount;
+          setRelayVirtualCuesCount(stats.virtualCuesCount);
+        }
+        const now = Date.now();
+        const prev = relayStatsSampleRef.current;
+        if (!prev) {
+          relayStatsSampleRef.current = { bytes: stats.bytesSent, at: now };
+        } else if (now - prev.at >= 250) {
+          const dt = now - prev.at;
+          const delta = stats.bytesSent - prev.bytes;
+          relayStatsSampleRef.current = { bytes: stats.bytesSent, at: now };
+          if (now - lastMpvNonZeroSpeedAtRef.current > 1500) {
+            const spd = delta > 0 ? Math.round((delta * 1000) / dt) : 0;
+            networkSpeedRef.current = spd;
+            setNetworkSpeed(spd);
+          }
+        }
+      } catch {
+        // 忽略瞬时统计查询异常
+      }
+    };
+
+    void poll();
+    const timer = window.setInterval(() => void poll(), 500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [usingRelayStream, hasFirstFrame, isLoadingVideo, isBuffering]);
+
+  const handleSwitchToLavfDemuxer = useCallback(() => {
+    lavfFallbackAttemptedRef.current = true;
+    demuxerModeRef.current = 'lavf';
+    setDemuxerMode('lavf');
+    setFirstFrameState(false);
+    setLoadingState(true);
+    updateBuffering(false);
+    setStallNotice(null);
+    setStallReport(null);
+    setVideoError(null);
+    videoErrorRef.current = null;
+    syncBridgePlaybackState();
+    setReloadToken((t) => t + 1);
+    showMiniHud({
+      icon: 'info',
+      label: '已切换 FFmpeg 兼容解复用器重连...',
+    });
+  }, [
+    setFirstFrameState,
+    setLoadingState,
+    showMiniHud,
+    syncBridgePlaybackState,
+    updateBuffering,
+  ]);
+
+  const handlePlayFromStart = useCallback(() => {
+    skipInitialIntroOnceRef.current = true;
+    relayFallbackAttemptedRef.current = false;
+    lavfFallbackAttemptedRef.current = false;
+    demuxerModeRef.current = 'auto';
+    setDemuxerMode('auto');
+    stopActiveRelay();
+    initialTimeRef.current = 0;
+    hasInitialSeekedRef.current = true;
+    lastValidTimeRef.current = 0;
+    seekingTargetRef.current = undefined;
+    updateTime(0);
+    setFirstFrameState(false);
+    setLoadingState(true);
+    updateBuffering(false);
+    setStallNotice(null);
+    setStallReport(null);
+    setVideoError(null);
+    videoErrorRef.current = null;
+    syncBridgePlaybackState();
+    if (upstreamStreamUrlRef.current && upstreamStreamUrlRef.current !== currentStreamUrl) {
+      setCurrentStreamUrl(upstreamStreamUrlRef.current);
+    } else {
+      setReloadToken((t) => t + 1);
+    }
+    showMiniHud({
+      icon: 'info',
+      label: '已重置为从 00:00 重新起播',
+    });
+  }, [
+    currentStreamUrl,
+    setFirstFrameState,
+    setLoadingState,
+    showMiniHud,
+    stopActiveRelay,
+    syncBridgePlaybackState,
+    updateBuffering,
+    updateTime,
+  ]);
+
+  const handleJumpNearTruncatedEnd = useCallback(
+    (maxPlayableSec: number) => {
+      const targetSec = Math.max(0, Math.floor(maxPlayableSec - 15));
+      skipInitialIntroOnceRef.current = false;
+      relayFallbackAttemptedRef.current = true;
+      lavfFallbackAttemptedRef.current = false;
+      demuxerModeRef.current = 'auto';
+      setDemuxerMode('auto');
+      initialTimeRef.current = targetSec;
+      hasInitialSeekedRef.current = targetSec <= 0;
+      lastValidTimeRef.current = targetSec;
+      seekingTargetRef.current = targetSec > 0 ? targetSec : undefined;
+      updateTime(targetSec);
+      const upstream = upstreamStreamUrlRef.current;
+      if (upstream && isTauriEnvironment()) {
+        void startRelayPlayback(upstream, { enableMkvVirtualCues: true });
+      } else {
+        setFirstFrameState(false);
+        setLoadingState(true);
+        updateBuffering(false);
+        setStallNotice(null);
+        setStallReport(null);
+        setVideoError(null);
+        videoErrorRef.current = null;
+        syncBridgePlaybackState();
+        setReloadToken((t) => t + 1);
+      }
+      showMiniHud({
+        icon: 'info',
+        label: `正在跳至可播末尾附近 (${formatTime(targetSec)})`,
+      });
+    },
+    [
+      setFirstFrameState,
+      setLoadingState,
+      showMiniHud,
+      startRelayPlayback,
+      syncBridgePlaybackState,
+      updateBuffering,
+      updateTime,
+    ]
   );
 
   const runStreamDiagnostic = useCallback(
@@ -2330,14 +2742,19 @@ export const PlayerPage: React.FC = () => {
               stopActiveRelay();
               setDiagnosticReport(null);
               setDiagnosticCopied(false);
+              setStallNotice(null);
+              setStallReport(null);
               setVideoError(null);
-              setIsLoadingVideo(true);
+              videoErrorRef.current = null;
+              setFirstFrameState(false);
+              setLoadingState(true);
               updateBuffering(false);
               hasInitialSeekedRef.current = false;
               resetOutroForNewStream();
               upstreamStreamUrlRef.current = candidateUrl;
               setCurrentStreamUrl(candidateUrl);
               setReloadToken((t) => t + 1);
+              syncBridgePlaybackState();
               showMiniHud({
                 icon: 'info',
                 label: '原直连地址异常，已自动切换备用直连链路',
@@ -2363,9 +2780,12 @@ export const PlayerPage: React.FC = () => {
       mediaSource,
       playSessionId,
       resetOutroForNewStream,
+      setFirstFrameState,
+      setLoadingState,
       startRelayPlayback,
       stopActiveRelay,
       showMiniHud,
+      syncBridgePlaybackState,
       updateBuffering,
     ]
   );
@@ -2373,6 +2793,194 @@ export const PlayerPage: React.FC = () => {
   useEffect(() => {
     runStreamDiagnosticRef.current = runStreamDiagnostic;
   }, [runStreamDiagnostic]);
+
+  // 8 秒 0 首帧卡滞看门狗：针对 302 链路退化扫流或 MKV 解复用卡死，依次自动切换内置中转 / FFmpeg 解复用器并给出明确诊断与一键恢复
+  useEffect(() => {
+    if (
+      engineType !== 'mpv' ||
+      !isTauriEnvironment() ||
+      hasFirstFrame ||
+      Boolean(videoError) ||
+      (!isLoadingVideo && !isBuffering) ||
+      !currentStreamUrl
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    const startedAt = Date.now();
+    const timer = window.setTimeout(async () => {
+      if (cancelled || hasFirstFrameRef.current || videoErrorRef.current) return;
+      const cacheDur = telemetryRef.current.cacheDuration ?? 0;
+      if (cacheDur > 0.1) return;
+
+      const liveServer = useAuthStore.getState().getCurrentServer();
+      const target =
+        upstreamStreamUrlRef.current ||
+        (currentStreamUrl && !/\/relay\//.test(currentStreamUrl) ? currentStreamUrl : null);
+
+      let report: StreamDiagnosticReport | null = null;
+      if (liveServer && target) {
+        const reqId = ++diagReqIdRef.current;
+        try {
+          const ua = resolveEmbyUserAgent(liveServer.userAgent, liveServer.url);
+          const streamHeaders = buildEmbyStreamHeaders(liveServer.userId, liveServer.accessToken, {
+            userAgent: liveServer.userAgent,
+            serverUrl: liveServer.url,
+          });
+          const resolvedProxy = await resolveMpvProxyDetailed(target, proxyOverrideRef.current);
+          const probed = await invoke<StreamDiagnosticReport>('diagnose_stream_url', {
+            request: {
+              url: target,
+              proxyUrl: (resolvedProxy.rustProxy ?? resolvedProxy.effectiveProxy) || null,
+              headers: {
+                'User-Agent': ua,
+                ...streamHeaders,
+              },
+            },
+          });
+          if (cancelled || reqId !== diagReqIdRef.current || hasFirstFrameRef.current) return;
+          report = probed;
+
+          const serverHost = extractHostFromUrl(liveServer.url)?.host;
+          const foundRedirectHosts: string[] = [];
+          for (const hop of probed.hops || []) {
+            for (const candidate of [hop.url, hop.location]) {
+              if (!candidate) continue;
+              const parsed = extractHostFromUrl(candidate);
+              if (
+                parsed &&
+                parsed.host &&
+                parsed.host !== serverHost &&
+                !foundRedirectHosts.includes(parsed.host)
+              ) {
+                foundRedirectHosts.push(parsed.host);
+              }
+            }
+          }
+          if (foundRedirectHosts.length > 0) {
+            setCurrentRedirectHosts(foundRedirectHosts);
+          }
+        } catch {
+          // 忽略探测异常，继续后续降级判定
+        }
+      }
+
+      if (cancelled || hasFirstFrameRef.current || videoErrorRef.current) return;
+
+      const containerLower = (mediaSource?.Container || '').toLowerCase();
+      const isMkvContainer =
+        !containerLower || containerLower.includes('mkv') || containerLower.includes('matroska');
+
+      const action = decideStallRecoveryAction({
+        elapsedMs: Date.now() - startedAt,
+        hasFirstFrame: hasFirstFrameRef.current,
+        cacheDuration: telemetryRef.current.cacheDuration ?? 0,
+        isMpv: true,
+        hasError: Boolean(videoErrorRef.current),
+        usingRelay: usingRelayStream,
+        relayAlreadyAttempted: relayFallbackAttemptedRef.current,
+        lavfAlreadyAttempted: lavfFallbackAttemptedRef.current,
+        isMkvContainer,
+        diagnosticReachable: report?.reachable,
+        diagnosticFinalStatus: report?.finalStatus ?? null,
+        midRangeSupported: report?.midRangeSupported ?? null,
+        hasMkvCues: report?.hasMkvCues ?? null,
+        fileTruncated: Boolean(report?.fileTruncated),
+        maxPlayableSec: report?.maxPlayableSec ?? null,
+        relayVirtualCuesActive: relayVirtualCuesCountRef.current > 0,
+        activeDownloadSpeed: networkSpeedRef.current,
+        targetInitialTime: initialTimeRef.current,
+      });
+
+      if (action === 'show_truncated_file_prompt') {
+        engineRef.current?.pause().catch(() => {});
+        if (report) {
+          setDiagnosticReport(report);
+          setStallReport(report);
+        }
+        const expStr = report?.expectedSize ? formatFileSize(report.expectedSize) : '-';
+        const totStr = report?.totalSize ? formatFileSize(report.totalSize) : '-';
+        const maxStr =
+          typeof report?.maxPlayableSec === 'number' && report.maxPlayableSec > 0
+            ? formatTime(report.maxPlayableSec)
+            : '前半段';
+        setStallNotice(
+          `检测到服务端 MKV 文件不完整（原片约 ${expStr}，实际仅 ${totStr}，可播至约 ${maxStr}），原续播进度 ${formatTime(initialTimeRef.current)} 已超出文件末尾。`
+        );
+        return;
+      }
+
+      if (action === 'try_relay_virtual_cues' && target) {
+        relayFallbackAttemptedRef.current = true;
+        try {
+          const cuesCount = await startRelayPlayback(target, { enableMkvVirtualCues: true });
+          showMiniHud({
+            icon: 'info',
+            label:
+              cuesCount && cuesCount > 0
+                ? `已为无索引 MKV 注入 ${cuesCount} 个虚拟关键点加速起播`
+                : '302 直连解复用卡滞，已切换内置中转',
+            subLabel: '支持零转码 Range 直接定位到上次进度',
+          });
+          return;
+        } catch (relayErr) {
+          console.warn('[Stall Watchdog Virtual Cues Relay Failed]', relayErr);
+        }
+      }
+
+      if (action === 'try_relay' && target) {
+        relayFallbackAttemptedRef.current = true;
+        try {
+          await startRelayPlayback(target);
+          showMiniHud({
+            icon: 'info',
+            label: '302 直连解复用卡滞，已自动切换内置中转',
+            subLabel: '正在使用 Keep-Alive 与跨域头剥离加速起播',
+          });
+          return;
+        } catch (relayErr) {
+          console.warn('[Stall Watchdog Relay Failed]', relayErr);
+        }
+      }
+
+      if (action === 'try_lavf') {
+        handleSwitchToLavfDemuxer();
+        return;
+      }
+
+      if (report) {
+        setDiagnosticReport(report);
+        setStallReport(report);
+      }
+
+      if (action === 'show_non_range_prompt') {
+        setStallNotice(
+          '当前 302 节点不支持中段 HTTP Range 跳跃（返回 HTTP 200），带进度续播需从头顺序读取前段数据，建议直接从 00:00 播放。'
+        );
+      } else if (action === 'show_manual_prompt') {
+        setStallNotice('起播定位耗时较长且尚未输出首帧，可尝试下方恢复方案或从 00:00 播放。');
+      }
+    }, 8000);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [
+    engineType,
+    hasFirstFrame,
+    videoError,
+    isLoadingVideo,
+    isBuffering,
+    currentStreamUrl,
+    reloadToken,
+    usingRelayStream,
+    mediaSource?.Container,
+    startRelayPlayback,
+    handleSwitchToLavfDemuxer,
+    showMiniHud,
+  ]);
 
   const handleRetryDirect = (overrideMode?: StreamProxyOverride) => {
     if (!currentServer || !item || !mediaSource || !playSessionId) return;
@@ -2383,15 +2991,25 @@ export const PlayerPage: React.FC = () => {
     diagReqIdRef.current += 1;
     relayFallbackAttemptedRef.current = false;
     altCandidateFallbackAttemptedRef.current = false;
+    lavfFallbackAttemptedRef.current = false;
+    demuxerModeRef.current = 'auto';
+    setDemuxerMode('auto');
     stopActiveRelay();
     setDiagnosticReport(null);
     setDiagnosticCopied(false);
-    setIsLoadingVideo(true);
+    setStallNotice(null);
+    setStallReport(null);
+    setFirstFrameState(false);
+    setLoadingState(true);
     updateBuffering(false);
     setVideoError(null);
+    videoErrorRef.current = null;
     hasInitialSeekedRef.current = false;
     resetOutroForNewStream();
-    const resolved = resolveInitialPlaybackTime(initialTimeRef.current);
+    syncBridgePlaybackState();
+    const resolved = skipInitialIntroOnceRef.current
+      ? { seconds: 0, skippedIntro: false }
+      : resolveInitialPlaybackTime(initialTimeRef.current);
     initialTimeRef.current = resolved.seconds;
     const directUrl = buildStreamUrlForEngine(
       currentServer.url,
@@ -2410,14 +3028,22 @@ export const PlayerPage: React.FC = () => {
     diagReqIdRef.current += 1;
     relayFallbackAttemptedRef.current = false;
     altCandidateFallbackAttemptedRef.current = false;
+    lavfFallbackAttemptedRef.current = false;
+    demuxerModeRef.current = 'auto';
+    setDemuxerMode('auto');
     stopActiveRelay();
     setDiagnosticReport(null);
     setDiagnosticCopied(false);
-    setIsLoadingVideo(true);
+    setStallNotice(null);
+    setStallReport(null);
+    setFirstFrameState(false);
+    setLoadingState(true);
     updateBuffering(false);
     setVideoError(null);
+    videoErrorRef.current = null;
     hasInitialSeekedRef.current = false;
     resetOutroForNewStream();
+    syncBridgePlaybackState();
     upstreamStreamUrlRef.current = targetUrl;
     setCurrentStreamUrl(targetUrl);
     setReloadToken((t) => t + 1);
@@ -2432,14 +3058,22 @@ export const PlayerPage: React.FC = () => {
     diagReqIdRef.current += 1;
     relayFallbackAttemptedRef.current = false;
     altCandidateFallbackAttemptedRef.current = false;
+    lavfFallbackAttemptedRef.current = false;
+    demuxerModeRef.current = 'auto';
+    setDemuxerMode('auto');
     stopActiveRelay();
     setDiagnosticReport(null);
     setDiagnosticCopied(false);
+    setStallNotice(null);
+    setStallReport(null);
     setVideoError(null);
-    setIsLoadingVideo(true);
+    videoErrorRef.current = null;
+    setFirstFrameState(false);
+    setLoadingState(true);
     updateBuffering(false);
     hasInitialSeekedRef.current = false;
     resetOutroForNewStream();
+    syncBridgePlaybackState();
 
     try {
       const session = await fetchAndPreparePlaybackSession(
@@ -2476,17 +3110,29 @@ export const PlayerPage: React.FC = () => {
   };
 
   const handleCopyDiagnostic = async () => {
+    const activeReport = diagnosticReport || stallReport;
     const lines = [
       `【Nocta 媒体流错误诊断】`,
-      `错误描述: ${videoError || '-'}`,
-      `播放内核: ${engineType} (${usingRelayStream ? '内置透明中转' : '直连'})`,
+      `错误描述: ${videoError || stallNotice || '-'}`,
+      `播放内核: ${engineType} (${usingRelayStream ? '内置透明中转' : '直连'} · demuxer=${telemetry.currentDemuxer || demuxerMode})`,
       `服务器: ${currentServer?.name || '-'} (${currentServer?.url || '-'})`,
       `代理路线: ${proxyInfo?.configuredProxy || proxyInfo?.effectiveProxy || proxySummaryLabel}`,
-      `User-Agent: ${diagnosticReport?.userAgent || currentUserAgent}`,
+      `User-Agent: ${activeReport?.userAgent || currentUserAgent}`,
       `媒体源 Container: ${mediaSource?.Container || '-'} · IsRemote: ${String(Boolean(mediaSource?.IsRemote))}`,
       `DirectStreamUrl: ${redactUrlForReport(mediaSource?.DirectStreamUrl)}`,
-      `探测结论: ${diagnosticReport?.summary || (diagnosingStream ? '探测中' : '未探测')}`,
-      ...(diagnosticReport?.hops || []).map((hop) =>
+      `探测结论: ${activeReport?.summary || (diagnosingStream ? '探测中' : '未探测')}`,
+      `中段 Range / MKV Cues: midRangeSupported=${String(activeReport?.midRangeSupported ?? 'unknown')} · isMkv=${String(Boolean(activeReport?.isMkv))} · hasMkvCues=${String(activeReport?.hasMkvCues ?? 'unknown')}`,
+      `MKV 头部结构: ${activeReport?.mkvHeadSummary || '-'}`,
+      `文件完整性: truncated=${String(Boolean(activeReport?.fileTruncated))} · expected=${activeReport?.expectedSize ?? '-'} · maxPlayableSec=${activeReport?.maxPlayableSec ? activeReport.maxPlayableSec.toFixed(1) : '-'}`,
+      `MPV 遥测快照: state=${engineRef.current?.state || '-'} · vo=${String(telemetry.voConfigured ?? '-')} · seekable=${String(telemetry.seekable ?? '-')} · partial=${String(telemetry.partiallySeekable ?? '-')} · seeking=${String(telemetry.isSeeking ?? '-')} · cacheDur=${(telemetry.cacheDuration ?? 0).toFixed(2)}s · streamPos=${telemetry.streamPos ?? 0} · initialTime=${Math.floor(initialTimeRef.current)}s`,
+      ...(usingRelayStream && relayStats
+        ? [
+            `中转传输: sent=${relayStats.bytesSent}B · reqs=${relayStats.requestCount} · lastStatus=${relayStats.lastStatus ?? '-'} · virtualCues=${relayStats.virtualCuesActive ? `${relayStats.virtualCuesCount}点` : `off(${relayStats.virtualCuesReason || '-'})`}`,
+            ...(relayStats.lastError ? [`中转错误: ${relayStats.lastError}`] : []),
+            ...relayStats.recentRequests.map((entry, idx) => `  [Relay ${idx + 1}] ${entry}`),
+          ]
+        : []),
+      ...(activeReport?.hops || []).map((hop) =>
         [
           `[Hop ${hop.hop}] status=${hop.status ?? 'ERR'} ${hop.statusText || ''}`.trim(),
           `  url=${hop.url}`,
@@ -2517,11 +3163,26 @@ export const PlayerPage: React.FC = () => {
 
   const handleSwitchToMpv = () => {
     setVideoError(null);
-    setIsLoadingVideo(true);
+    videoErrorRef.current = null;
+    setFirstFrameState(false);
+    setLoadingState(true);
     updateBuffering(false);
+    setStallNotice(null);
+    setStallReport(null);
     hasInitialSeekedRef.current = false;
+    syncBridgePlaybackState();
     setEngineType('mpv');
   };
+
+  const bufferingHint = buildBufferingStatusHint({
+    isSeeking: telemetry.isSeeking,
+    partiallySeekable: telemetry.partiallySeekable,
+    networkSpeed,
+    targetTimeSeconds: seekingTargetRef.current ?? (initialTimeRef.current > 0 ? initialTimeRef.current : undefined),
+    streamPos: telemetry.streamPos,
+    fileSize: telemetry.fileSize,
+    formatTime,
+  });
 
   // macOS 原生全屏时，mpv 窗口会盖住 WebView；改用独立透明浮层承载 OSD 与弹幕。
   // 其他平台与窗口模式完全沿用原有单窗口渲染路径。
@@ -2581,6 +3242,8 @@ export const PlayerPage: React.FC = () => {
         },
         isLoading: isLoadingVideo,
         isBuffering,
+        bufferingHint: bufferingHint || null,
+        hasFirstFrame,
         skipSegments: currentSkipSegments || null,
         outroToast: {
           visible: Boolean(outroToast),
@@ -2643,6 +3306,8 @@ export const PlayerPage: React.FC = () => {
     selectedSecondarySubtitleId,
     isLoadingVideo,
     isBuffering,
+    hasFirstFrame,
+    bufferingHint ?? '',
     videoSpecLabel,
     miniHud?.id ?? 0,
     fastForwardRate ?? '',
@@ -2911,6 +3576,7 @@ export const PlayerPage: React.FC = () => {
       <BufferingIndicator
         visible={isBuffering && !isLoadingVideo && !videoError && !osdOverlayActive && !centerIcon}
         networkSpeed={networkSpeed}
+        hint={bufferingHint}
       />
 
       {/* 底层：原生视频表面穿透层与交互层 */}
@@ -2923,7 +3589,7 @@ export const PlayerPage: React.FC = () => {
 
       {/* Loading Overlay */}
       {isLoadingVideo && !videoError && (
-        <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-[#F5F5F7]/[0.94] dark:bg-[#0A0A0C]/[0.94] pointer-events-auto">
+        <div className="absolute inset-0 z-[15] flex flex-col items-center justify-center bg-[#F5F5F7]/[0.94] dark:bg-[#0A0A0C]/[0.94] pointer-events-auto px-4">
           {backdropUrl && (
             <img
               key={backdropUrl}
@@ -2945,24 +3611,143 @@ export const PlayerPage: React.FC = () => {
               className="absolute inset-0 w-full h-full object-cover filter blur-2xl opacity-15 dark:opacity-25"
             />
           )}
-          <div className="relative z-10 flex flex-col items-center space-y-4">
+          <div className="relative z-10 flex flex-col items-center space-y-4 max-w-md w-full">
             <div className="w-12 h-12 border-3 border-[#1D1D1F] dark:border-white border-t-transparent rounded-full animate-spin" />
-            <div className="text-center">
+            <div className="text-center space-y-1.5">
               <h2 className="text-base font-bold text-[#1D1D1F] dark:text-white tracking-wide">{item.Name}</h2>
-              <p className="text-xs text-[#6E6E73] dark:text-white/65 mt-1">
+              <p className="text-xs text-[#6E6E73] dark:text-white/65">
                 {engineType === 'mpv'
                   ? '正在通过 MPV 硬解引擎直连原画 (0 转码)...'
                   : '正在通过 HTML5 引擎直连原画 (0 转码)...'}
               </p>
+              <div className="flex flex-wrap items-center justify-center gap-1.5 pt-0.5">
+                {usingRelayStream && (
+                  <span className="px-2 py-0.5 rounded-full bg-amber-500/[0.12] dark:bg-amber-500/15 border border-amber-600/25 dark:border-amber-400/30 text-[10px] text-[#B45309] dark:text-amber-300 font-medium">
+                    内置中转通道
+                  </span>
+                )}
+                {usingRelayStream && relayVirtualCuesCount > 0 && (
+                  <span className="px-2 py-0.5 rounded-full bg-emerald-500/[0.12] dark:bg-emerald-500/15 border border-emerald-600/25 dark:border-emerald-400/30 text-[10px] text-[#047857] dark:text-emerald-300 font-medium">
+                    虚拟 MKV 索引 ({relayVirtualCuesCount} 点)
+                  </span>
+                )}
+                {demuxerMode === 'lavf' && (
+                  <span className="px-2 py-0.5 rounded-full bg-black/[0.06] dark:bg-white/[0.10] border border-black/[0.12] dark:border-white/[0.16] text-[10px] text-[#1D1D1F] dark:text-white/90 font-medium">
+                    FFmpeg 解复用器
+                  </span>
+                )}
+                {telemetry.currentDemuxer && demuxerMode !== 'lavf' && (
+                  <span className="px-2 py-0.5 rounded-full bg-black/[0.05] dark:bg-white/[0.06] border border-black/[0.08] dark:border-white/10 text-[10px] text-[#48484A] dark:text-white/75 font-mono">
+                    demuxer: {telemetry.currentDemuxer}
+                  </span>
+                )}
+              </div>
               {proxyInfo && (
-                <p className="text-[11px] text-[#48484A] dark:text-white/75 font-mono mt-1.5">
+                <p className="text-[11px] text-[#48484A] dark:text-white/75 font-mono">
                   网络路线: {proxyInfo.configuredProxy || proxyInfo.effectiveProxy ? `代理 ${proxyInfo.configuredProxy || proxyInfo.effectiveProxy}` : proxySummaryLabel}
                 </p>
               )}
+              <p className="text-[11px] text-[#047857] dark:text-emerald-300/90 font-mono tabular-nums">
+                {(() => {
+                  const loadedBytes = Math.max(
+                    telemetry.streamPos ?? 0,
+                    usingRelayStream ? relayStats?.bytesSent ?? 0 : 0
+                  );
+                  const totalBytes =
+                    telemetry.fileSize || stallReport?.totalSize || diagnosticReport?.totalSize;
+                  return (
+                    <>
+                      实时读取: {formatNetworkSpeed(networkSpeed)}
+                      {loadedBytes > 0
+                        ? ` · 已读取 ${formatFileSize(loadedBytes)}${
+                            typeof totalBytes === 'number' && totalBytes > 0
+                              ? ` / ${formatFileSize(totalBytes)}`
+                              : ''
+                          }`
+                        : ''}
+                    </>
+                  );
+                })()}
+              </p>
             </div>
+
+            {(stallNotice || telemetry.partiallySeekable) && (
+              <div className="w-full rounded-2xl bg-white/[0.95] dark:bg-[#141416]/[0.94] border border-black/[0.12] dark:border-white/[0.14] p-3.5 space-y-2.5 text-left">
+                <div className="text-xs font-medium text-[#B45309] dark:text-amber-300 leading-relaxed">
+                  {stallNotice ||
+                    '检测到片源正在线性读取数据但暂不支持 HTTP Range 跳跃，起播或续播可能需要较长时间。'}
+                </div>
+                {stallReport && (
+                  <div className="text-[11px] text-[#6E6E73] dark:text-white/60 font-mono truncate" title={stallReport.summary}>
+                    {stallReport.finalStatus ? `HTTP ${stallReport.finalStatus}` : '连通探测完成'}
+                    {stallReport.hops.length > 1 ? ` · ${stallReport.hops.length} 跳` : ''}
+                    {stallReport.midRangeSupported === false ? ' · 中段 Range 受限' : ''}
+                    {stallReport.hasMkvCues === false ? ' · MKV 缺少 Cues 索引' : ''}
+                    {stallReport.summary ? ` · ${stallReport.summary}` : ''}
+                  </div>
+                )}
+                <div className="flex flex-wrap gap-2 pt-0.5">
+                  {initialTimeRef.current > 15 && (
+                    <button
+                      onClick={handlePlayFromStart}
+                      className="px-3 py-1.5 rounded-lg bg-[#1D1D1F] hover:bg-black text-white dark:bg-white dark:hover:bg-white/90 dark:text-[#1D1D1F] text-xs font-semibold transition cursor-pointer"
+                    >
+                      从 00:00 重新播放（原记录 {formatTime(initialTimeRef.current)}）
+                    </button>
+                  )}
+                  {stallReport?.fileTruncated &&
+                    typeof stallReport.maxPlayableSec === 'number' &&
+                    stallReport.maxPlayableSec > 30 && (
+                      <button
+                        onClick={() => handleJumpNearTruncatedEnd(stallReport.maxPlayableSec!)}
+                        className="px-3 py-1.5 rounded-lg bg-amber-500/[0.14] hover:bg-amber-500/25 border border-amber-600/25 dark:border-amber-400/30 text-[#B45309] dark:text-amber-200 text-xs font-medium transition cursor-pointer"
+                      >
+                        跳至可播末尾 ({formatTime(Math.max(0, Math.floor(stallReport.maxPlayableSec - 15)))})
+                      </button>
+                    )}
+                  {stallReport?.fileTruncated && nextEpisode && (
+                    <button
+                      onClick={() => void switchToEpisode(nextEpisode)}
+                      className="px-3 py-1.5 rounded-lg bg-emerald-500/[0.14] hover:bg-emerald-500/25 border border-emerald-600/25 dark:border-emerald-400/30 text-[#047857] dark:text-emerald-200 text-xs font-medium transition cursor-pointer"
+                    >
+                      直接播放下一集
+                    </button>
+                  )}
+                  {!usingRelayStream && (
+                    <button
+                      onClick={() => void startRelayPlayback()}
+                      className="px-3 py-1.5 rounded-lg bg-black/[0.06] hover:bg-black/[0.12] text-[#1D1D1F] dark:bg-white/10 dark:hover:bg-white/20 dark:text-white text-xs transition cursor-pointer"
+                    >
+                      切换内置中转播放
+                    </button>
+                  )}
+                  {demuxerMode !== 'lavf' && (
+                    <button
+                      onClick={handleSwitchToLavfDemuxer}
+                      className="px-3 py-1.5 rounded-lg bg-black/[0.06] hover:bg-black/[0.12] text-[#1D1D1F] dark:bg-white/10 dark:hover:bg-white/20 dark:text-white text-xs transition cursor-pointer"
+                    >
+                      切换 FFmpeg 解复用器
+                    </button>
+                  )}
+                  <button
+                    onClick={() => void handleHotReloadStreamWithProxy('direct')}
+                    className="px-3 py-1.5 rounded-lg bg-black/[0.06] hover:bg-black/[0.12] text-[#1D1D1F] dark:bg-white/10 dark:hover:bg-white/20 dark:text-white text-xs transition cursor-pointer"
+                  >
+                    强制直连重试
+                  </button>
+                  <button
+                    onClick={handleCopyDiagnostic}
+                    className="px-3 py-1.5 rounded-lg bg-black/[0.05] hover:bg-black/[0.10] border border-black/[0.08] text-[#48484A] dark:bg-white/5 dark:hover:bg-white/15 dark:border-white/10 dark:text-white/80 text-xs transition cursor-pointer"
+                  >
+                    {diagnosticCopied ? '已复制诊断日志' : '复制诊断日志'}
+                  </button>
+                </div>
+              </div>
+            )}
+
             <button
               onClick={handleBack}
-              className="mt-4 px-4 py-2 bg-black/[0.06] hover:bg-black/[0.12] text-[#1D1D1F] dark:bg-white/10 dark:hover:bg-white/20 dark:text-white rounded-xl text-xs flex items-center space-x-1.5 transition cursor-pointer"
+              className="mt-2 px-4 py-2 bg-black/[0.06] hover:bg-black/[0.12] text-[#1D1D1F] dark:bg-white/10 dark:hover:bg-white/20 dark:text-white rounded-xl text-xs flex items-center space-x-1.5 transition cursor-pointer"
             >
               <ArrowLeft className="w-3.5 h-3.5" />
               <span>返回详情页</span>
@@ -3271,6 +4056,7 @@ export const PlayerPage: React.FC = () => {
         title={item.Name}
         subtitle={item.SeriesName ? `${item.SeriesName} · 第 ${item.IndexNumber || 1} 集` : undefined}
         visible={!osdOverlayActive && (isOsdVisible || isLoadingVideo || !!videoError)}
+        disableCenterClick={isLoadingVideo || !!videoError}
         paused={paused}
         currentTime={currentTime}
         duration={effectiveDuration}

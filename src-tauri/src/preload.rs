@@ -1,8 +1,14 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{Duration, Instant};
+
+use crate::mkv_cues::{
+    build_virtual_mkv_patch, cues_cover_duration, extract_cluster_cue_from_window,
+    extract_last_cluster_cue_from_window, find_cues_in_slice, inspect_mkv_head, is_ebml_mkv,
+    map_virtual_range, VirtualMkvOverlay, VirtualRangeSegment,
+};
 
 use reqwest::header::{
     HeaderMap, HeaderName, HeaderValue, ACCEPT_RANGES, CONTENT_LENGTH, CONTENT_RANGE,
@@ -58,6 +64,14 @@ pub struct StreamDiagnosticReport {
     pub user_agent: String,
     pub summary: String,
     pub hops: Vec<DiagnosticHopDto>,
+    pub mid_range_supported: Option<bool>,
+    pub total_size: Option<u64>,
+    pub is_mkv: bool,
+    pub has_mkv_cues: Option<bool>,
+    pub mkv_head_summary: Option<String>,
+    pub file_truncated: bool,
+    pub expected_size: Option<u64>,
+    pub max_playable_sec: Option<f64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -66,6 +80,12 @@ pub struct StartRelayRequest {
     pub url: String,
     pub proxy_url: Option<String>,
     pub headers: Option<HashMap<String, String>>,
+    #[serde(default)]
+    pub initial_time_sec: Option<f64>,
+    #[serde(default)]
+    pub duration_sec: Option<f64>,
+    #[serde(default)]
+    pub enable_mkv_virtual_cues: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -73,6 +93,31 @@ pub struct StartRelayRequest {
 pub struct StartedRelayDto {
     pub token: String,
     pub local_url: String,
+    pub virtual_cues_active: bool,
+    pub virtual_cues_count: usize,
+    pub virtual_cues_reason: Option<String>,
+    pub file_truncated: bool,
+    pub expected_size: Option<u64>,
+    pub max_playable_sec: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayStatsDto {
+    pub token: String,
+    pub bytes_sent: u64,
+    pub request_count: u64,
+    pub last_status: Option<u16>,
+    pub last_range: Option<String>,
+    pub last_content_range: Option<String>,
+    pub last_error: Option<String>,
+    pub virtual_cues_active: bool,
+    pub virtual_cues_count: usize,
+    pub virtual_cues_reason: Option<String>,
+    pub file_truncated: bool,
+    pub expected_size: Option<u64>,
+    pub max_playable_sec: Option<f64>,
+    pub recent_requests: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -623,12 +668,98 @@ impl SessionRuntime {
     }
 }
 
+#[derive(Default)]
+struct RelayTelemetry {
+    last_range: Option<String>,
+    last_content_range: Option<String>,
+    last_error: Option<String>,
+    recent_requests: Vec<String>,
+}
+
 struct RelaySession {
     token: String,
     upstream_url: String,
     client: reqwest::Client,
     headers: HeaderMap,
     resolved_target: RwLock<Option<ResolvedTargetCache>>,
+    virtual_mkv: Option<VirtualMkvOverlay>,
+    virtual_cues_reason: Option<String>,
+    file_truncated: bool,
+    expected_size: Option<u64>,
+    max_playable_sec: Option<f64>,
+    bytes_sent: AtomicU64,
+    request_count: AtomicU64,
+    last_status: AtomicU16,
+    telemetry: RwLock<RelayTelemetry>,
+}
+
+impl RelaySession {
+    fn record_request(
+        &self,
+        method: &str,
+        status: u16,
+        range_hdr: Option<&str>,
+        content_range: Option<&str>,
+    ) {
+        self.request_count.fetch_add(1, Ordering::Relaxed);
+        self.last_status.store(status, Ordering::Relaxed);
+        if let Ok(mut guard) = self.telemetry.write() {
+            guard.last_range = range_hdr.map(str::to_string);
+            guard.last_content_range = content_range.map(str::to_string);
+            let entry = format!(
+                "{} {} -> HTTP {}{}",
+                method,
+                range_hdr.unwrap_or("(no Range)"),
+                status,
+                content_range
+                    .map(|cr| format!(" [{cr}]"))
+                    .unwrap_or_default()
+            );
+            guard.recent_requests.push(entry);
+            if guard.recent_requests.len() > 10 {
+                let overflow = guard.recent_requests.len() - 10;
+                guard.recent_requests.drain(0..overflow);
+            }
+        }
+    }
+
+    fn record_error(&self, err: String) {
+        if let Ok(mut guard) = self.telemetry.write() {
+            guard.last_error = Some(err);
+        }
+    }
+
+    fn to_stats_dto(&self) -> RelayStatsDto {
+        let status_raw = self.last_status.load(Ordering::Relaxed);
+        let (last_range, last_content_range, last_error, recent_requests) = self
+            .telemetry
+            .read()
+            .map(|t| {
+                (
+                    t.last_range.clone(),
+                    t.last_content_range.clone(),
+                    t.last_error.clone(),
+                    t.recent_requests.clone(),
+                )
+            })
+            .unwrap_or_default();
+        RelayStatsDto {
+            token: self.token.clone(),
+            bytes_sent: self.bytes_sent.load(Ordering::Relaxed),
+            request_count: self.request_count.load(Ordering::Relaxed),
+            last_status: if status_raw > 0 { Some(status_raw) } else { None },
+            last_range,
+            last_content_range,
+            last_error,
+            virtual_cues_active: self.virtual_mkv.is_some(),
+            virtual_cues_count: self.virtual_mkv.as_ref().map(|v| v.cue_count).unwrap_or(0),
+            virtual_cues_reason: self.virtual_cues_reason.clone(),
+            file_truncated: self.file_truncated,
+            expected_size: self.expected_size,
+            max_playable_sec: self.max_playable_sec,
+            recent_requests,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -1214,6 +1345,135 @@ async fn send_with_cached_redirects(
     Ok((resp, final_url))
 }
 
+async fn handle_virtual_mkv_relay(
+    stream: &mut TcpStream,
+    session: &RelaySession,
+    overlay: &VirtualMkvOverlay,
+    method: &str,
+    range_header: Option<&str>,
+    keep_alive: bool,
+) -> Result<bool, ()> {
+    let is_head = method.eq_ignore_ascii_case("HEAD");
+    let total_size = overlay.virtual_total_size;
+    let (status_code, status_line, req_start, req_end, content_range_hdr) =
+        match parse_http_range(range_header, total_size) {
+            RangeParseResult::None => (200u16, "HTTP/1.1 200 OK", 0, total_size - 1, None),
+            RangeParseResult::Satisfiable(s, e) => (
+                206u16,
+                "HTTP/1.1 206 Partial Content",
+                s,
+                e,
+                Some(format!("Content-Range: bytes {s}-{e}/{total_size}\r\n")),
+            ),
+            RangeParseResult::Unsatisfiable => {
+                session.record_request(method, 416, range_header, None);
+                let resp = format!(
+                    "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */{total_size}\r\nAccept-Ranges: bytes\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+                );
+                let _ = stream.write_all(resp.as_bytes()).await;
+                return Ok(false);
+            }
+        };
+
+    let cr_clean = content_range_hdr
+        .as_deref()
+        .map(|s| s.trim_start_matches("Content-Range: ").trim());
+    session.record_request(method, status_code, range_header, cr_clean);
+
+    let content_len = req_end - req_start + 1;
+    let conn_hdr = if keep_alive {
+        "Connection: keep-alive\r\nKeep-Alive: timeout=30, max=100\r\n"
+    } else {
+        "Connection: close\r\n"
+    };
+    let mut header_buf = format!(
+        "{status_line}\r\nContent-Type: video/x-matroska\r\nAccept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {content_len}\r\n{conn_hdr}"
+    );
+    if let Some(ref cr) = content_range_hdr {
+        header_buf.push_str(cr);
+    }
+    header_buf.push_str("\r\n");
+
+    if stream.write_all(header_buf.as_bytes()).await.is_err() {
+        return Ok(false);
+    }
+    if is_head {
+        let _ = stream.flush().await;
+        return Ok(keep_alive);
+    }
+
+    for seg in map_virtual_range(overlay, req_start, req_end) {
+        match seg {
+            VirtualRangeSegment::MemorySlice { start, end } => {
+                let slice = &overlay.prefix_bytes[start..end];
+                if stream.write_all(slice).await.is_err() {
+                    return Ok(false);
+                }
+                session
+                    .bytes_sent
+                    .fetch_add(slice.len() as u64, Ordering::Relaxed);
+            }
+            VirtualRangeSegment::UpstreamRange { start, end } => {
+                let range_val = format!("bytes={start}-{end}");
+                let mut resp = match send_with_cached_redirects(
+                    &session.client,
+                    &session.upstream_url,
+                    &session.headers,
+                    Some(&range_val),
+                    false,
+                    &session.resolved_target,
+                )
+                .await
+                {
+                    Ok((r, _)) => r,
+                    Err(e) => {
+                        session.record_error(e);
+                        return Ok(false);
+                    }
+                };
+
+                let up_status = resp.status();
+                if up_status != reqwest::StatusCode::PARTIAL_CONTENT
+                    && !(start == 0 && up_status.is_success())
+                {
+                    session.record_error(format!(
+                        "虚拟索引上游分段请求 {range_val} 返回异常状态码: {up_status}"
+                    ));
+                    return Ok(false);
+                }
+
+                let need_total = end - start + 1;
+                let mut sent_seg = 0u64;
+                while sent_seg < need_total {
+                    match resp.chunk().await {
+                        Ok(Some(chunk)) => {
+                            let take = ((need_total - sent_seg) as usize).min(chunk.len());
+                            if take == 0 {
+                                break;
+                            }
+                            if stream.write_all(&chunk[..take]).await.is_err() {
+                                return Ok(false);
+                            }
+                            session.bytes_sent.fetch_add(take as u64, Ordering::Relaxed);
+                            sent_seg += take as u64;
+                        }
+                        Ok(None) => break,
+                        Err(e) => {
+                            session.record_error(format!("虚拟索引中转读取上游中断: {e}"));
+                            return Ok(false);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if stream.flush().await.is_err() {
+        return Ok(false);
+    }
+    Ok(keep_alive)
+}
+
 async fn handle_relay_request(
     stream: &mut TcpStream,
     method: &str,
@@ -1227,8 +1487,20 @@ async fn handle_relay_request(
         return Ok(false);
     };
 
+    if let Some(ref overlay) = session.virtual_mkv {
+        return handle_virtual_mkv_relay(
+            stream,
+            &session,
+            overlay,
+            method,
+            range_header.as_deref(),
+            keep_alive,
+        )
+        .await;
+    }
+
     let is_head = method.eq_ignore_ascii_case("HEAD");
-    let Ok((mut resp, _final_url)) = send_with_cached_redirects(
+    let mut resp = match send_with_cached_redirects(
         &session.client,
         &session.upstream_url,
         &session.headers,
@@ -1237,10 +1509,15 @@ async fn handle_relay_request(
         &session.resolved_target,
     )
     .await
-    else {
-        let err_resp = "HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
-        let _ = stream.write_all(err_resp.as_bytes()).await;
-        return Ok(false);
+    {
+        Ok((r, _)) => r,
+        Err(e) => {
+            session.record_error(e);
+            session.record_request(method, 502, range_header.as_deref(), None);
+            let err_resp = "HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+            let _ = stream.write_all(err_resp.as_bytes()).await;
+            return Ok(false);
+        }
     };
 
     let status = resp.status();
@@ -1250,6 +1527,18 @@ async fn handle_relay_request(
         .get(CONTENT_LENGTH)
         .and_then(|v| v.to_str().ok())
         .map(str::to_string);
+    let cr_opt = resp
+        .headers()
+        .get(CONTENT_RANGE)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    session.record_request(
+        method,
+        status.as_u16(),
+        range_header.as_deref(),
+        cr_opt.as_deref(),
+    );
+
     let can_keep_alive = keep_alive && (is_head || cl_opt.is_some());
     let conn_val = if can_keep_alive {
         "keep-alive\r\nKeep-Alive: timeout=30, max=100"
@@ -1270,7 +1559,7 @@ async fn handle_relay_request(
     if let Some(ref cl) = cl_opt {
         header_buf.push_str(&format!("Content-Length: {cl}\r\n"));
     }
-    if let Some(cr) = resp.headers().get(CONTENT_RANGE).and_then(|v| v.to_str().ok()) {
+    if let Some(ref cr) = cr_opt {
         header_buf.push_str(&format!("Content-Range: {cr}\r\n"));
     }
     let accept_ranges = resp
@@ -1289,9 +1578,21 @@ async fn handle_relay_request(
         return Ok(can_keep_alive);
     }
 
-    while let Ok(Some(chunk)) = resp.chunk().await {
-        if stream.write_all(&chunk).await.is_err() {
-            return Ok(false);
+    loop {
+        match resp.chunk().await {
+            Ok(Some(chunk)) => {
+                if stream.write_all(&chunk).await.is_err() {
+                    return Ok(false);
+                }
+                session
+                    .bytes_sent
+                    .fetch_add(chunk.len() as u64, Ordering::Relaxed);
+            }
+            Ok(None) => break,
+            Err(e) => {
+                session.record_error(format!("中转传输读取上游中断: {e}"));
+                return Ok(false);
+            }
         }
     }
 
@@ -1809,12 +2110,12 @@ fn read_header_name_str(headers: &HeaderMap, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-async fn read_body_snippet(mut resp: reqwest::Response) -> Option<String> {
-    let mut buf: Vec<u8> = Vec::new();
-    while buf.len() < 2048 {
+async fn read_limited_bytes(mut resp: reqwest::Response, max_bytes: usize) -> Vec<u8> {
+    let mut buf: Vec<u8> = Vec::with_capacity(max_bytes.min(131072));
+    while buf.len() < max_bytes {
         match resp.chunk().await {
             Ok(Some(chunk)) => {
-                let take = (2048 - buf.len()).min(chunk.len());
+                let take = (max_bytes - buf.len()).min(chunk.len());
                 buf.extend_from_slice(&chunk[..take]);
                 if take < chunk.len() {
                     break;
@@ -1823,6 +2124,11 @@ async fn read_body_snippet(mut resp: reqwest::Response) -> Option<String> {
             _ => break,
         }
     }
+    buf
+}
+
+async fn read_body_snippet(resp: reqwest::Response) -> Option<String> {
+    let buf = read_limited_bytes(resp, 2048).await;
     if buf.is_empty() {
         return None;
     }
@@ -1920,6 +2226,14 @@ pub async fn diagnose_stream_url(
                     body_snippet: None,
                     error: Some(e.to_string()),
                 }],
+                mid_range_supported: None,
+                total_size: None,
+                is_mkv: false,
+                has_mkv_cues: None,
+                mkv_head_summary: None,
+                file_truncated: false,
+                expected_size: None,
+                max_playable_sec: None,
             });
         }
     };
@@ -1927,6 +2241,8 @@ pub async fn diagnose_stream_url(
     let mut current_url = origin_url.clone();
     let mut hops: Vec<DiagnosticHopDto> = Vec::new();
     let mut exceeded_redirects = false;
+    let mut final_content_length: Option<u64> = None;
+    let mut probed_200_head_bytes: Option<Vec<u8>> = None;
 
     for hop_idx in 1..=(MAX_STREAM_REDIRECTS + 1) {
         let is_same = same_origin(&origin_url, &current_url);
@@ -2034,6 +2350,7 @@ pub async fn diagnose_stream_url(
             }
         }
 
+        final_content_length = resp.content_length();
         let is_html = content_type
             .as_deref()
             .map(|ct| ct.to_ascii_lowercase().contains("text/html"))
@@ -2041,6 +2358,9 @@ pub async fn diagnose_stream_url(
         let body_snippet = if status_code >= 400 || is_html {
             read_body_snippet(resp).await
         } else {
+            if status_code == 200 {
+                probed_200_head_bytes = Some(read_limited_bytes(resp, 131_072).await);
+            }
             None
         };
 
@@ -2072,19 +2392,268 @@ pub async fn diagnose_stream_url(
 
     let last = hops.last();
     let final_status = last.and_then(|h| h.status);
-    let final_is_html = last
+    let final_ct_lower = last
         .and_then(|h| h.content_type.as_deref())
-        .map(|ct| ct.to_ascii_lowercase().contains("text/html"))
-        .unwrap_or(false);
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    let final_is_html = final_ct_lower.contains("text/html");
     let reachable = matches!(final_status, Some(200 | 206)) && !final_is_html && !exceeded_redirects;
 
-    let summary = summarize_diagnostic_outcome(
-        exceeded_redirects,
-        reachable,
-        last,
-        final_status,
-        final_is_html,
-    );
+    let mut total_size = last
+        .and_then(|h| h.content_range.as_deref())
+        .and_then(|cr| parse_content_range_total(Some(cr)))
+        .or(final_content_length);
+    let mut mid_range_supported: Option<bool> = None;
+    let mut is_mkv = final_ct_lower.contains("matroska");
+    let mut has_mkv_cues: Option<bool> = None;
+    let mut mkv_head_summary: Option<String> = None;
+    let mut file_truncated = false;
+    let mut expected_size: Option<u64> = None;
+    let mut max_playable_sec: Option<f64> = None;
+
+    if reachable && final_status == Some(206) {
+        let is_same = same_origin(&origin_url, &current_url);
+        let head_client = client.clone();
+        let head_url = current_url.clone();
+        let head_headers = header_map.clone();
+        let head_fut = async move {
+            let req = apply_origin_safe_headers(
+                head_client.get(head_url.as_str()),
+                &head_headers,
+                is_same,
+            )
+            .header(RANGE, "bytes=0-131071");
+            match tokio::time::timeout(Duration::from_secs(6), req.send()).await {
+                Ok(Ok(r)) => {
+                    let ok = matches!(r.status().as_u16(), 200 | 206);
+                    let cr_tot = r
+                        .headers()
+                        .get(CONTENT_RANGE)
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(|s| parse_content_range_total(Some(s)));
+                    let bytes = if ok {
+                        read_limited_bytes(r, 131_072).await
+                    } else {
+                        Vec::new()
+                    };
+                    (bytes, cr_tot)
+                }
+                _ => (Vec::new(), None),
+            }
+        };
+
+        let probe_total = total_size.unwrap_or(0);
+        let tail_fut = async {
+            if probe_total <= 262_144 {
+                return Vec::new();
+            }
+            let tail_start = probe_total - 131_072;
+            let rng = format!("bytes={tail_start}-{}", probe_total - 1);
+            let req = apply_origin_safe_headers(
+                client.get(current_url.as_str()),
+                &header_map,
+                is_same,
+            )
+            .header(RANGE, rng);
+            match tokio::time::timeout(Duration::from_secs(6), req.send()).await {
+                Ok(Ok(r)) if r.status() == reqwest::StatusCode::PARTIAL_CONTENT => {
+                    read_limited_bytes(r, 131_072).await
+                }
+                _ => Vec::new(),
+            }
+        };
+
+        let mid_fut = async {
+            if probe_total <= 262_144 {
+                return None;
+            }
+            let mid = probe_total / 2;
+            let rng = format!("bytes={mid}-{}", mid + 1023);
+            let req = apply_origin_safe_headers(
+                client.get(current_url.as_str()),
+                &header_map,
+                is_same,
+            )
+            .header(RANGE, rng);
+            match tokio::time::timeout(Duration::from_secs(6), req.send()).await {
+                Ok(Ok(r)) => Some(r.status() == reqwest::StatusCode::PARTIAL_CONTENT),
+                _ => None,
+            }
+        };
+
+        let ((head_bytes, head_total), tail_bytes, mid_res) =
+            tokio::join!(head_fut, tail_fut, mid_fut);
+        if total_size.is_none() {
+            total_size = head_total;
+        }
+        mid_range_supported = mid_res;
+        if is_ebml_mkv(&head_bytes) {
+            is_mkv = true;
+        }
+        if is_mkv && !head_bytes.is_empty() {
+            let head_info = inspect_mkv_head(&head_bytes);
+            let tail_cues = find_cues_in_slice(&tail_bytes);
+            let tail_cues_count = tail_cues.as_ref().map(|(_, _, _, pts)| pts.len()).unwrap_or(0);
+
+            if let Some(ref info) = head_info {
+                let head_usable =
+                    cues_cover_duration(&info.cues_in_head_points, info.duration_ticks, false);
+                let mut seek_cues_usable = false;
+                let mut seek_cues_note = String::from("seekTarget=-");
+
+                if !head_usable {
+                    if let (Some(rel_pos), Some(tot)) = (info.seek_head_cues_pos, total_size) {
+                        let abs_off = info.seg_data_start.saturating_add(rel_pos);
+                        if abs_off < tot {
+                            let end_off = (abs_off + 65_535).min(tot - 1);
+                            let rng = format!("bytes={abs_off}-{end_off}");
+                            let req = apply_origin_safe_headers(
+                                client.get(current_url.as_str()),
+                                &header_map,
+                                is_same,
+                            )
+                            .header(RANGE, rng);
+                            if let Ok(Ok(r)) =
+                                tokio::time::timeout(Duration::from_secs(5), req.send()).await
+                            {
+                                if r.status() == reqwest::StatusCode::PARTIAL_CONTENT {
+                                    let buf = read_limited_bytes(r, 65_536).await;
+                                    if let Some((_, _, trunc, pts)) = find_cues_in_slice(&buf) {
+                                        seek_cues_usable = cues_cover_duration(
+                                            &pts,
+                                            info.duration_ticks,
+                                            trunc,
+                                        );
+                                        seek_cues_note = format!(
+                                            "seekTarget={}({})",
+                                            pts.len(),
+                                            if seek_cues_usable { "ok" } else { "unusable" }
+                                        );
+                                    } else {
+                                        seek_cues_note = "seekTarget=0(missing)".to_string();
+                                    }
+                                } else {
+                                    seek_cues_note = format!("seekTarget=HTTP{}", r.status().as_u16());
+                                }
+                            }
+                        } else {
+                            seek_cues_note = "seekTarget=oob".to_string();
+                        }
+                    }
+                }
+
+                // 检测服务端是否截断上传（原片预期体积 > 实际文件体积）并推算实际可播终点
+                expected_size = info.expected_file_size();
+                if let (Some(exp), Some(tot)) = (expected_size, total_size) {
+                    if exp > tot.saturating_add(4096) {
+                        file_truncated = true;
+                        let tail_start = tot.saturating_sub(tail_bytes.len() as u64);
+                        let mut last_cl = extract_last_cluster_cue_from_window(
+                            &tail_bytes,
+                            tail_start,
+                            info.seg_data_start,
+                        );
+                        if last_cl.is_none() && tot > 262_144 {
+                            let probe_len = (3 * 1024 * 1024u64).min(tot - info.first_cluster_offset);
+                            let p_start = tot.saturating_sub(probe_len);
+                            let rng = format!("bytes={p_start}-{}", tot - 1);
+                            let req = apply_origin_safe_headers(
+                                client.get(current_url.as_str()),
+                                &header_map,
+                                is_same,
+                            )
+                            .header(RANGE, rng);
+                            if let Ok(Ok(r)) =
+                                tokio::time::timeout(Duration::from_secs(6), req.send()).await
+                            {
+                                if r.status() == reqwest::StatusCode::PARTIAL_CONTENT {
+                                    let buf = read_limited_bytes(r, probe_len as usize).await;
+                                    last_cl = extract_last_cluster_cue_from_window(
+                                        &buf,
+                                        p_start,
+                                        info.seg_data_start,
+                                    );
+                                }
+                            }
+                        }
+                        if let Some((ts_ticks, _)) = last_cl {
+                            let sec = info.ticks_to_seconds(ts_ticks);
+                            if sec.is_finite() && sec > 0.0 {
+                                max_playable_sec = Some(sec);
+                            }
+                        } else if let Some(dur_sec) = info.duration_seconds() {
+                            if exp > 0 {
+                                max_playable_sec = Some(dur_sec * (tot as f64 / exp as f64));
+                            }
+                        }
+                    }
+                }
+
+                // 仅头部有效 Cues 或 SeekHead 实测可达的有效 Cues 才视作可用（孤立尾部 Cues 在 MKV 顺序扫流下无法被 demux_mkv 直接定位）
+                has_mkv_cues = Some(head_usable || seek_cues_usable);
+                mkv_head_summary = Some(format!(
+                    "{} · {} · tailCues={}{}",
+                    info.summary(),
+                    seek_cues_note,
+                    tail_cues_count,
+                    if file_truncated {
+                        format!(
+                            " · TRUNCATED(exp={} maxSec={})",
+                            expected_size.unwrap_or(0),
+                            max_playable_sec
+                                .map(|s| format!("{s:.0}s"))
+                                .unwrap_or_else(|| "-".to_string())
+                        )
+                    } else {
+                        String::new()
+                    }
+                ));
+            } else {
+                has_mkv_cues = Some(false);
+                mkv_head_summary = Some(format!(
+                    "headParse=none(headLen={}) · tailCues={}",
+                    head_bytes.len(),
+                    tail_cues_count
+                ));
+            }
+        }
+    } else if reachable && final_status == Some(200) {
+        mid_range_supported = Some(false);
+        if let Some(ref head_bytes) = probed_200_head_bytes {
+            if is_ebml_mkv(head_bytes) {
+                is_mkv = true;
+            }
+            if is_mkv {
+                let head_info = inspect_mkv_head(head_bytes);
+                has_mkv_cues = head_info
+                    .as_ref()
+                    .map(|i| cues_cover_duration(&i.cues_in_head_points, i.duration_ticks, false));
+                mkv_head_summary = head_info.map(|i| i.summary());
+            }
+        }
+    }
+
+    let summary = if reachable && file_truncated {
+        let exp_gb = expected_size.unwrap_or(0) as f64 / (1024.0 * 1024.0 * 1024.0);
+        let tot_gb = total_size.unwrap_or(0) as f64 / (1024.0 * 1024.0 * 1024.0);
+        let playable_hint = max_playable_sec
+            .map(|s| {
+                let sec = s.floor() as u64;
+                format!("约 {:02}:{:02}", sec / 60, sec % 60)
+            })
+            .unwrap_or_else(|| "前半段".to_string());
+        format!(
+            "检测到服务端 MKV 文件不完整（预期 {exp_gb:.2} GB，实际仅 {tot_gb:.2} GB，实际可播放至{playable_hint}），超出末尾的续播进度无法加载"
+        )
+    } else if reachable && mid_range_supported == Some(false) {
+        "上游不支持中段 HTTP Range 跳转（返回 HTTP 200），带进度续播需从头顺序读取，建议从 00:00 播放"
+            .to_string()
+    } else if reachable && is_mkv && has_mkv_cues == Some(false) {
+        "Rust 探测支持分段 Range，但该 MKV 缺少可用 Cues 寻址索引（建议使用内置虚拟索引中转加速续播）"
+            .to_string()
+    } else {
+        summarize_diagnostic_outcome(exceeded_redirects, reachable, last, final_status, final_is_html)
+    };
 
     Ok(StreamDiagnosticReport {
         reachable,
@@ -2092,7 +2661,362 @@ pub async fn diagnose_stream_url(
         user_agent,
         summary,
         hops,
+        mid_range_supported,
+        total_size,
+        is_mkv,
+        has_mkv_cues,
+        mkv_head_summary,
+        file_truncated,
+        expected_size,
+        max_playable_sec,
     })
+}
+
+struct VirtualOverlayBuildResult {
+    overlay: Option<VirtualMkvOverlay>,
+    reason: String,
+    file_truncated: bool,
+    expected_size: Option<u64>,
+    max_playable_sec: Option<f64>,
+}
+
+/// 流式分块探测首个合法 Cluster：命中后立即 drop 响应中断下载，兼顾 4K 多 MB 大 Cluster 与最小流量开销。
+async fn stream_probe_first_cluster(
+    mut resp: reqwest::Response,
+    start_off: u64,
+    seg_data_start: u64,
+    max_bytes: usize,
+) -> Option<(u64, u64)> {
+    let mut buf: Vec<u8> = Vec::with_capacity(256 * 1024);
+    let mut scan_from = 0usize;
+    while buf.len() < max_bytes {
+        match tokio::time::timeout(Duration::from_secs(4), resp.chunk()).await {
+            Ok(Ok(Some(chunk))) => {
+                let take = (max_bytes - buf.len()).min(chunk.len());
+                buf.extend_from_slice(&chunk[..take]);
+                if let Some(cue) = extract_cluster_cue_from_window(
+                    &buf[scan_from..],
+                    start_off.saturating_add(scan_from as u64),
+                    seg_data_start,
+                ) {
+                    return Some(cue);
+                }
+                scan_from = buf.len().saturating_sub(64);
+                if take < chunk.len() {
+                    break;
+                }
+            }
+            _ => break,
+        }
+    }
+    None
+}
+
+async fn try_build_virtual_mkv_overlay(
+    client: &reqwest::Client,
+    origin_url_str: &str,
+    headers: &HeaderMap,
+    initial_time_sec: Option<f64>,
+    duration_sec: Option<f64>,
+    resolved_cache: &RwLock<Option<ResolvedTargetCache>>,
+) -> VirtualOverlayBuildResult {
+    let fail = |reason: &str| VirtualOverlayBuildResult {
+        overlay: None,
+        reason: reason.to_string(),
+        file_truncated: false,
+        expected_size: None,
+        max_playable_sec: None,
+    };
+
+    let Ok((head_resp, resolved_url)) = send_with_cached_redirects(
+        client,
+        origin_url_str,
+        headers,
+        Some("bytes=0-131071"),
+        false,
+        resolved_cache,
+    )
+    .await
+    else {
+        return fail("head_req_failed");
+    };
+    if head_resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+        return fail("head_not_206");
+    }
+    let Some(total_size) = head_resp
+        .headers()
+        .get(CONTENT_RANGE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| parse_content_range_total(Some(s)))
+    else {
+        return fail("missing_total_size");
+    };
+    if total_size <= 512 * 1024 {
+        return fail("too_small");
+    }
+    let mut head_bytes = read_limited_bytes(head_resp, 131_072).await;
+    if !is_ebml_mkv(&head_bytes) {
+        return fail("not_mkv");
+    }
+
+    let mut head_info = inspect_mkv_head(&head_bytes);
+    if head_info.is_none() {
+        if let Ok((big_resp, _)) = send_with_cached_redirects(
+            client,
+            origin_url_str,
+            headers,
+            Some("bytes=0-1048575"),
+            false,
+            resolved_cache,
+        )
+        .await
+        {
+            if big_resp.status() == reqwest::StatusCode::PARTIAL_CONTENT {
+                let bigger = read_limited_bytes(big_resp, 1_048_576).await;
+                if !bigger.is_empty() {
+                    head_bytes = bigger;
+                    head_info = inspect_mkv_head(&head_bytes);
+                }
+            }
+        }
+    }
+    let Some(head_info) = head_info else {
+        return fail("head_parse_failed");
+    };
+
+    let expected_size = head_info.expected_file_size();
+    let file_truncated = expected_size
+        .map(|exp| exp > total_size.saturating_add(4096))
+        .unwrap_or(false);
+    let mut max_playable_sec: Option<f64> = if file_truncated {
+        match (head_info.duration_seconds(), expected_size) {
+            (Some(dur), Some(exp)) if exp > 0 => Some(dur * (total_size as f64 / exp as f64)),
+            _ => None,
+        }
+    } else {
+        None
+    };
+
+    if cues_cover_duration(
+        &head_info.cues_in_head_points,
+        head_info.duration_ticks,
+        false,
+    ) {
+        return VirtualOverlayBuildResult {
+            overlay: None,
+            reason: "skipped_valid_head_cues".to_string(),
+            file_truncated,
+            expected_size,
+            max_playable_sec,
+        };
+    }
+
+    let (Ok(origin_parsed), Ok(target_parsed)) = (Url::parse(origin_url_str), Url::parse(&resolved_url)) else {
+        return fail("url_parse_failed");
+    };
+    let is_same = same_origin(&origin_parsed, &target_parsed);
+
+    if let Some(rel_pos) = head_info.seek_head_cues_pos {
+        let abs_off = head_info.seg_data_start.saturating_add(rel_pos);
+        if abs_off < total_size {
+            let end_off = (abs_off + 65_535).min(total_size - 1);
+            let rng = format!("bytes={abs_off}-{end_off}");
+            let req = apply_origin_safe_headers(client.get(resolved_url.as_str()), headers, is_same)
+                .header(RANGE, rng);
+            if let Ok(Ok(r)) = tokio::time::timeout(Duration::from_secs(4), req.send()).await {
+                if r.status() == reqwest::StatusCode::PARTIAL_CONTENT {
+                    let buf = read_limited_bytes(r, 65_536).await;
+                    if let Some((_, _, trunc, pts)) = find_cues_in_slice(&buf) {
+                        if cues_cover_duration(&pts, head_info.duration_ticks, trunc) {
+                            return VirtualOverlayBuildResult {
+                                overlay: None,
+                                reason: "skipped_valid_seek_cues".to_string(),
+                                file_truncated,
+                                expected_size,
+                                max_playable_sec,
+                            };
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 检查尾部（最多 2 MiB，用于发现孤立 Cues 或截断文件的真实最后 Cluster）与中段 Range 206
+    let tail_len = if file_truncated {
+        (2 * 1024 * 1024u64).min(total_size.saturating_sub(head_info.first_cluster_offset))
+    } else {
+        131_072u64.min(total_size)
+    };
+    let tail_start = total_size.saturating_sub(tail_len);
+    let tail_rng = format!("bytes={tail_start}-{}", total_size - 1);
+    let mid = total_size / 2;
+    let mid_rng = format!("bytes={mid}-{}", mid + 1023);
+    let (tail_res, mid_res) = tokio::join!(
+        send_with_cached_redirects(
+            client,
+            origin_url_str,
+            headers,
+            Some(&tail_rng),
+            false,
+            resolved_cache,
+        ),
+        send_with_cached_redirects(
+            client,
+            origin_url_str,
+            headers,
+            Some(&mid_rng),
+            false,
+            resolved_cache,
+        )
+    );
+    let Ok((mid_resp, _)) = mid_res else {
+        return VirtualOverlayBuildResult {
+            overlay: None,
+            reason: "mid_probe_failed".to_string(),
+            file_truncated,
+            expected_size,
+            max_playable_sec,
+        };
+    };
+    if mid_resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+        return VirtualOverlayBuildResult {
+            overlay: None,
+            reason: "mid_not_206".to_string(),
+            file_truncated,
+            expected_size,
+            max_playable_sec,
+        };
+    }
+    drop(mid_resp);
+
+    let mut raw_cues: Vec<(u64, u64)> = Vec::new();
+    if let Ok((tail_resp, _)) = tail_res {
+        if tail_resp.status() == reqwest::StatusCode::PARTIAL_CONTENT {
+            let tail_bytes = read_limited_bytes(tail_resp, tail_len as usize).await;
+            if let Some((_, _, trunc, pts)) = find_cues_in_slice(&tail_bytes) {
+                if !trunc && cues_cover_duration(&pts, head_info.duration_ticks, false) {
+                    if let Some(overlay) =
+                        build_virtual_mkv_patch(&head_bytes, &head_info, total_size, &pts)
+                    {
+                        let cnt = overlay.cue_count;
+                        return VirtualOverlayBuildResult {
+                            overlay: Some(overlay),
+                            reason: format!("lifted_tail_cues({cnt})"),
+                            file_truncated,
+                            expected_size,
+                            max_playable_sec,
+                        };
+                    }
+                }
+            }
+            if let Some(last_cl) = extract_last_cluster_cue_from_window(
+                &tail_bytes,
+                tail_start,
+                head_info.seg_data_start,
+            ) {
+                let sec = head_info.ticks_to_seconds(last_cl.0);
+                if sec.is_finite() && sec > 0.0 {
+                    max_playable_sec = Some(sec);
+                }
+                raw_cues.push(last_cl);
+            }
+        }
+    }
+
+    if let Some(c0) = extract_cluster_cue_from_window(
+        &head_bytes[head_info.first_cluster_offset as usize..],
+        head_info.first_cluster_offset,
+        head_info.seg_data_start,
+    ) {
+        raw_cues.push(c0);
+    }
+
+    let min_off = head_info.first_cluster_offset.saturating_add(64 * 1024);
+    let max_off = total_size.saturating_sub(256 * 1024);
+    if max_off <= min_off {
+        return VirtualOverlayBuildResult {
+            overlay: None,
+            reason: "range_too_small".to_string(),
+            file_truncated,
+            expected_size,
+            max_playable_sec,
+        };
+    }
+
+    // 精简为 6 个均匀分布点 + 最多 2 个目标进度附近点，每点支持最多 4 MiB 流式早停（命中首个 Cluster 即断流）
+    let mut probe_offsets: Vec<u64> = (1..=6)
+        .map(|i| min_off + ((max_off - min_off) * i) / 7)
+        .collect();
+
+    let effective_dur = max_playable_sec
+        .or_else(|| head_info.duration_seconds())
+        .or(duration_sec);
+    if let (Some(init), Some(dur)) = (initial_time_sec, effective_dur) {
+        if init > 5.0 && dur > init + 1.0 {
+            let est = (((total_size as f64) * (init / dur)).floor() as u64).clamp(min_off, max_off);
+            probe_offsets.push(est.saturating_sub(3 * 1024 * 1024).clamp(min_off, max_off));
+            probe_offsets.push(est);
+        }
+    }
+    probe_offsets.sort_unstable();
+    let mut compact_offsets: Vec<u64> = Vec::with_capacity(probe_offsets.len());
+    for off in probe_offsets {
+        if compact_offsets
+            .last()
+            .map(|&prev| off.saturating_sub(prev) >= 512 * 1024)
+            .unwrap_or(true)
+        {
+            compact_offsets.push(off);
+        }
+    }
+
+    let sem = Arc::new(tokio::sync::Semaphore::new(4));
+    let mut handles = Vec::with_capacity(compact_offsets.len());
+    let seg_data_start = head_info.seg_data_start;
+    for off in compact_offsets {
+        let Ok(permit) = sem.clone().acquire_owned().await else {
+            break;
+        };
+        let c = client.clone();
+        let u = resolved_url.clone();
+        let hdrs = headers.clone();
+        handles.push(tokio::spawn(async move {
+            let _permit = permit;
+            let end = (off + 4 * 1024 * 1024 - 1).min(total_size - 1);
+            let rng = format!("bytes={off}-{end}");
+            let req = apply_origin_safe_headers(c.get(u.as_str()), &hdrs, is_same)
+                .header(RANGE, rng);
+            let Ok(Ok(resp)) = tokio::time::timeout(Duration::from_secs(6), req.send()).await else {
+                return None;
+            };
+            if resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+                return None;
+            }
+            stream_probe_first_cluster(resp, off, seg_data_start, 4 * 1024 * 1024).await
+        }));
+    }
+
+    for h in handles {
+        if let Ok(Some(cue)) = h.await {
+            raw_cues.push(cue);
+        }
+    }
+
+    let found_count = raw_cues.len();
+    let overlay = build_virtual_mkv_patch(&head_bytes, &head_info, total_size, &raw_cues);
+    let reason = match &overlay {
+        Some(ov) => format!("ok({}_cues)", ov.cue_count),
+        None => format!("too_few_cues({found_count})"),
+    };
+
+    VirtualOverlayBuildResult {
+        overlay,
+        reason,
+        file_truncated,
+        expected_size,
+        max_playable_sec,
+    }
 }
 
 #[tauri::command]
@@ -2100,13 +3024,63 @@ pub async fn start_stream_relay(request: StartRelayRequest) -> Result<StartedRel
     let (user_agent, header_map) = parse_request_headers(request.headers);
     let client = build_no_redirect_http_client(request.proxy_url.as_deref(), &user_agent)?;
     let token = Uuid::new_v4().to_string();
+    let resolved_target = RwLock::new(None);
+
+    let build_res = if request.enable_mkv_virtual_cues.unwrap_or(false) {
+        match tokio::time::timeout(
+            Duration::from_secs(15),
+            try_build_virtual_mkv_overlay(
+                &client,
+                &request.url,
+                &header_map,
+                request.initial_time_sec,
+                request.duration_sec,
+                &resolved_target,
+            ),
+        )
+        .await
+        {
+            Ok(res) => res,
+            Err(_) => VirtualOverlayBuildResult {
+                overlay: None,
+                reason: "timeout(15s)".to_string(),
+                file_truncated: false,
+                expected_size: None,
+                max_playable_sec: None,
+            },
+        }
+    } else {
+        VirtualOverlayBuildResult {
+            overlay: None,
+            reason: "disabled".to_string(),
+            file_truncated: false,
+            expected_size: None,
+            max_playable_sec: None,
+        }
+    };
+
+    let virtual_cues_active = build_res.overlay.is_some();
+    let virtual_cues_count = build_res.overlay.as_ref().map(|v| v.cue_count).unwrap_or(0);
+    let virtual_cues_reason = Some(build_res.reason);
+    let file_truncated = build_res.file_truncated;
+    let expected_size = build_res.expected_size;
+    let max_playable_sec = build_res.max_playable_sec;
 
     let session = Arc::new(RelaySession {
         token: token.clone(),
         upstream_url: request.url,
         client,
         headers: header_map,
-        resolved_target: RwLock::new(None),
+        resolved_target,
+        virtual_mkv: build_res.overlay,
+        virtual_cues_reason: virtual_cues_reason.clone(),
+        file_truncated,
+        expected_size,
+        max_playable_sec,
+        bytes_sent: AtomicU64::new(0),
+        request_count: AtomicU64::new(0),
+        last_status: AtomicU16::new(0),
+        telemetry: RwLock::new(RelayTelemetry::default()),
     });
 
     {
@@ -2121,7 +3095,18 @@ pub async fn start_stream_relay(request: StartRelayRequest) -> Result<StartedRel
     Ok(StartedRelayDto {
         token: token.clone(),
         local_url: format!("http://127.0.0.1:{port}/relay/{token}"),
+        virtual_cues_active,
+        virtual_cues_count,
+        virtual_cues_reason,
+        file_truncated,
+        expected_size,
+        max_playable_sec,
     })
+}
+
+#[tauri::command]
+pub async fn get_stream_relay_stats(token: String) -> Result<Option<RelayStatsDto>, String> {
+    Ok(find_relay_by_token(&token).map(|s| s.to_stats_dto()))
 }
 
 #[tauri::command]

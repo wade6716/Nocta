@@ -2,6 +2,7 @@ mod proxy;
 mod sync;
 mod system;
 mod osd_overlay;
+mod mkv_cues;
 mod preload;
 mod updater;
 mod image_proxy;
@@ -371,6 +372,7 @@ pub fn run() {
             preload::clear_all_preloads,
             preload::diagnose_stream_url,
             preload::start_stream_relay,
+            preload::get_stream_relay_stats,
             preload::stop_stream_relay,
             updater::get_updater_runtime_info,
             updater::check_app_update,

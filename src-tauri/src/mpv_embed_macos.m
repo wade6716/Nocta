@@ -1,4 +1,6 @@
 #import <Cocoa/Cocoa.h>
+#import <objc/runtime.h>
+#include <stddef.h>
 
 static NSWindow *g_parent_window = nil;
 static NSWindow *g_mpv_window = nil;
@@ -9,6 +11,32 @@ static id g_change_screen_observer = nil;
 static id g_main_enter_fs_observer = nil;
 static id g_main_exit_fs_observer = nil;
 static id g_main_become_key_observer = nil;
+static BOOL g_app_icon_locked = NO;
+static BOOL g_allow_app_icon_update = NO;
+
+@implementation NSApplication (NoctaIconGuard)
+
+- (void)nocta_setApplicationIconImage:(NSImage *)image {
+    if (g_app_icon_locked && !g_allow_app_icon_update) {
+        return;
+    }
+    [self nocta_setApplicationIconImage:image];
+}
+
+@end
+
+static void nocta_install_app_icon_guard(void) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        Class cls = [NSApplication class];
+        Method original = class_getInstanceMethod(cls, @selector(setApplicationIconImage:));
+        Method swizzled = class_getInstanceMethod(cls, @selector(nocta_setApplicationIconImage:));
+        if (original && swizzled) {
+            method_exchangeImplementations(original, swizzled);
+            g_app_icon_locked = YES;
+        }
+    });
+}
 
 static NSView *find_wkwebview_in_view(NSView *view) {
     if (!view) {
@@ -122,6 +150,7 @@ static void observe_parent_window(NSWindow *parent) {
 }
 
 int nocta_attach_mpv_window(void *parent_ptr, const char *title_ptr) {
+    nocta_install_app_icon_guard();
     if (!parent_ptr || !title_ptr) {
         return 0;
     }
@@ -279,4 +308,30 @@ void nocta_configure_main_window(void *window_ptr) {
                         usingBlock:restoreFocusBlock];
 
     restoreFocusBlock(nil);
+}
+
+// 拦截 libmpv (Common.setAppIcon) 在非 swift.Application 进程中强行覆盖 [NSApp setApplicationIconImage:] 的行为：
+// 在 .app 包中保持原生 bundle icon.icns（nil），在 dev 无包运行态下则注入并锁定 Nocta 应用图标。
+void nocta_protect_app_icon(const void *fallback_icon_bytes, size_t fallback_icon_len) {
+    nocta_install_app_icon_guard();
+    if (!NSApp) {
+        return;
+    }
+
+    NSString *bundlePath = [[NSBundle mainBundle] bundlePath];
+    BOOL isAppBundle = bundlePath && [bundlePath hasSuffix:@".app"];
+
+    if (isAppBundle) {
+        g_allow_app_icon_update = YES;
+        [NSApp setApplicationIconImage:nil];
+        g_allow_app_icon_update = NO;
+    } else if (fallback_icon_bytes && fallback_icon_len > 0) {
+        NSData *iconData = [NSData dataWithBytes:fallback_icon_bytes length:fallback_icon_len];
+        NSImage *iconImage = [[NSImage alloc] initWithData:iconData];
+        if (iconImage) {
+            g_allow_app_icon_update = YES;
+            [NSApp setApplicationIconImage:iconImage];
+            g_allow_app_icon_update = NO;
+        }
+    }
 }

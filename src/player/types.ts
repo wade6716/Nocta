@@ -75,7 +75,6 @@ export interface PlayerLoadOptions {
   isLive?: boolean;
   proxyOverride?: StreamProxyOverride;
   bufferConfig?: BufferConfigOptions;
-  demuxer?: 'auto' | 'lavf';
 }
 
 export interface IPlayerEngine {

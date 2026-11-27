@@ -763,7 +763,7 @@ export class MpvPlayerEngine implements IPlayerEngine {
           this._telemetry.firstFrameReady = true;
           this._telemetry.isSeeking = false;
           this._telemetry.pausedForCache = false;
-          this.emitTelemetryThrottled();
+          this.emitTelemetryImmediate();
           this.updateCurrentState();
           this.timeUpdateListeners.forEach((cb) => cb(this._currentTime, this._duration));
           this.attachMacWindow();
@@ -961,7 +961,7 @@ export class MpvPlayerEngine implements IPlayerEngine {
     ) {
       this._firstFrameReady = true;
       this._telemetry.firstFrameReady = true;
-      this.emitTelemetryThrottled();
+      this.emitTelemetryImmediate();
       this.updateCurrentState();
     }
   }
@@ -1059,8 +1059,7 @@ export class MpvPlayerEngine implements IPlayerEngine {
     };
     this.emitTelemetryThrottled();
 
-    // 每次加载媒体流时，按当前策略配置解复用器、寻址模式与网络重连参数
-    await setProperty('demuxer', options.demuxer === 'lavf' ? 'lavf' : '').catch(() => {});
+    // 每次加载媒体流时，按当前策略配置寻址模式与网络重连参数
     await setProperty('force-seekable', 'no').catch(() => {});
     await setProperty('hr-seek', 'no').catch(() => {});
     await setProperty('hr-seek-framedrop', 'yes').catch(() => {});
@@ -1104,7 +1103,6 @@ export class MpvPlayerEngine implements IPlayerEngine {
           MpvPlayerEngine.mpvInstanceCreated = false;
           await this.init(null);
           await this.applyBufferConfigToMpv();
-          await setProperty('demuxer', options.demuxer === 'lavf' ? 'lavf' : '').catch(() => {});
           await setProperty('http-proxy', mpvEffectiveProxy).catch(() => {});
           await this.applyNetworkHeadersToMpv(options.userAgent, options.headers);
           if (this.pendingSeekTime && this.pendingSeekTime > 0) {
@@ -1444,6 +1442,17 @@ export class MpvPlayerEngine implements IPlayerEngine {
       const snapshot = { ...this._telemetry };
       this.telemetryListeners.forEach((cb) => cb(snapshot));
     }, 400);
+  }
+
+  private emitTelemetryImmediate() {
+    if (this.telemetryTimer !== null) {
+      window.clearTimeout(this.telemetryTimer);
+      this.telemetryTimer = null;
+    }
+    this.telemetryDirty = false;
+    if (this.isDestroyed) return;
+    const snapshot = { ...this._telemetry };
+    this.telemetryListeners.forEach((cb) => cb(snapshot));
   }
 
   async destroy(): Promise<void> {

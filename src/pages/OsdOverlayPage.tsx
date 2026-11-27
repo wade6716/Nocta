@@ -575,7 +575,6 @@ export const OsdOverlayPage: React.FC = () => {
       <BufferingIndicator
         visible={Boolean(sync.isBuffering) && !sync.isLoading && !sync.centerIcon}
         networkSpeed={sync.networkSpeed}
-        hint={sync.bufferingHint || undefined}
       />
 
       <DanmakuLayer

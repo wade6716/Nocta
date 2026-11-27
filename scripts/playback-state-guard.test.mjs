@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  buildBufferingStatusHint,
   computeClampedBridgeElapsed,
   computeStreamPosSpeed,
   decideStallRecoveryAction,
@@ -9,12 +8,6 @@ import {
   shouldExitInitialLoading,
   shouldUseKeyframeSeek,
 } from '../src/player/playbackStateGuard.ts';
-
-const fmt = (sec) => {
-  const m = Math.floor(sec / 60);
-  const s = Math.floor(sec % 60);
-  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-};
 
 test('shouldDanmakuRun freezes danmaku during loading, buffering, unready first frame, pause, or error', () => {
   assert.equal(
@@ -149,27 +142,7 @@ test('computeStreamPosSpeed reports 20 MB/s sequential reads while ignoring Rang
   assert.equal(computeStreamPosSpeed(0, 1000, 100_000, 1050), null);
 });
 
-test('buildBufferingStatusHint explains seeking and non-Range sequential loading', () => {
-  const partialHint = buildBufferingStatusHint({
-    partiallySeekable: true,
-    isSeeking: true,
-    networkSpeed: 20 * 1024 * 1024,
-    targetTimeSeconds: 1350,
-    formatTime: fmt,
-  });
-  assert.match(partialHint || '', /分段跳转/);
-  assert.match(partialHint || '', /22:30/);
-
-  const seekHint = buildBufferingStatusHint({
-    isSeeking: true,
-    networkSpeed: 0,
-    targetTimeSeconds: 600,
-    formatTime: fmt,
-  });
-  assert.equal(seekHint, '正在定位至 10:00...');
-});
-
-test('decideStallRecoveryAction supports virtual Cues, non-Range mid-file, lavf fallback, and speed guard', () => {
+test('decideStallRecoveryAction supports relay fallback, non-Range mid-file, and manual prompt', () => {
   assert.equal(
     decideStallRecoveryAction({
       elapsedMs: 5000,
@@ -179,8 +152,6 @@ test('decideStallRecoveryAction supports virtual Cues, non-Range mid-file, lavf 
       hasError: false,
       usingRelay: false,
       relayAlreadyAttempted: false,
-      lavfAlreadyAttempted: false,
-      isMkvContainer: true,
       diagnosticReachable: true,
       diagnosticFinalStatus: 206,
       targetInitialTime: 1350,
@@ -188,7 +159,7 @@ test('decideStallRecoveryAction supports virtual Cues, non-Range mid-file, lavf 
     'none'
   );
 
-  // MKV lacking Cues + mid-Range works -> one-step try_relay_virtual_cues
+  // Reachable 206 -> try_relay -> show_manual_prompt
   assert.equal(
     decideStallRecoveryAction({
       elapsedMs: 8500,
@@ -198,34 +169,9 @@ test('decideStallRecoveryAction supports virtual Cues, non-Range mid-file, lavf 
       hasError: false,
       usingRelay: false,
       relayAlreadyAttempted: false,
-      lavfAlreadyAttempted: false,
-      isMkvContainer: true,
       diagnosticReachable: true,
       diagnosticFinalStatus: 206,
       midRangeSupported: true,
-      hasMkvCues: false,
-      relayVirtualCuesActive: false,
-      targetInitialTime: 1350,
-    }),
-    'try_relay_virtual_cues'
-  );
-
-  // Reachable 206 with Cues (or unknown Cues) -> try_relay -> try_lavf -> show_manual_prompt
-  assert.equal(
-    decideStallRecoveryAction({
-      elapsedMs: 8500,
-      hasFirstFrame: false,
-      cacheDuration: 0,
-      isMpv: true,
-      hasError: false,
-      usingRelay: false,
-      relayAlreadyAttempted: false,
-      lavfAlreadyAttempted: false,
-      isMkvContainer: true,
-      diagnosticReachable: true,
-      diagnosticFinalStatus: 206,
-      midRangeSupported: true,
-      hasMkvCues: true,
       targetInitialTime: 1350,
     }),
     'try_relay'
@@ -240,31 +186,8 @@ test('decideStallRecoveryAction supports virtual Cues, non-Range mid-file, lavf 
       hasError: false,
       usingRelay: true,
       relayAlreadyAttempted: true,
-      lavfAlreadyAttempted: false,
-      isMkvContainer: true,
       diagnosticReachable: true,
       diagnosticFinalStatus: 206,
-      targetInitialTime: 1350,
-    }),
-    'try_lavf'
-  );
-
-  // Fast sequential download on cueless MKV already inside relay does NOT interrupt with try_lavf
-  assert.equal(
-    decideStallRecoveryAction({
-      elapsedMs: 8500,
-      hasFirstFrame: false,
-      cacheDuration: 0,
-      isMpv: true,
-      hasError: false,
-      usingRelay: true,
-      relayAlreadyAttempted: true,
-      lavfAlreadyAttempted: false,
-      isMkvContainer: true,
-      diagnosticReachable: true,
-      diagnosticFinalStatus: 206,
-      hasMkvCues: false,
-      activeDownloadSpeed: 20 * 1024 * 1024,
       targetInitialTime: 1350,
     }),
     'show_manual_prompt'
@@ -280,59 +203,11 @@ test('decideStallRecoveryAction supports virtual Cues, non-Range mid-file, lavf 
       hasError: false,
       usingRelay: false,
       relayAlreadyAttempted: false,
-      lavfAlreadyAttempted: false,
-      isMkvContainer: true,
       diagnosticReachable: true,
       diagnosticFinalStatus: 206,
       midRangeSupported: false,
       targetInitialTime: 1350,
     }),
     'show_non_range_prompt'
-  );
-
-  // Truncated MKV with resume past actual EOF -> show_truncated_file_prompt immediately
-  assert.equal(
-    decideStallRecoveryAction({
-      elapsedMs: 8500,
-      hasFirstFrame: false,
-      cacheDuration: 0,
-      isMpv: true,
-      hasError: false,
-      usingRelay: false,
-      relayAlreadyAttempted: false,
-      lavfAlreadyAttempted: false,
-      isMkvContainer: true,
-      diagnosticReachable: true,
-      diagnosticFinalStatus: 206,
-      midRangeSupported: true,
-      hasMkvCues: false,
-      fileTruncated: true,
-      maxPlayableSec: 1090,
-      targetInitialTime: 1515,
-    }),
-    'show_truncated_file_prompt'
-  );
-
-  // Truncated MKV with resume WITHIN playable range -> try_relay_virtual_cues
-  assert.equal(
-    decideStallRecoveryAction({
-      elapsedMs: 8500,
-      hasFirstFrame: false,
-      cacheDuration: 0,
-      isMpv: true,
-      hasError: false,
-      usingRelay: false,
-      relayAlreadyAttempted: false,
-      lavfAlreadyAttempted: false,
-      isMkvContainer: true,
-      diagnosticReachable: true,
-      diagnosticFinalStatus: 206,
-      midRangeSupported: true,
-      hasMkvCues: false,
-      fileTruncated: true,
-      maxPlayableSec: 1090,
-      targetInitialTime: 600,
-    }),
-    'try_relay_virtual_cues'
   );
 });

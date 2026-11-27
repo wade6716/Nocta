@@ -22,16 +22,6 @@ export interface KeyframeSeekParams {
   isInitialSeek?: boolean;
 }
 
-export interface BufferingStatusHintParams {
-  isSeeking?: boolean;
-  partiallySeekable?: boolean;
-  networkSpeed: number;
-  targetTimeSeconds?: number;
-  streamPos?: number;
-  fileSize?: number;
-  formatTime: (sec: number) => string;
-}
-
 export interface StallRecoveryParams {
   elapsedMs: number;
   hasFirstFrame: boolean;
@@ -40,26 +30,16 @@ export interface StallRecoveryParams {
   hasError: boolean;
   usingRelay: boolean;
   relayAlreadyAttempted: boolean;
-  lavfAlreadyAttempted: boolean;
-  isMkvContainer: boolean;
   diagnosticReachable?: boolean;
   diagnosticFinalStatus?: number | null;
   midRangeSupported?: boolean | null;
-  hasMkvCues?: boolean | null;
-  fileTruncated?: boolean;
-  maxPlayableSec?: number | null;
-  relayVirtualCuesActive?: boolean;
-  activeDownloadSpeed?: number;
   targetInitialTime: number;
 }
 
 export type StallRecoveryAction =
   | 'none'
   | 'try_relay'
-  | 'try_relay_virtual_cues'
-  | 'try_lavf'
   | 'show_non_range_prompt'
-  | 'show_truncated_file_prompt'
   | 'show_manual_prompt';
 
 const MAX_STREAM_POS_SPEED_BYTES_PER_SEC = 300 * 1024 * 1024;
@@ -142,29 +122,9 @@ export function computeStreamPosSpeed(
 }
 
 /**
- * 生成卡顿/定位期间的明确状态提示文案，避免无信息提示的 "0 KB/s"。
- */
-export function buildBufferingStatusHint(
-  params: BufferingStatusHintParams
-): string | undefined {
-  const target = params.targetTimeSeconds;
-  if (params.partiallySeekable && target !== undefined && target > 15) {
-    return `片源不支持分段跳转，正在顺序加载至 ${params.formatTime(target)}...`;
-  }
-  if (params.isSeeking) {
-    if (target !== undefined && target > 0) {
-      return `正在定位至 ${params.formatTime(target)}...`;
-    }
-    return '正在定位画面...';
-  }
-  return undefined;
-}
-
-/**
- * 8 秒 0 首帧卡滞看门狗的智能恢复决策：
+ * 8 秒 0 首帧卡滞看门狗的恢复决策：
  * - 上游中段不支持 Range：禁止反复重启打断，直接提示从 00:00 播放；
- * - MKV 缺少 Cues 索引但支持中段 Range：一步切换内置虚拟 Cues 索引中转秒开；
- * - 常规 302 卡滞：优先切换内置中转 -> 再尝试 FFmpeg lavf（除非已在高速扫流中）。
+ * - 常规 302 卡滞：优先切换内置中转。
  */
 export function decideStallRecoveryAction(
   params: StallRecoveryParams
@@ -180,29 +140,10 @@ export function decideStallRecoveryAction(
   }
 
   if (
-    params.fileTruncated &&
-    typeof params.maxPlayableSec === 'number' &&
-    params.maxPlayableSec > 0 &&
-    params.targetInitialTime >= params.maxPlayableSec - 5
-  ) {
-    return 'show_truncated_file_prompt';
-  }
-
-  if (
     (params.diagnosticFinalStatus === 200 || params.midRangeSupported === false) &&
     params.targetInitialTime > 15
   ) {
     return 'show_non_range_prompt';
-  }
-
-  if (
-    params.isMkvContainer &&
-    params.hasMkvCues === false &&
-    params.midRangeSupported !== false &&
-    !params.relayVirtualCuesActive &&
-    !params.relayAlreadyAttempted
-  ) {
-    return 'try_relay_virtual_cues';
   }
 
   if (
@@ -212,13 +153,6 @@ export function decideStallRecoveryAction(
     params.diagnosticFinalStatus !== 200
   ) {
     return 'try_relay';
-  }
-
-  const fastSequentialDownload =
-    Boolean(params.activeDownloadSpeed && params.activeDownloadSpeed >= 1024 * 1024) &&
-    params.hasMkvCues === false;
-  if (!params.lavfAlreadyAttempted && params.isMkvContainer && !fastSequentialDownload) {
-    return 'try_lavf';
   }
 
   return 'show_manual_prompt';

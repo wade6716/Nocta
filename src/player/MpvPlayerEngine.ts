@@ -1057,7 +1057,7 @@ export class MpvPlayerEngine implements IPlayerEngine {
       firstFrameReady: false,
       streamPos: 0,
     };
-    this.emitTelemetryThrottled();
+    this.emitTelemetryImmediate();
 
     // 每次加载媒体流时，按当前策略配置寻址模式与网络重连参数
     await setProperty('force-seekable', 'no').catch(() => {});

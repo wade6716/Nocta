@@ -529,13 +529,9 @@ export const PlayerPage: React.FC = () => {
       if (!/\/relay\//.test(streamUrl)) {
         relayFallbackAttemptedRef.current = false;
         altCandidateFallbackAttemptedRef.current = false;
-        setUsingRelayStream(false);
+        stopActiveRelay();
         setDiagnosticReport(null);
         setDiagnosticCopied(false);
-        if (isTauriEnvironment() && activeRelayTokenRef.current) {
-          invoke('stop_stream_relay', { token: activeRelayTokenRef.current }).catch(() => {});
-          activeRelayTokenRef.current = null;
-        }
       }
       setCurrentStreamUrl(streamUrl);
       setFirstFrameState(false);
@@ -561,6 +557,7 @@ export const PlayerPage: React.FC = () => {
     resetOutroForNewStream,
     setFirstFrameState,
     setLoadingState,
+    stopActiveRelay,
     syncBridgePlaybackState,
     updateBuffering,
   ]);
@@ -2504,13 +2501,16 @@ export const PlayerPage: React.FC = () => {
         if (autoRelayIfReachable && report.reachable && !relayFallbackAttemptedRef.current) {
           relayFallbackAttemptedRef.current = true;
           try {
-            await startRelayPlayback(target);
-            showMiniHud({
-              icon: 'info',
-              label: '直连受限，已自动切换内置中转通道播放',
-              subLabel: '如仍失败请查看网络代理设置',
-            });
-            return;
+            const ok = await startRelayPlayback(target);
+            if (ok) {
+              showMiniHud({
+                icon: 'info',
+                label: '直连受限，已自动切换内置中转通道播放',
+                subLabel: '如仍失败请查看网络代理设置',
+              });
+              return;
+            }
+            if (reqId !== diagReqIdRef.current) return;
           } catch (relayErr) {
             console.warn('[Auto Relay Fallback Failed]', relayErr);
           }
@@ -2716,7 +2716,11 @@ export const PlayerPage: React.FC = () => {
       if (action === 'show_non_range_prompt') {
         setStallNotice('当前线路不支持分段续播，建议从 00:00 重新播放。');
       } else if (action === 'show_manual_prompt' || action === 'try_relay') {
-        setStallNotice('加载耗时较长，可尝试从 00:00 重新播放或复制诊断日志。');
+        setStallNotice(
+          initialTimeRef.current > 15
+            ? '加载耗时较长，可尝试从 00:00 重新播放或复制诊断日志。'
+            : '加载耗时较长，可尝试重新加载或复制诊断日志。'
+        );
       }
     }, 8000);
 
@@ -3359,12 +3363,19 @@ export const PlayerPage: React.FC = () => {
                   {stallNotice}
                 </div>
                 <div className="flex flex-wrap gap-2 pt-0.5">
-                  {initialTimeRef.current > 15 && (
+                  {initialTimeRef.current > 15 ? (
                     <button
                       onClick={handlePlayFromStart}
                       className="px-3 py-1.5 rounded-lg bg-[#1D1D1F] hover:bg-black text-white dark:bg-white dark:hover:bg-white/90 dark:text-[#1D1D1F] text-xs font-semibold transition cursor-pointer"
                     >
                       从 00:00 重新播放
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => handleRetryDirect()}
+                      className="px-3 py-1.5 rounded-lg bg-[#1D1D1F] hover:bg-black text-white dark:bg-white dark:hover:bg-white/90 dark:text-[#1D1D1F] text-xs font-semibold transition cursor-pointer"
+                    >
+                      重新加载
                     </button>
                   )}
                   <button

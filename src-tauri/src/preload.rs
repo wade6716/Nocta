@@ -1293,9 +1293,15 @@ async fn handle_relay_request(
         return Ok(can_keep_alive);
     }
 
-    while let Ok(Some(chunk)) = resp.chunk().await {
-        if stream.write_all(&chunk).await.is_err() {
-            return Ok(false);
+    loop {
+        match resp.chunk().await {
+            Ok(Some(chunk)) => {
+                if stream.write_all(&chunk).await.is_err() {
+                    return Ok(false);
+                }
+            }
+            Ok(None) => break,
+            Err(_) => return Ok(false),
         }
     }
 

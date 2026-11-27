@@ -46,6 +46,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
     location.pathname.startsWith('/music') ||
     (activeSpace === 'music' && location.pathname === '/settings');
   const isLoginPage = location.pathname === '/login';
+  const isSettingsPage = location.pathname === '/settings';
 
   const handleSwitchSpace = (space: 'video' | 'music') => {
     setActiveSpace(space);
@@ -284,7 +285,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
         </div>
       )}
 
-      {/* 右侧：统一无框轻盈动作区（搜索圆形钮 + 轻盈服务器切换 + 主题切换 + 窗口控制） */}
+      {/* 右侧：统一无框轻盈动作区（搜索圆形钮 + 轻盈服务器切换 + 主题切换 + 设置圆形钮 + 窗口控制） */}
       <div className="flex items-center h-full space-x-1 pointer-events-auto">
         <button
           onClick={() => navigate(isMusicSpace ? '/music/search' : '/search')}
@@ -339,6 +340,27 @@ export const TitleBar: React.FC<TitleBarProps> = ({
             <Sun className="w-4 h-4 text-amber-300" />
           )}
         </button>
+
+        {currentServer && (
+          <button
+            type="button"
+            onClick={() => navigate(hasUpdate ? '/settings?tab=about' : '/settings')}
+            className={`relative h-8 w-8 rounded-full transition flex items-center justify-center cursor-pointer ${
+              isSettingsPage
+                ? 'bg-black/[0.08] dark:bg-white/[0.14] text-[#1D1D1F] dark:text-white'
+                : isHeroOverlay
+                ? 'preserve-dark hover:bg-white/15 text-white/90 hover:text-white'
+                : 'hover:bg-black/[0.06] dark:hover:bg-white/[0.1] text-[#515154] dark:text-white/80 hover:text-[#1D1D1F] dark:hover:text-white'
+            }`}
+            aria-label="系统设置"
+            title={hasUpdate ? '系统设置 · 发现新版本' : '系统设置'}
+          >
+            <Settings className="w-4 h-4" />
+            {hasUpdate && (
+              <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+            )}
+          </button>
+        )}
 
         {!isMac && (
           <div className="flex items-center h-full -mr-4 ml-1">

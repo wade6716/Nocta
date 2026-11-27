@@ -232,7 +232,9 @@ export const PlayerPage: React.FC = () => {
   const [proxyOverride, setProxyOverride] = useState<StreamProxyOverride>('follow');
   const [proxyInfo, setProxyInfo] = useState<ResolvedStreamProxyInfo | null>(null);
   const [currentRedirectHosts, setCurrentRedirectHosts] = useState<string[]>([]);
+  const [probedMkvCues, setProbedMkvCues] = useState<boolean | null>(null);
   const probedRedirectKeysRef = useRef<Set<string>>(new Set());
+  const probedMkvCuesByKeyRef = useRef<Map<string, boolean>>(new Map());
   const [abLoopA, setAbLoopA] = useState<number | null>(null);
   const [abLoopB, setAbLoopB] = useState<number | null>(null);
 
@@ -550,6 +552,7 @@ export const PlayerPage: React.FC = () => {
         altCandidateFallbackAttemptedRef.current = false;
         sliceAttemptedRef.current = false;
         stopActiveRelay();
+        setProbedMkvCues(null);
         setDiagnosticReport(null);
         setDiagnosticCopied(false);
       }
@@ -927,6 +930,10 @@ export const PlayerPage: React.FC = () => {
 
     const dedupeKey = `${liveServer.id}::${item?.Id || ''}::${mediaSource?.Id || targetStreamUrl}`;
     if (probedRedirectKeysRef.current.has(dedupeKey)) {
+      const cachedCues = probedMkvCuesByKeyRef.current.get(dedupeKey);
+      if (typeof cachedCues === 'boolean') {
+        setProbedMkvCues(cachedCues);
+      }
       return;
     }
 
@@ -954,7 +961,12 @@ export const PlayerPage: React.FC = () => {
             },
           },
         });
-        if (cancelled || !report?.hops) return;
+        if (cancelled) return;
+        if (typeof report?.hasMkvCues === 'boolean') {
+          probedMkvCuesByKeyRef.current.set(dedupeKey, report.hasMkvCues);
+          setProbedMkvCues(report.hasMkvCues);
+        }
+        if (!report?.hops) return;
 
         const serverHost = extractHostFromUrl(liveServer.url)?.host;
         const foundRedirectHosts: string[] = [];
@@ -2581,6 +2593,9 @@ export const PlayerPage: React.FC = () => {
           },
         });
         if (reqId !== diagReqIdRef.current) return;
+        if (typeof report.hasMkvCues === 'boolean') {
+          setProbedMkvCues(report.hasMkvCues);
+        }
 
         if (autoRelayIfReachable && report.reachable && !relayFallbackAttemptedRef.current) {
           relayFallbackAttemptedRef.current = true;
@@ -2794,6 +2809,11 @@ export const PlayerPage: React.FC = () => {
           });
           if (cancelled || reqId !== diagReqIdRef.current || hasFirstFrameRef.current) return;
           report = probed;
+          if (typeof probed.hasMkvCues === 'boolean') {
+            setProbedMkvCues(probed.hasMkvCues);
+            const probeKey = `${liveServer.id}::${item?.Id || ''}::${mediaSource?.Id || target}`;
+            probedMkvCuesByKeyRef.current.set(probeKey, probed.hasMkvCues);
+          }
 
           const serverHost = extractHostFromUrl(liveServer.url)?.host;
           const foundRedirectHosts: string[] = [];
@@ -3101,6 +3121,9 @@ export const PlayerPage: React.FC = () => {
   // 其他平台与窗口模式完全沿用原有单窗口渲染路径。
   const canUseMacOsdOverlay = isTauriEnvironment() && IS_MACOS && engineType === 'mpv';
 
+  const effectiveMkvCues =
+    probedMkvCues ?? diagnosticReport?.hasMkvCues ?? stallReport?.hasMkvCues ?? null;
+
   const livePlayerState = usePlayerStore.getState();
   const osdSyncPayload: OsdSyncPayload | null = item
     ? {
@@ -3179,6 +3202,7 @@ export const PlayerPage: React.FC = () => {
         hasPrevEpisode: !!prevEpisode,
         nextEpisode,
         nextPreloadStatus,
+        mkvCuesStatus: effectiveMkvCues,
         showSkipIntro,
         autoNextCountdown,
         speedHistory,
@@ -3243,6 +3267,7 @@ export const PlayerPage: React.FC = () => {
     nextPreloadStatus?.token ?? '',
     nextPreloadStatus?.status ?? '',
     Math.floor(nextPreloadStatus?.cachedDurationSec ?? 0),
+    effectiveMkvCues ?? '',
     resolvedTheme,
     storeRevisionRef.current,
   ].join('|');
@@ -4192,6 +4217,7 @@ export const PlayerPage: React.FC = () => {
           proxyInfo={proxyInfo}
           userAgent={currentUserAgent}
           nextPreloadStatus={nextPreloadStatus}
+          mkvCuesStatus={effectiveMkvCues}
         />
       )}
 

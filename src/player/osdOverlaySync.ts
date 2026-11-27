@@ -99,6 +99,7 @@ export interface OsdSyncPayload {
   hasPrevEpisode?: boolean;
   nextEpisode?: EmbyItem | null;
   nextPreloadStatus?: NextEpisodePreloadStatus | null;
+  mkvCuesStatus?: boolean | null;
   showSkipIntro?: boolean;
   autoNextCountdown?: number | null;
   speedHistory?: number[];

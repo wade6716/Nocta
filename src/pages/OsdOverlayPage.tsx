@@ -875,6 +875,7 @@ export const OsdOverlayPage: React.FC = () => {
           proxyInfo={sync.proxyInfo}
           userAgent={sync.userAgent}
           nextPreloadStatus={sync.nextPreloadStatus ?? null}
+          mkvCuesStatus={sync.mkvCuesStatus ?? null}
         />
       )}
 

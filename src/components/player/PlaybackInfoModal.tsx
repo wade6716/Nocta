@@ -51,6 +51,7 @@ interface PlaybackInfoModalProps {
   proxyInfo?: ResolvedStreamProxyInfo | null;
   userAgent?: string;
   nextPreloadStatus?: NextEpisodePreloadStatus | null;
+  mkvCuesStatus?: boolean | null;
 }
 
 function formatBytes(bytes?: number): string {
@@ -110,6 +111,7 @@ export const PlaybackInfoModal: React.FC<PlaybackInfoModalProps> = ({
   proxyInfo,
   userAgent,
   nextPreloadStatus,
+  mkvCuesStatus = null,
 }) => {
   const [copied, setCopied] = useState(false);
   const playerPreferences = usePlayerStore((s) => s.playerPreferences);
@@ -153,6 +155,15 @@ export const PlaybackInfoModal: React.FC<PlaybackInfoModalProps> = ({
       ? 'CPU 软解回退 (no)'
       : '探测中 (auto-safe)';
 
+  const containerLower = (mediaSource?.Container || '').toLowerCase();
+  const isMkvMedia =
+    telemetry?.currentDemuxer === 'mkv' ||
+    containerLower.includes('mkv') ||
+    containerLower.includes('matroska') ||
+    Boolean(mediaSource?.Path && /\.mkv(\?|$)/i.test(mediaSource.Path));
+  const mkvCuesLabel =
+    mkvCuesStatus === true ? '正常' : mkvCuesStatus === false ? '缺失' : '未探测';
+
   const handleCopyInfo = async () => {
     const lines = [
       `【Nocta 播放详细信息】`,
@@ -171,6 +182,7 @@ export const PlaybackInfoModal: React.FC<PlaybackInfoModalProps> = ({
       telemetry?.seekable !== undefined
         ? `分段寻址 (Range): ${telemetry.partiallySeekable ? '受限 (非 Range / 部分可寻址)' : telemetry.seekable ? '支持' : '不支持'}`
         : null,
+      engineType === 'mpv' && isMkvMedia ? `MKV 索引 (Cues): ${mkvCuesLabel}` : null,
       telemetry?.streamPos !== undefined && telemetry.streamPos > 0
         ? `底层流读取游标: ${formatBytes(telemetry.streamPos)}${telemetry.fileSize ? ` / ${formatBytes(telemetry.fileSize)}` : ''}`
         : null,
@@ -447,6 +459,23 @@ export const PlaybackInfoModal: React.FC<PlaybackInfoModalProps> = ({
                         : '-'}
                     </span>
                   </div>
+
+                  {isMkvMedia && (
+                    <div>
+                      <span className="text-slate-500 block text-[11px]">MKV 索引 (Cues)</span>
+                      <span
+                        className={`font-mono font-semibold ${
+                          mkvCuesStatus === true
+                            ? 'text-emerald-400'
+                            : mkvCuesStatus === false
+                            ? 'text-amber-300'
+                            : 'text-slate-400'
+                        }`}
+                      >
+                        {mkvCuesLabel}
+                      </span>
+                    </div>
+                  )}
 
                   <div>
                     <span className="text-slate-500 block text-[11px]">底层流读取游标</span>

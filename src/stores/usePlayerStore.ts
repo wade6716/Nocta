@@ -128,7 +128,7 @@ export interface PlayerOverlayStorePatch {
 export const DEFAULT_SKIP_SETTINGS: SkipSettings = {
   skipIntroEnabled: true,
   skipOutroEnabled: true,
-  skipOutroAction: 'ask',
+  skipOutroAction: 'auto',
 };
 
 export function getSkipKey(item: { Id: string; SeriesId?: string | number; Type?: string }): string {
@@ -405,7 +405,7 @@ function loadSkipSettings(): SkipSettings {
     return {
       ...DEFAULT_SKIP_SETTINGS,
       ...parsed,
-      skipOutroAction: parsed.skipOutroAction === 'auto' ? 'auto' : 'ask',
+      skipOutroAction: parsed.skipOutroAction === 'ask' ? 'ask' : 'auto',
     };
   } catch {
     return { ...DEFAULT_SKIP_SETTINGS };

@@ -14,8 +14,8 @@ interface OutroSkipToastProps {
 export const OutroSkipToast: React.FC<OutroSkipToastProps> = ({
   visible,
   remainingMs,
-  totalMs = 8000,
-  defaultAction = 'ask',
+  totalMs = 5000,
+  defaultAction = 'auto',
   hasNextEpisode = false,
   onSkip,
   onCancel,
@@ -35,7 +35,9 @@ export const OutroSkipToast: React.FC<OutroSkipToastProps> = ({
           </div>
 
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-[#1D1D1F] dark:text-white">已到片尾</p>
+            <p className="text-sm font-semibold text-[#1D1D1F] dark:text-white">
+              {defaultAction === 'auto' ? '即将跳过片尾' : '已到片尾'}
+            </p>
             <p className="text-xs text-[#6E6E73] dark:text-white/60 mt-0.5">
               {defaultAction === 'auto'
                 ? hasNextEpisode
@@ -63,7 +65,7 @@ export const OutroSkipToast: React.FC<OutroSkipToastProps> = ({
 
         <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-black/[0.10] dark:bg-white/15">
           <div
-            className="h-full bg-[#1D1D1F] dark:bg-white transition-[width] duration-200 ease-linear"
+            className="h-full bg-[#1D1D1F] dark:bg-white transition-[width] duration-100 ease-linear"
             style={{ width: `${progressPercent}%` }}
           />
         </div>

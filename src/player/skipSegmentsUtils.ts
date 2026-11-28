@@ -78,6 +78,51 @@ export function resolveEffectiveOutroStart(
   return undefined;
 }
 
+export const OUTRO_AUTO_LEAD_SECONDS = 5;
+export const OUTRO_AUTO_COUNTDOWN_MS = 5000;
+export const OUTRO_ASK_TOAST_MS = 8000;
+
+export interface OutroTriggerSpec {
+  triggerAtSec: number;
+  countdownMs: number;
+}
+
+/**
+ * 解析片尾弹窗触发时间与倒计时时长：
+ * - `'auto'` 模式：在有效片尾起点前 5 秒弹出 5 秒倒计时，倒计时结束自动跳过
+ * - `'ask'` 模式：在到达有效片尾起点时弹出 8 秒提示
+ */
+export function resolveOutroTriggerSpec(
+  outroStartSec: number | undefined,
+  totalDurationSec: number,
+  action: 'ask' | 'auto'
+): OutroTriggerSpec | null {
+  if (
+    typeof outroStartSec !== 'number' ||
+    !Number.isFinite(outroStartSec) ||
+    outroStartSec < 5
+  ) {
+    return null;
+  }
+  if (
+    Number.isFinite(totalDurationSec) &&
+    totalDurationSec > 0 &&
+    outroStartSec >= totalDurationSec - 1
+  ) {
+    return null;
+  }
+  if (action === 'auto') {
+    return {
+      triggerAtSec: Math.max(0, outroStartSec - OUTRO_AUTO_LEAD_SECONDS),
+      countdownMs: OUTRO_AUTO_COUNTDOWN_MS,
+    };
+  }
+  return {
+    triggerAtSec: outroStartSec,
+    countdownMs: OUTRO_ASK_TOAST_MS,
+  };
+}
+
 /**
  * 判断播放进度是否已抵达自动连播阈值（避免因 Math.ceil(0.25) === 1 永远无法归零）。
  */

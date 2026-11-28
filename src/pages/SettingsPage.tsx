@@ -2114,9 +2114,9 @@ export const SettingsPage: React.FC = () => {
 
                   <div className="flex items-center justify-between gap-4 p-3 rounded-lg bg-black/20 border border-white/5">
                     <div>
-                      <p className="text-xs font-medium text-gray-200">片尾跳过提示</p>
+                      <p className="text-xs font-medium text-gray-200">片尾自动跳过与提示</p>
                       <p className="text-[11px] text-gray-500 mt-0.5">
-                        到达片尾标记时弹出提示，可随时取消
+                        默认在到达片尾标记前 5 秒弹出倒计时并自动跳过，可随时取消
                       </p>
                     </div>
                     <button
@@ -2130,7 +2130,7 @@ export const SettingsPage: React.FC = () => {
                       className={`relative w-11 h-6 flex-shrink-0 rounded-full transition cursor-pointer ${
                         skipSettings.skipOutroEnabled ? 'bg-primary' : 'bg-black/15 dark:bg-white/15'
                       }`}
-                      title="片尾跳过提示"
+                      title="片尾自动跳过与提示"
                     >
                       <span
                         className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform ${
@@ -2148,14 +2148,14 @@ export const SettingsPage: React.FC = () => {
                   <div className="grid grid-cols-2 gap-2">
                     {[
                       {
-                        id: 'ask' as const,
-                        label: '仅提示',
-                        desc: '倒计时结束不自动跳过',
-                      },
-                      {
                         id: 'auto' as const,
                         label: '自动跳过',
-                        desc: '倒计时结束跳到结尾',
+                        desc: '到达片尾前 5 秒弹出倒计时，5 秒后自动跳过',
+                      },
+                      {
+                        id: 'ask' as const,
+                        label: '仅提示',
+                        desc: '到达片尾时弹出提示，倒计时结束不自动跳过',
                       },
                     ].map((option) => (
                       <button

@@ -3183,7 +3183,7 @@ export const PlayerPage: React.FC = () => {
         outroToast: {
           visible: Boolean(outroToast),
           remainingMs: outroRemainingMs,
-          totalMs: OUTRO_TOAST_MS,
+          totalMs: outroToast?.totalMs ?? OUTRO_TOAST_MS,
         },
         skipNotice,
         skipOutroAction: skipSettings.skipOutroAction,
@@ -4073,7 +4073,7 @@ export const PlayerPage: React.FC = () => {
       <OutroSkipToast
         visible={Boolean(outroToast) && !osdOverlayActive}
         remainingMs={outroRemainingMs}
-        totalMs={OUTRO_TOAST_MS}
+        totalMs={outroToast?.totalMs ?? OUTRO_TOAST_MS}
         defaultAction={skipSettings.skipOutroAction}
         hasNextEpisode={Boolean(nextEpisode)}
         onSkip={handleSkipOutro}

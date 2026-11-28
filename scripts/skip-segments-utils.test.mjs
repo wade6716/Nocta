@@ -2,7 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   computeOutroSegmentPatch,
+  OUTRO_ASK_TOAST_MS,
+  OUTRO_AUTO_COUNTDOWN_MS,
+  OUTRO_AUTO_LEAD_SECONDS,
   resolveEffectiveOutroStart,
+  resolveOutroTriggerSpec,
   shouldTriggerAutoNext,
 } from '../src/player/skipSegmentsUtils.ts';
 
@@ -52,4 +56,32 @@ test('shouldTriggerAutoNext triggers at remaining <= 0.5s including seek(total -
   assert.equal(shouldTriggerAutoNext(1.2, 1498.8), false);
   // 起播 10s 内即便 remaining <= 0.5 也不误触连播
   assert.equal(shouldTriggerAutoNext(0.2, 5), false);
+});
+
+test('resolveOutroTriggerSpec triggers 5s early with 5s countdown in auto mode, and at outroStart in ask mode', () => {
+  assert.equal(OUTRO_AUTO_LEAD_SECONDS, 5);
+  assert.equal(OUTRO_AUTO_COUNTDOWN_MS, 5000);
+  assert.equal(OUTRO_ASK_TOAST_MS, 8000);
+
+  assert.deepEqual(resolveOutroTriggerSpec(1410, 1500, 'auto'), {
+    triggerAtSec: 1405,
+    countdownMs: 5000,
+  });
+
+  // 边界：outroStart === 5 时，提前 5 秒应钳制到 0
+  assert.deepEqual(resolveOutroTriggerSpec(5, 100, 'auto'), {
+    triggerAtSec: 0,
+    countdownMs: 5000,
+  });
+
+  // 仅提示模式：到达片尾标记时再弹出 8 秒提示
+  assert.deepEqual(resolveOutroTriggerSpec(1410, 1500, 'ask'), {
+    triggerAtSec: 1410,
+    countdownMs: 8000,
+  });
+
+  // 无效或过于贴近结尾的标记返回 null
+  assert.equal(resolveOutroTriggerSpec(undefined, 1500, 'auto'), null);
+  assert.equal(resolveOutroTriggerSpec(4, 1500, 'auto'), null);
+  assert.equal(resolveOutroTriggerSpec(1499, 1500, 'auto'), null);
 });

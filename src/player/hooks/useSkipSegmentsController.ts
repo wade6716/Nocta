@@ -3,10 +3,22 @@ import { EmbyChapter, EmbyItem, extractIntroRange, ticksToSeconds } from '../../
 import { formatTime } from '../../components/player/PlayerOsd';
 import { MiniHudState } from '../../components/player/MiniActionHud';
 import { getSkipKey, usePlayerStore } from '../../stores/usePlayerStore';
-import { computeOutroSegmentPatch, resolveEffectiveOutroStart } from '../skipSegmentsUtils';
+import {
+  computeOutroSegmentPatch,
+  OUTRO_AUTO_COUNTDOWN_MS,
+  resolveEffectiveOutroStart,
+  resolveOutroTriggerSpec,
+} from '../skipSegmentsUtils';
 import { IPlayerEngine } from '../types';
 
-export const OUTRO_TOAST_MS = 8000;
+export const OUTRO_TOAST_MS = OUTRO_AUTO_COUNTDOWN_MS;
+
+export interface OutroToastState {
+  deadline: number;
+  totalMs: number;
+  triggerAtSec: number;
+  action: 'ask' | 'auto';
+}
 
 interface UseSkipSegmentsControllerParams {
   item: EmbyItem | null;
@@ -53,9 +65,10 @@ export function useSkipSegmentsController({
   const clearSkipSegment = usePlayerStore((s) => s.clearSkipSegment);
 
   const [skipNotice, setSkipNotice] = useState<string | null>(null);
-  const [outroToast, setOutroToast] = useState<{ deadline: number } | null>(null);
+  const [outroToast, setOutroToast] = useState<OutroToastState | null>(null);
   const [outroRemainingMs, setOutroRemainingMs] = useState(OUTRO_TOAST_MS);
 
+  const outroToastRef = useRef<OutroToastState | null>(null);
   const outroDismissedRef = useRef(false);
   const outroToastShownRef = useRef(false);
   const initialSkipNoticeKeyRef = useRef('');
@@ -118,11 +131,13 @@ export function useSkipSegmentsController({
   const resetOutroForNewStream = useCallback(() => {
     outroDismissedRef.current = false;
     outroToastShownRef.current = false;
+    outroToastRef.current = null;
     setOutroToast(null);
     setOutroRemainingMs(OUTRO_TOAST_MS);
   }, []);
 
   const clearOutroOnEnded = useCallback(() => {
+    outroToastRef.current = null;
     setOutroToast(null);
     setOutroRemainingMs(0);
   }, []);
@@ -155,6 +170,7 @@ export function useSkipSegmentsController({
     outroDismissedRef.current = false;
     outroToastShownRef.current = false;
     initialSkipNoticeKeyRef.current = '';
+    outroToastRef.current = null;
     setOutroToast(null);
     setOutroRemainingMs(OUTRO_TOAST_MS);
   }, [item?.Id]);
@@ -176,6 +192,14 @@ export function useSkipSegmentsController({
 
   // 同步于真实 onTimeUpdate 检查片尾起点（不依赖 React 节流时钟）
   const checkOutroAtTime = useCallback((cur: number, dur: number) => {
+    if (outroToastRef.current && cur < outroToastRef.current.triggerAtSec - 1.5) {
+      outroToastRef.current = null;
+      setOutroToast(null);
+      setOutroRemainingMs(0);
+      outroToastShownRef.current = false;
+      return;
+    }
+
     const state = usePlayerStore.getState();
     if (
       !state.skipSettings.skipOutroEnabled ||
@@ -191,25 +215,43 @@ export function useSkipSegmentsController({
     const total = dur || (currentItem ? ticksToSeconds(currentItem.RunTimeTicks || 0) : 0);
     const isCurrentSeries = Boolean(currentItem?.SeriesId || currentItem?.Type === 'Series');
     const outroStart = resolveEffectiveOutroStart(segments, total, isCurrentSeries);
-    if (outroStart !== undefined && cur >= outroStart && (!total || outroStart < total - 1)) {
+    const spec = resolveOutroTriggerSpec(outroStart, total, state.skipSettings.skipOutroAction);
+    if (spec && cur >= spec.triggerAtSec) {
       outroToastShownRef.current = true;
-      setOutroRemainingMs(OUTRO_TOAST_MS);
-      setOutroToast({ deadline: Date.now() + OUTRO_TOAST_MS });
+      const nextToast: OutroToastState = {
+        deadline: Date.now() + spec.countdownMs,
+        totalMs: spec.countdownMs,
+        triggerAtSec: spec.triggerAtSec,
+        action: state.skipSettings.skipOutroAction,
+      };
+      outroToastRef.current = nextToast;
+      setOutroRemainingMs(spec.countdownMs);
+      setOutroToast(nextToast);
     }
   }, []);
 
-  // 片尾轻提示倒计时：仅提示或按设置自动跳过
+  // 片尾轻提示倒计时：暂停播放时同步暂停倒计时，结束后按设置自动跳过
   useEffect(() => {
     if (!outroToast) return;
 
     let completed = false;
+    let remaining = outroToast.totalMs;
+    let lastTickAt = Date.now();
+
     const tick = () => {
       if (completed) return;
-      const remaining = Math.max(0, outroToast.deadline - Date.now());
+      const now = Date.now();
+      const dt = Math.max(0, now - lastTickAt);
+      lastTickAt = now;
+
+      if (!usePlayerStore.getState().paused) {
+        remaining = Math.max(0, remaining - dt);
+      }
       setOutroRemainingMs(remaining);
 
       if (remaining <= 0) {
         completed = true;
+        outroToastRef.current = null;
         setOutroToast(null);
         if (usePlayerStore.getState().skipSettings.skipOutroAction === 'auto') {
           skipOutroRef.current();
@@ -217,13 +259,14 @@ export function useSkipSegmentsController({
       }
     };
 
-    tick();
-    const timer = window.setInterval(tick, 200);
+    setOutroRemainingMs(remaining);
+    const timer = window.setInterval(tick, 100);
     return () => window.clearInterval(timer);
   }, [outroToast]);
 
   useEffect(() => {
     if (!skipSettings.skipOutroEnabled) {
+      outroToastRef.current = null;
       setOutroToast(null);
       setOutroRemainingMs(0);
     }
@@ -327,6 +370,7 @@ export function useSkipSegmentsController({
       if (field === 'outroStart') {
         outroToastShownRef.current = false;
         outroDismissedRef.current = false;
+        outroToastRef.current = null;
         setOutroToast(null);
         setOutroRemainingMs(0);
       }
@@ -337,6 +381,7 @@ export function useSkipSegmentsController({
 
   const handleSkipOutro = useCallback(() => {
     outroDismissedRef.current = true;
+    outroToastRef.current = null;
     setOutroToast(null);
     setOutroRemainingMs(0);
 
@@ -355,6 +400,7 @@ export function useSkipSegmentsController({
 
   const handleCancelOutro = useCallback(() => {
     outroDismissedRef.current = true;
+    outroToastRef.current = null;
     setOutroToast(null);
     setOutroRemainingMs(0);
   }, []);

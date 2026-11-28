@@ -2,6 +2,17 @@
 
 本文件记录 **Nocta · 诺塔** 各正式版本与里程碑的主要功能变更，并在发版时由 [generate-release-notes.mjs](scripts/generate-release-notes.mjs) 自动同步至 GitHub Release 说明与客户端内「检查更新」弹窗。
 
+## [v0.3.10] - 2026-11-27
+
+### 🐛 问题修复
+- **修复 MKV 进度条拖动卡死、Cues 误报正常与切片定位异常**：升级 `diagnose_stream_url` 真正按 `SeekPosition` 校验目标 `Cues` 块有效性与覆盖时长（区分「正常 / 残缺至 MM:SS / 损坏 / 缺失」）；修复 `parse_mkv_slice_head` 未中和旧 `SeekHead`/`Cues` 偏移及插值二分 VBR 越界早退问题；为 `libmpv` 补齐 15 秒网络读写超时（`network-timeout` / `rw_timeout`）；补全播放中拖动进度条的主动二分切片、`< 30s` 退出切片重载与 8s/15s 卡滞自动恢复看门狗。
+
+### ✨ 体验优化
+- **首页「继续观看」卡片拆分播放与详情入口**：区分直接续播按钮与点击跳转影视详情页，提升追剧浏览与选集体验。
+- **优化播放信息与寻址反馈**：技术信息面板与 macOS 全屏 OSD 精准展示 MKV Cues 完整度状态；缓冲胶囊在 `0 KB/s` 寻址期显示「定位中」。
+
+---
+
 ## [v0.3.9] - 2026-11-27
 
 ### 🚀 新功能

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Play, Check, Server } from 'lucide-react';
+import { Play, Check, Server, Loader2 } from 'lucide-react';
 import {
   EmbyItem,
   buildItemImageUrl,
@@ -14,6 +14,7 @@ interface MediaCardProps {
   serverUrl?: string;
   onClick: (item: EmbyItem) => void;
   onQuickPlay?: (item: EmbyItem) => void;
+  isQuickPlaying?: boolean;
   aspectRatio?: 'poster' | 'backdrop';
   subtitle?: string;
   badge?: string;
@@ -27,6 +28,7 @@ const MediaCardComponent: React.FC<MediaCardProps> = ({
   serverUrl = '',
   onClick,
   onQuickPlay,
+  isQuickPlaying = false,
   aspectRatio = 'poster',
   subtitle,
   badge,
@@ -172,11 +174,50 @@ const MediaCardComponent: React.FC<MediaCardProps> = ({
 
         {/* Hover overlay: 16:9 横版保留轻柔居中播放球；2:3 竖版保持海报艺术完整 */}
         {isBackdrop ? (
-          <div className="absolute inset-0 bg-black/25 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
-            <div className="w-11 h-11 rounded-full bg-white/95 text-[#1D1D1F] flex items-center justify-center shadow-xl transform scale-90 group-hover:scale-100 transition-transform duration-200">
-              <Play className="w-4 h-4 fill-current ml-0.5" />
+          <>
+            <div
+              className={`absolute inset-0 bg-black/25 transition-opacity pointer-events-none ${
+                isQuickPlaying ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+              }`}
+            />
+            <div
+              className={`absolute inset-0 flex items-center justify-center pointer-events-none transition-opacity z-20 ${
+                isQuickPlaying
+                  ? 'opacity-100'
+                  : 'opacity-0 group-hover:opacity-100 focus-within:opacity-100'
+              }`}
+            >
+              <div
+                className={`transform transition-transform duration-200 ${
+                  isQuickPlaying ? 'scale-100' : 'scale-90 group-hover:scale-100'
+                }`}
+              >
+                {onQuickPlay ? (
+                  <button
+                    type="button"
+                    disabled={isQuickPlaying}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onQuickPlay(item);
+                    }}
+                    className="pointer-events-auto w-11 h-11 rounded-full bg-white/95 hover:bg-white text-[#1D1D1F] flex items-center justify-center shadow-xl transform hover:scale-110 active:scale-95 transition-all duration-150 cursor-pointer disabled:cursor-wait"
+                    title={isQuickPlaying ? '准备播放...' : '立即播放'}
+                    aria-label={isQuickPlaying ? '准备播放...' : '立即播放'}
+                  >
+                    {isQuickPlaying ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Play className="w-4 h-4 fill-current ml-0.5" />
+                    )}
+                  </button>
+                ) : (
+                  <div className="w-11 h-11 rounded-full bg-white/95 text-[#1D1D1F] flex items-center justify-center shadow-xl">
+                    <Play className="w-4 h-4 fill-current ml-0.5" />
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
+          </>
         ) : (
           <>
             <div className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/55 via-black/15 to-transparent opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />

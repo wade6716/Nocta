@@ -575,6 +575,7 @@ export const OsdOverlayPage: React.FC = () => {
       <BufferingIndicator
         visible={Boolean(sync.isBuffering) && !sync.isLoading && !sync.centerIcon}
         networkSpeed={sync.networkSpeed}
+        isSeeking={Boolean(sync.telemetry?.isSeeking)}
       />
 
       <DanmakuLayer
@@ -876,6 +877,8 @@ export const OsdOverlayPage: React.FC = () => {
           userAgent={sync.userAgent}
           nextPreloadStatus={sync.nextPreloadStatus ?? null}
           mkvCuesStatus={sync.mkvCuesStatus ?? null}
+          mkvCuesStatusDetail={sync.mkvCuesStatusDetail ?? null}
+          mkvCuesCoverageSec={sync.mkvCuesCoverageSec ?? null}
         />
       )}
 

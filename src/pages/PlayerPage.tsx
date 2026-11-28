@@ -40,8 +40,11 @@ import {
 } from '../api/embyClient';
 import { resolveMpvProxyDetailed } from '../player/MpvPlayerEngine';
 import {
+  decideMidSeekRecoveryAction,
   decideStallRecoveryAction,
+  MkvCuesStatus,
   shouldDanmakuRun,
+  shouldProactivelySliceOnSeek,
 } from '../player/playbackStateGuard';
 import {
   IPlayerEngine,
@@ -123,6 +126,8 @@ interface StreamDiagnosticReport {
   totalSize?: number | null;
   isMkv?: boolean;
   hasMkvCues?: boolean | null;
+  mkvCuesStatus?: MkvCuesStatus | null;
+  mkvCuesCoverageSec?: number | null;
 }
 
 interface StreamTransferStats {
@@ -233,8 +238,33 @@ export const PlayerPage: React.FC = () => {
   const [proxyInfo, setProxyInfo] = useState<ResolvedStreamProxyInfo | null>(null);
   const [currentRedirectHosts, setCurrentRedirectHosts] = useState<string[]>([]);
   const [probedMkvCues, setProbedMkvCues] = useState<boolean | null>(null);
+  const [probedMkvCuesDetail, setProbedMkvCuesDetail] = useState<{
+    status: MkvCuesStatus;
+    coverageSec: number | null;
+  } | null>(null);
+  const [probedMidRangeSupported, setProbedMidRangeSupported] = useState<boolean | null>(null);
+  const [pendingSeekSeq, setPendingSeekSeq] = useState(0);
   const probedRedirectKeysRef = useRef<Set<string>>(new Set());
-  const probedMkvCuesByKeyRef = useRef<Map<string, boolean>>(new Map());
+  const probedMkvCuesByKeyRef = useRef<
+    Map<
+      string,
+      {
+        hasMkvCues: boolean;
+        status: MkvCuesStatus;
+        coverageSec: number | null;
+        midRangeSupported: boolean | null;
+      }
+    >
+  >(new Map());
+  const pendingSeekRef = useRef<{
+    targetSec: number;
+    startedAt: number;
+    seq: number;
+    sliceAttempted: boolean;
+    relayAttempted: boolean;
+  } | null>(null);
+  const seekSeqCounterRef = useRef(0);
+  const preserveInitialTimeOnceRef = useRef(false);
   const [abLoopA, setAbLoopA] = useState<number | null>(null);
   const [abLoopB, setAbLoopB] = useState<number | null>(null);
 
@@ -279,6 +309,11 @@ export const PlayerPage: React.FC = () => {
   const sliceAttemptedRef = useRef(false);
   const activeSliceStartSecRef = useRef<number | null>(null);
   const preserveStreamTimestampsRef = useRef(false);
+  const isMkvMediaRef = useRef(false);
+  const effectiveMkvCuesRef = useRef<boolean | null>(null);
+  const effectiveMkvCuesStatusRef = useRef<MkvCuesStatus | null>(null);
+  const effectiveMkvCuesCoverageSecRef = useRef<number | null>(null);
+  const effectiveMidRangeSupportedRef = useRef<boolean | null>(null);
   const diagReqIdRef = useRef(0);
   const relayStartReqIdRef = useRef(0);
   const activeRelayTokenRef = useRef<string | null>(null);
@@ -551,11 +586,16 @@ export const PlayerPage: React.FC = () => {
         relayFallbackAttemptedRef.current = false;
         altCandidateFallbackAttemptedRef.current = false;
         sliceAttemptedRef.current = false;
+        preserveInitialTimeOnceRef.current = false;
         stopActiveRelay();
         setProbedMkvCues(null);
+        setProbedMkvCuesDetail(null);
+        setProbedMidRangeSupported(null);
         setDiagnosticReport(null);
         setDiagnosticCopied(false);
       }
+      pendingSeekRef.current = null;
+      setPendingSeekSeq(0);
       setCurrentStreamUrl(streamUrl);
       setFirstFrameState(false);
       setLoadingState(true);
@@ -660,6 +700,17 @@ export const PlayerPage: React.FC = () => {
       }
       hasInitialSeekedRef.current = true;
       lastValidTimeRef.current = cur;
+      const pendingSeek = pendingSeekRef.current;
+      if (
+        pendingSeek &&
+        Date.now() - pendingSeek.startedAt > 500 &&
+        !telemetryRef.current.isSeeking &&
+        !isBufferingRef.current &&
+        cur > 0
+      ) {
+        pendingSeekRef.current = null;
+        setPendingSeekSeq(0);
+      }
       setFirstFrameState(true);
       setLoadingState(false);
       setStallNotice(null);
@@ -696,10 +747,19 @@ export const PlayerPage: React.FC = () => {
           videoErrorRef.current = null;
           syncBridgePlaybackState();
           break;
-        case 'playing':
+        case 'playing': {
           updateBuffering(false);
           pausedRef.current = false;
           setPaused(false);
+          const pendingSeek = pendingSeekRef.current;
+          if (
+            pendingSeek &&
+            Date.now() - pendingSeek.startedAt > 300 &&
+            !telemetryRef.current.isSeeking
+          ) {
+            pendingSeekRef.current = null;
+            setPendingSeekSeq(0);
+          }
           if (
             (engineType === 'html5' ||
               telemetryRef.current.firstFrameReady ||
@@ -714,6 +774,7 @@ export const PlayerPage: React.FC = () => {
           }
           syncBridgePlaybackState();
           break;
+        }
         case 'paused':
           updateBuffering(false);
           pausedRef.current = true;
@@ -836,11 +897,14 @@ export const PlayerPage: React.FC = () => {
   useEffect(() => {
     if (currentStreamUrl && engineRef.current) {
       const preserveTimestamps = preserveStreamTimestampsRef.current;
-      const resolved = preserveTimestamps
-        ? { seconds: initialTimeRef.current, skippedIntro: false }
-        : skipInitialIntroOnceRef.current
-        ? { seconds: 0, skippedIntro: false }
-        : resolveInitialPlaybackTime(initialTimeRef.current);
+      const preserveInitialTimeOnce = preserveInitialTimeOnceRef.current;
+      preserveInitialTimeOnceRef.current = false;
+      const resolved =
+        preserveTimestamps || preserveInitialTimeOnce
+          ? { seconds: initialTimeRef.current, skippedIntro: false }
+          : skipInitialIntroOnceRef.current
+          ? { seconds: 0, skippedIntro: false }
+          : resolveInitialPlaybackTime(initialTimeRef.current);
       skipInitialIntroOnceRef.current = false;
       initialTimeRef.current = resolved.seconds;
       const prefs = usePlayerStore.getState().playerPreferences;
@@ -914,14 +978,17 @@ export const PlayerPage: React.FC = () => {
     setCurrentRedirectHosts([]);
   }, [currentStreamUrl, mediaSource?.Id, item?.Id]);
 
-  // 首帧出画后再静默探测 302 重定向链以收集 CDN/网盘域名，避免起播期并发请求干扰单连接 302 节点
+  // 首帧出画后再静默探测 302 重定向链与 MKV Cues 完整度（仅在开启域名收集时记录域名，避免起播期并发干扰单连接 302 节点）
   useEffect(() => {
     if (!hasFirstFrame) return;
     const liveServer = useAuthStore.getState().getCurrentServer();
     if (!liveServer?.id) return;
 
     const hostsState = useEmbyHostsStore.getState();
-    if (!hostsState.settings.enabled || !hostsState.settings.probePlaybackRedirects) return;
+    const collectRedirects =
+      hostsState.settings.enabled && hostsState.settings.probePlaybackRedirects;
+    const shouldProbeCues = engineType === 'mpv' && isMkvMediaRef.current;
+    if (!collectRedirects && !shouldProbeCues) return;
 
     const targetStreamUrl = upstreamStreamUrlRef.current || currentStreamUrl;
     if (!isTauriEnvironment() || !targetStreamUrl || !/^https?:\/\//i.test(targetStreamUrl)) {
@@ -930,9 +997,13 @@ export const PlayerPage: React.FC = () => {
 
     const dedupeKey = `${liveServer.id}::${item?.Id || ''}::${mediaSource?.Id || targetStreamUrl}`;
     if (probedRedirectKeysRef.current.has(dedupeKey)) {
-      const cachedCues = probedMkvCuesByKeyRef.current.get(dedupeKey);
-      if (typeof cachedCues === 'boolean') {
-        setProbedMkvCues(cachedCues);
+      const cached = probedMkvCuesByKeyRef.current.get(dedupeKey);
+      if (cached) {
+        setProbedMkvCues(cached.hasMkvCues);
+        setProbedMkvCuesDetail({ status: cached.status, coverageSec: cached.coverageSec });
+        if (typeof cached.midRangeSupported === 'boolean') {
+          setProbedMidRangeSupported(cached.midRangeSupported);
+        }
       }
       return;
     }
@@ -962,11 +1033,24 @@ export const PlayerPage: React.FC = () => {
           },
         });
         if (cancelled) return;
-        if (typeof report?.hasMkvCues === 'boolean') {
-          probedMkvCuesByKeyRef.current.set(dedupeKey, report.hasMkvCues);
-          setProbedMkvCues(report.hasMkvCues);
+        if (typeof report?.midRangeSupported === 'boolean') {
+          setProbedMidRangeSupported(report.midRangeSupported);
         }
-        if (!report?.hops) return;
+        if (typeof report?.hasMkvCues === 'boolean') {
+          const detailStatus: MkvCuesStatus =
+            report.mkvCuesStatus ?? (report.hasMkvCues ? 'valid' : 'missing');
+          const detailCov =
+            typeof report.mkvCuesCoverageSec === 'number' ? report.mkvCuesCoverageSec : null;
+          probedMkvCuesByKeyRef.current.set(dedupeKey, {
+            hasMkvCues: report.hasMkvCues,
+            status: detailStatus,
+            coverageSec: detailCov,
+            midRangeSupported: report.midRangeSupported ?? null,
+          });
+          setProbedMkvCues(report.hasMkvCues);
+          setProbedMkvCuesDetail({ status: detailStatus, coverageSec: detailCov });
+        }
+        if (!collectRedirects || !report?.hops) return;
 
         const serverHost = extractHostFromUrl(liveServer.url)?.host;
         const foundRedirectHosts: string[] = [];
@@ -1623,6 +1707,40 @@ export const PlayerPage: React.FC = () => {
     showMiniHud,
   });
 
+  const exitSliceAndReloadAt = (targetSeconds: number) => {
+    pendingSeekRef.current = null;
+    setPendingSeekSeq(0);
+    if (targetSeconds < 5) {
+      handlePlayFromStart();
+      return;
+    }
+    preserveInitialTimeOnceRef.current = true;
+    relayFallbackAttemptedRef.current = false;
+    sliceAttemptedRef.current = false;
+    stopActiveRelay();
+    initialTimeRef.current = targetSeconds;
+    hasInitialSeekedRef.current = false;
+    lastValidTimeRef.current = targetSeconds;
+    updateTime(targetSeconds);
+    setFirstFrameState(false);
+    setLoadingState(true);
+    updateBuffering(false);
+    setStallNotice(null);
+    setStallReport(null);
+    setVideoError(null);
+    videoErrorRef.current = null;
+    syncBridgePlaybackState();
+    if (upstreamStreamUrlRef.current && upstreamStreamUrlRef.current !== currentStreamUrl) {
+      setCurrentStreamUrl(upstreamStreamUrlRef.current);
+    } else {
+      setReloadToken((t) => t + 1);
+    }
+    showMiniHud({
+      icon: 'seek-backward',
+      label: `正在定位至 ${formatTime(targetSeconds)}`,
+    });
+  };
+
   const handleSeek = (targetSeconds: number) => {
     const clamped = Math.max(0, effectiveDuration > 0 ? Math.min(effectiveDuration, targetSeconds) : targetSeconds);
     const prevValidSec = lastValidTimeRef.current || 0;
@@ -1635,32 +1753,78 @@ export const PlayerPage: React.FC = () => {
     updateTime(clamped);
     bridge.onMpvTimePos(clamped);
 
-    // 切片直跳模式下：回拖至切片起点之前或大幅前跳超出当前缓存时，按需重切至新位置（避免退回全片扫流）
-    const activeSliceStart = activeSliceStartSecRef.current;
-    if (activeSliceStart !== null && isTauriEnvironment() && engineType === 'mpv') {
-      if (clamped < 15) {
-        handlePlayFromStart();
-        reportEventProgress(0, paused, 'Seek');
-        return;
-      }
-      const bufferedFar = Math.max(prevValidSec, telemetryRef.current.bufferedEnd || 0);
-      if (clamped < activeSliceStart - 2 || clamped > bufferedFar + 60) {
-        void startRelayPlayback(undefined, {
-          sliceTargetSec: clamped,
-          allowAfterFirstFrame: true,
-          requireSlice: true,
-        }).then((ok) => {
-          if (!ok && engineRef.current) {
-            engineRef.current.seek(clamped);
-          }
-        });
-        reportEventProgress(clamped, paused, 'Seek');
-        return;
-      }
+    const decision = shouldProactivelySliceOnSeek({
+      isTauri: isTauriEnvironment(),
+      engineType,
+      isMkvMedia: isMkvMediaRef.current,
+      activeSliceStartSec: activeSliceStartSecRef.current,
+      targetSeconds: clamped,
+      currentSeconds: prevValidSec,
+      bufferedEndSeconds: telemetryRef.current.bufferedEnd,
+      midRangeSupported: effectiveMidRangeSupportedRef.current,
+      hasMkvCues: effectiveMkvCuesRef.current,
+      mkvCuesStatus: effectiveMkvCuesStatusRef.current,
+      mkvCuesCoverageSec: effectiveMkvCuesCoverageSecRef.current,
+    });
+
+    if (decision === 'exit_slice_to_direct') {
+      exitSliceAndReloadAt(clamped);
+      reportEventProgress(clamped < 5 ? 0 : clamped, paused, 'Seek');
+      return;
+    }
+
+    if (decision === 'slice') {
+      initialTimeRef.current = clamped;
+      pendingSeekRef.current = null;
+      setPendingSeekSeq(0);
+      showMiniHud({
+        icon: clamped >= prevValidSec ? 'seek-forward' : 'seek-backward',
+        label: `正在通过快速切片定位至 ${formatTime(clamped)}`,
+        subLabel: '免从头扫流直跳',
+      });
+      void startRelayPlayback(undefined, {
+        sliceTargetSec: clamped,
+        allowAfterFirstFrame: true,
+        requireSlice: true,
+      }).then((ok) => {
+        if (!ok && engineRef.current) {
+          engineRef.current.seek(clamped);
+          const seq = ++seekSeqCounterRef.current;
+          pendingSeekRef.current = {
+            targetSec: clamped,
+            startedAt: Date.now(),
+            seq,
+            sliceAttempted: true,
+            relayAttempted: false,
+          };
+          setPendingSeekSeq(seq);
+        }
+      });
+      reportEventProgress(clamped, paused, 'Seek');
+      return;
     }
 
     if (engineRef.current) {
       engineRef.current.seek(clamped);
+      if (
+        engineType === 'mpv' &&
+        isTauriEnvironment() &&
+        hasFirstFrameRef.current &&
+        Math.abs(clamped - prevValidSec) >= 15
+      ) {
+        const seq = ++seekSeqCounterRef.current;
+        pendingSeekRef.current = {
+          targetSec: clamped,
+          startedAt: Date.now(),
+          seq,
+          sliceAttempted: false,
+          relayAttempted: false,
+        };
+        setPendingSeekSeq(seq);
+      } else {
+        pendingSeekRef.current = null;
+        setPendingSeekSeq(0);
+      }
     }
 
     reportEventProgress(clamped, paused, 'Seek');
@@ -2506,11 +2670,16 @@ export const PlayerPage: React.FC = () => {
       } else {
         activeSliceStartSecRef.current = null;
         preserveStreamTimestampsRef.current = false;
-        const resolvedInit = skipInitialIntroOnceRef.current
+        preserveInitialTimeOnceRef.current = Boolean(opts?.allowAfterFirstFrame);
+        const resolvedInit = opts?.allowAfterFirstFrame
+          ? { seconds: initialTimeRef.current, skippedIntro: false }
+          : skipInitialIntroOnceRef.current
           ? { seconds: 0, skippedIntro: false }
           : resolveInitialPlaybackTime(initialTimeRef.current);
         initialTimeRef.current = resolvedInit.seconds;
       }
+      pendingSeekRef.current = null;
+      setPendingSeekSeq(0);
       syncBridgePlaybackState();
       setCurrentStreamUrl(started.localUrl);
       setReloadToken((t) => t + 1);
@@ -2530,8 +2699,11 @@ export const PlayerPage: React.FC = () => {
 
   const handlePlayFromStart = useCallback(() => {
     skipInitialIntroOnceRef.current = true;
+    preserveInitialTimeOnceRef.current = false;
     relayFallbackAttemptedRef.current = false;
     sliceAttemptedRef.current = false;
+    pendingSeekRef.current = null;
+    setPendingSeekSeq(0);
     stopActiveRelay();
     initialTimeRef.current = 0;
     hasInitialSeekedRef.current = true;
@@ -2593,8 +2765,16 @@ export const PlayerPage: React.FC = () => {
           },
         });
         if (reqId !== diagReqIdRef.current) return;
+        if (typeof report.midRangeSupported === 'boolean') {
+          setProbedMidRangeSupported(report.midRangeSupported);
+        }
         if (typeof report.hasMkvCues === 'boolean') {
+          const detailStatus: MkvCuesStatus =
+            report.mkvCuesStatus ?? (report.hasMkvCues ? 'valid' : 'missing');
+          const detailCov =
+            typeof report.mkvCuesCoverageSec === 'number' ? report.mkvCuesCoverageSec : null;
           setProbedMkvCues(report.hasMkvCues);
+          setProbedMkvCuesDetail({ status: detailStatus, coverageSec: detailCov });
         }
 
         if (autoRelayIfReachable && report.reachable && !relayFallbackAttemptedRef.current) {
@@ -2809,10 +2989,23 @@ export const PlayerPage: React.FC = () => {
           });
           if (cancelled || reqId !== diagReqIdRef.current || hasFirstFrameRef.current) return;
           report = probed;
+          if (typeof probed.midRangeSupported === 'boolean') {
+            setProbedMidRangeSupported(probed.midRangeSupported);
+          }
           if (typeof probed.hasMkvCues === 'boolean') {
+            const detailStatus: MkvCuesStatus =
+              probed.mkvCuesStatus ?? (probed.hasMkvCues ? 'valid' : 'missing');
+            const detailCov =
+              typeof probed.mkvCuesCoverageSec === 'number' ? probed.mkvCuesCoverageSec : null;
             setProbedMkvCues(probed.hasMkvCues);
+            setProbedMkvCuesDetail({ status: detailStatus, coverageSec: detailCov });
             const probeKey = `${liveServer.id}::${item?.Id || ''}::${mediaSource?.Id || target}`;
-            probedMkvCuesByKeyRef.current.set(probeKey, probed.hasMkvCues);
+            probedMkvCuesByKeyRef.current.set(probeKey, {
+              hasMkvCues: probed.hasMkvCues,
+              status: detailStatus,
+              coverageSec: detailCov,
+              midRangeSupported: probed.midRangeSupported ?? null,
+            });
           }
 
           const serverHost = extractHostFromUrl(liveServer.url)?.host;
@@ -2854,6 +3047,9 @@ export const PlayerPage: React.FC = () => {
         diagnosticFinalStatus: report?.finalStatus ?? null,
         midRangeSupported: report?.midRangeSupported ?? null,
         hasMkvCues: report?.hasMkvCues ?? null,
+        isMkvMedia: Boolean(report?.isMkv) || isMkvMediaRef.current,
+        mkvCuesStatus: report?.mkvCuesStatus ?? null,
+        mkvCuesCoverageSec: report?.mkvCuesCoverageSec ?? null,
         demuxerOpened: Boolean(telemetryRef.current.currentDemuxer),
         seekable: telemetryRef.current.seekable,
         isSeeking: Boolean(telemetryRef.current.isSeeking),
@@ -2934,6 +3130,156 @@ export const PlayerPage: React.FC = () => {
     showMiniHud,
   ]);
 
+  // 播放中拖动进度条卡滞看门狗（8s 停滞自动切片/中转，15s 慢扫自动切片直跳），全程非阻塞轻量提示
+  useEffect(() => {
+    const pending = pendingSeekRef.current;
+    if (
+      engineType !== 'mpv' ||
+      !isTauriEnvironment() ||
+      !hasFirstFrame ||
+      isLoadingVideo ||
+      Boolean(videoError) ||
+      !pending ||
+      pendingSeekSeq <= 0 ||
+      (!isBuffering && !telemetry.isSeeking)
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    const seq = pending.seq;
+
+    const runCheck = async () => {
+      const curPending = pendingSeekRef.current;
+      if (
+        cancelled ||
+        !curPending ||
+        curPending.seq !== seq ||
+        !hasFirstFrameRef.current ||
+        isLoadingVideoRef.current ||
+        Boolean(videoErrorRef.current) ||
+        (!isBufferingRef.current && !telemetryRef.current.isSeeking)
+      ) {
+        return;
+      }
+
+      const elapsedMs = Date.now() - curPending.startedAt;
+      const action = decideMidSeekRecoveryAction({
+        elapsedMs,
+        isMpv: true,
+        hasFirstFrame: hasFirstFrameRef.current,
+        hasError: Boolean(videoErrorRef.current),
+        isSeeking: Boolean(telemetryRef.current.isSeeking),
+        isBuffering: isBufferingRef.current,
+        cacheDuration: telemetryRef.current.cacheDuration ?? 0,
+        activeDownloadSpeed: networkSpeedRef.current,
+        targetSeconds: curPending.targetSec,
+        isMkvMedia: isMkvMediaRef.current,
+        midRangeSupported: effectiveMidRangeSupportedRef.current,
+        hasMkvCues: effectiveMkvCuesRef.current,
+        mkvCuesStatus: effectiveMkvCuesStatusRef.current,
+        mkvCuesCoverageSec: effectiveMkvCuesCoverageSecRef.current,
+        usingRelay: usingRelayStream,
+        sliceAlreadyAttempted: curPending.sliceAttempted,
+        relayAlreadyAttempted: curPending.relayAttempted,
+      });
+
+      if (action === 'none') return;
+
+      if (action === 'show_non_range_hint') {
+        showMiniHud({
+          icon: 'info',
+          label: '当前线路不支持分段跳转',
+          subLabel: '建议从头顺序播放或切换线路',
+          progressWarn: true,
+        });
+        return;
+      }
+
+      if (action === 'try_mkv_slice') {
+        curPending.sliceAttempted = true;
+        initialTimeRef.current = curPending.targetSec;
+        showMiniHud({
+          icon: 'info',
+          label: `定位耗时较长，正在快速切片至 ${formatTime(curPending.targetSec)}`,
+          subLabel: '绕过代理卡滞与缺失索引',
+        });
+        try {
+          const ok = await startRelayPlayback(undefined, {
+            sliceTargetSec: curPending.targetSec,
+            allowAfterFirstFrame: true,
+            requireSlice: true,
+          });
+          if (ok || cancelled) return;
+        } catch (err) {
+          console.warn('[Mid-Seek MKV Slice Failed]', err);
+        }
+
+        if (!cancelled && !usingRelayStream && !curPending.relayAttempted) {
+          curPending.relayAttempted = true;
+          initialTimeRef.current = curPending.targetSec;
+          try {
+            const okRelay = await startRelayPlayback(undefined, {
+              allowAfterFirstFrame: true,
+            });
+            if (okRelay || cancelled) return;
+          } catch (relayErr) {
+            console.warn('[Mid-Seek Relay Fallback Failed]', relayErr);
+          }
+        }
+        return;
+      }
+
+      if (action === 'try_relay') {
+        curPending.relayAttempted = true;
+        initialTimeRef.current = curPending.targetSec;
+        showMiniHud({
+          icon: 'info',
+          label: `正在切换内置中转定位至 ${formatTime(curPending.targetSec)}`,
+          subLabel: '绕过直连网络卡滞',
+        });
+        try {
+          await startRelayPlayback(undefined, {
+            allowAfterFirstFrame: true,
+          });
+        } catch (relayErr) {
+          console.warn('[Mid-Seek Relay Failed]', relayErr);
+        }
+        return;
+      }
+
+      if (action === 'show_manual_hint') {
+        showMiniHud({
+          icon: 'info',
+          label: `正在努力定位至 ${formatTime(curPending.targetSec)}`,
+          subLabel: '若长时间无响应可尝试切换代理或重播',
+          progressWarn: true,
+        });
+      }
+    };
+
+    const elapsedNow = Date.now() - pending.startedAt;
+    const t8 = window.setTimeout(() => void runCheck(), Math.max(200, 8000 - elapsedNow));
+    const t15 = window.setTimeout(() => void runCheck(), Math.max(400, 15000 - elapsedNow));
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(t8);
+      window.clearTimeout(t15);
+    };
+  }, [
+    engineType,
+    hasFirstFrame,
+    isLoadingVideo,
+    videoError,
+    pendingSeekSeq,
+    isBuffering,
+    telemetry.isSeeking,
+    usingRelayStream,
+    startRelayPlayback,
+    showMiniHud,
+  ]);
+
   const handleRetryDirect = (overrideMode?: StreamProxyOverride) => {
     if (!currentServer || !item || !mediaSource || !playSessionId) return;
     if (overrideMode) {
@@ -2944,6 +3290,9 @@ export const PlayerPage: React.FC = () => {
     relayFallbackAttemptedRef.current = false;
     altCandidateFallbackAttemptedRef.current = false;
     sliceAttemptedRef.current = false;
+    preserveInitialTimeOnceRef.current = false;
+    pendingSeekRef.current = null;
+    setPendingSeekSeq(0);
     stopActiveRelay();
     setDiagnosticReport(null);
     setDiagnosticCopied(false);
@@ -2979,6 +3328,9 @@ export const PlayerPage: React.FC = () => {
     relayFallbackAttemptedRef.current = false;
     altCandidateFallbackAttemptedRef.current = false;
     sliceAttemptedRef.current = false;
+    preserveInitialTimeOnceRef.current = false;
+    pendingSeekRef.current = null;
+    setPendingSeekSeq(0);
     stopActiveRelay();
     setDiagnosticReport(null);
     setDiagnosticCopied(false);
@@ -3007,6 +3359,9 @@ export const PlayerPage: React.FC = () => {
     relayFallbackAttemptedRef.current = false;
     altCandidateFallbackAttemptedRef.current = false;
     sliceAttemptedRef.current = false;
+    preserveInitialTimeOnceRef.current = false;
+    pendingSeekRef.current = null;
+    setPendingSeekSeq(0);
     stopActiveRelay();
     setDiagnosticReport(null);
     setDiagnosticCopied(false);
@@ -3067,7 +3422,7 @@ export const PlayerPage: React.FC = () => {
       `媒体源 Container: ${mediaSource?.Container || '-'} · IsRemote: ${String(Boolean(mediaSource?.IsRemote))}`,
       `DirectStreamUrl: ${redactUrlForReport(mediaSource?.DirectStreamUrl)}`,
       `探测结论: ${activeReport?.summary || (diagnosingStream ? '探测中' : '未探测')}`,
-      `中段 Range / MKV Cues: midRangeSupported=${String(activeReport?.midRangeSupported ?? 'unknown')} · isMkv=${String(Boolean(activeReport?.isMkv))} · hasMkvCues=${String(activeReport?.hasMkvCues ?? 'unknown')}`,
+      `中段 Range / MKV Cues: midRangeSupported=${String(activeReport?.midRangeSupported ?? 'unknown')} · isMkv=${String(Boolean(activeReport?.isMkv))} · hasMkvCues=${String(activeReport?.hasMkvCues ?? 'unknown')} · cuesStatus=${activeReport?.mkvCuesStatus ?? effectiveMkvCuesStatusRef.current ?? 'unknown'}${activeReport?.mkvCuesCoverageSec != null ? ` (${formatTime(activeReport.mkvCuesCoverageSec)})` : ''}`,
       `MPV 遥测快照: state=${engineRef.current?.state || '-'} · vo=${String(telemetry.voConfigured ?? '-')} · seekable=${String(telemetry.seekable ?? '-')} · partial=${String(telemetry.partiallySeekable ?? '-')} · seeking=${String(telemetry.isSeeking ?? '-')} · cacheDur=${(telemetry.cacheDuration ?? 0).toFixed(2)}s · streamPos=${telemetry.streamPos ?? 0} · initialTime=${Math.floor(initialTimeRef.current)}s`,
       ...(transferStats
         ? [
@@ -3121,8 +3476,38 @@ export const PlayerPage: React.FC = () => {
   // 其他平台与窗口模式完全沿用原有单窗口渲染路径。
   const canUseMacOsdOverlay = isTauriEnvironment() && IS_MACOS && engineType === 'mpv';
 
+  const containerLowerForCues = (mediaSource?.Container || '').toLowerCase();
+  const isMkvMedia =
+    telemetry.currentDemuxer === 'mkv' ||
+    containerLowerForCues.includes('mkv') ||
+    containerLowerForCues.includes('matroska') ||
+    Boolean(mediaSource?.Path && /\.mkv(\?|$)/i.test(mediaSource.Path)) ||
+    Boolean(diagnosticReport?.isMkv) ||
+    Boolean(stallReport?.isMkv);
+
   const effectiveMkvCues =
     probedMkvCues ?? diagnosticReport?.hasMkvCues ?? stallReport?.hasMkvCues ?? null;
+  const effectiveMkvCuesStatus: MkvCuesStatus | null =
+    probedMkvCuesDetail?.status ??
+    diagnosticReport?.mkvCuesStatus ??
+    stallReport?.mkvCuesStatus ??
+    (effectiveMkvCues === true ? 'valid' : effectiveMkvCues === false ? 'missing' : null);
+  const effectiveMkvCuesCoverageSec: number | null =
+    probedMkvCuesDetail?.coverageSec ??
+    diagnosticReport?.mkvCuesCoverageSec ??
+    stallReport?.mkvCuesCoverageSec ??
+    null;
+  const effectiveMidRangeSupported: boolean | null =
+    probedMidRangeSupported ??
+    diagnosticReport?.midRangeSupported ??
+    stallReport?.midRangeSupported ??
+    null;
+
+  isMkvMediaRef.current = isMkvMedia;
+  effectiveMkvCuesRef.current = effectiveMkvCues;
+  effectiveMkvCuesStatusRef.current = effectiveMkvCuesStatus;
+  effectiveMkvCuesCoverageSecRef.current = effectiveMkvCuesCoverageSec;
+  effectiveMidRangeSupportedRef.current = effectiveMidRangeSupported;
 
   const livePlayerState = usePlayerStore.getState();
   const osdSyncPayload: OsdSyncPayload | null = item
@@ -3203,6 +3588,8 @@ export const PlayerPage: React.FC = () => {
         nextEpisode,
         nextPreloadStatus,
         mkvCuesStatus: effectiveMkvCues,
+        mkvCuesStatusDetail: effectiveMkvCuesStatus,
+        mkvCuesCoverageSec: effectiveMkvCuesCoverageSec,
         showSkipIntro,
         autoNextCountdown,
         speedHistory,
@@ -3268,6 +3655,8 @@ export const PlayerPage: React.FC = () => {
     nextPreloadStatus?.status ?? '',
     Math.floor(nextPreloadStatus?.cachedDurationSec ?? 0),
     effectiveMkvCues ?? '',
+    effectiveMkvCuesStatus ?? '',
+    effectiveMkvCuesCoverageSec ?? '',
     resolvedTheme,
     storeRevisionRef.current,
   ].join('|');
@@ -3512,6 +3901,7 @@ export const PlayerPage: React.FC = () => {
       <BufferingIndicator
         visible={isBuffering && !isLoadingVideo && !videoError && !osdOverlayActive && !centerIcon}
         networkSpeed={networkSpeed}
+        isSeeking={Boolean(telemetry.isSeeking)}
       />
 
       {/* 底层：原生视频表面穿透层与交互层 */}
@@ -4218,6 +4608,8 @@ export const PlayerPage: React.FC = () => {
           userAgent={currentUserAgent}
           nextPreloadStatus={nextPreloadStatus}
           mkvCuesStatus={effectiveMkvCues}
+          mkvCuesStatusDetail={effectiveMkvCuesStatus}
+          mkvCuesCoverageSec={effectiveMkvCuesCoverageSec}
         />
       )}
 

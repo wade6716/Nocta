@@ -11,6 +11,7 @@ import type {
   StreamProxyOverride,
 } from './types';
 import type { MiniHudIconType } from '../components/player/MiniActionHud';
+import type { MkvCuesStatus } from './playbackStateGuard';
 
 export const OSD_OVERLAY_SYNC_EVENT = 'osd:sync';
 export const OSD_OVERLAY_COMMENTS_EVENT = 'osd:comments';
@@ -100,6 +101,8 @@ export interface OsdSyncPayload {
   nextEpisode?: EmbyItem | null;
   nextPreloadStatus?: NextEpisodePreloadStatus | null;
   mkvCuesStatus?: boolean | null;
+  mkvCuesStatusDetail?: MkvCuesStatus | null;
+  mkvCuesCoverageSec?: number | null;
   showSkipIntro?: boolean;
   autoNextCountdown?: number | null;
   speedHistory?: number[];

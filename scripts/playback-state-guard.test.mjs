@@ -3,9 +3,11 @@ import test from 'node:test';
 import {
   computeClampedBridgeElapsed,
   computeStreamPosSpeed,
+  decideMidSeekRecoveryAction,
   decideStallRecoveryAction,
   shouldDanmakuRun,
   shouldExitInitialLoading,
+  shouldProactivelySliceOnSeek,
   shouldUseKeyframeSeek,
 } from '../src/player/playbackStateGuard.ts';
 
@@ -318,5 +320,220 @@ test('decideStallRecoveryAction supports relay fallback, non-Range mid-file, and
       targetInitialTime: 1680,
     }),
     'show_seeking_prompt'
+  );
+
+  // Stalled deep MKV seek (0 KB/s) even if Cues was not flagged false -> try_mkv_slice
+  assert.equal(
+    decideStallRecoveryAction({
+      elapsedMs: 8500,
+      hasFirstFrame: false,
+      cacheDuration: 0,
+      isMpv: true,
+      hasError: false,
+      usingRelay: false,
+      relayAlreadyAttempted: false,
+      sliceAlreadyAttempted: false,
+      diagnosticReachable: true,
+      diagnosticFinalStatus: 206,
+      midRangeSupported: true,
+      isMkvMedia: true,
+      demuxerOpened: true,
+      seekable: true,
+      isSeeking: true,
+      activeDownloadSpeed: 0,
+      targetInitialTime: 1492,
+    }),
+    'try_mkv_slice'
+  );
+
+  // Partial Cues exceeded on startup resume -> try_mkv_slice
+  assert.equal(
+    decideStallRecoveryAction({
+      elapsedMs: 8500,
+      hasFirstFrame: false,
+      cacheDuration: 0,
+      isMpv: true,
+      hasError: false,
+      usingRelay: false,
+      relayAlreadyAttempted: false,
+      sliceAlreadyAttempted: false,
+      diagnosticReachable: true,
+      diagnosticFinalStatus: 206,
+      midRangeSupported: true,
+      isMkvMedia: true,
+      mkvCuesStatus: 'partial',
+      mkvCuesCoverageSec: 600,
+      targetInitialTime: 1492,
+    }),
+    'try_mkv_slice'
+  );
+});
+
+test('shouldProactivelySliceOnSeek handles slice exit, out-of-range re-slice, partial Cues, and missing/broken Cues', () => {
+  // Already sliced & user seeks back < 30s -> exit_slice_to_direct
+  assert.equal(
+    shouldProactivelySliceOnSeek({
+      isTauri: true,
+      engineType: 'mpv',
+      isMkvMedia: true,
+      activeSliceStartSec: 1485,
+      targetSeconds: 20,
+      currentSeconds: 1500,
+      bufferedEndSeconds: 1560,
+    }),
+    'exit_slice_to_direct'
+  );
+
+  // Already sliced & user seeks back before slice start (>= 30s) -> slice
+  assert.equal(
+    shouldProactivelySliceOnSeek({
+      isTauri: true,
+      engineType: 'mpv',
+      isMkvMedia: true,
+      activeSliceStartSec: 1485,
+      targetSeconds: 600,
+      currentSeconds: 1500,
+      bufferedEndSeconds: 1560,
+    }),
+    'slice'
+  );
+
+  // Normal stream, broken/missing Cues, jump beyond buffer -> proactive slice
+  assert.equal(
+    shouldProactivelySliceOnSeek({
+      isTauri: true,
+      engineType: 'mpv',
+      isMkvMedia: true,
+      activeSliceStartSec: null,
+      targetSeconds: 1492,
+      currentSeconds: 15,
+      bufferedEndSeconds: 120,
+      midRangeSupported: true,
+      hasMkvCues: false,
+      mkvCuesStatus: 'broken',
+    }),
+    'slice'
+  );
+
+  // Partial Cues covering 0..600s: jump to 300s stays normal, jump to 1492s slices
+  assert.equal(
+    shouldProactivelySliceOnSeek({
+      isTauri: true,
+      engineType: 'mpv',
+      isMkvMedia: true,
+      activeSliceStartSec: null,
+      targetSeconds: 300,
+      currentSeconds: 10,
+      bufferedEndSeconds: 40,
+      midRangeSupported: true,
+      hasMkvCues: false,
+      mkvCuesStatus: 'partial',
+      mkvCuesCoverageSec: 600,
+    }),
+    'normal'
+  );
+  assert.equal(
+    shouldProactivelySliceOnSeek({
+      isTauri: true,
+      engineType: 'mpv',
+      isMkvMedia: true,
+      activeSliceStartSec: null,
+      targetSeconds: 1492,
+      currentSeconds: 10,
+      bufferedEndSeconds: 40,
+      midRangeSupported: true,
+      hasMkvCues: false,
+      mkvCuesStatus: 'partial',
+      mkvCuesCoverageSec: 600,
+    }),
+    'slice'
+  );
+});
+
+test('decideMidSeekRecoveryAction catches 0 KB/s mid-playback seeks and slow sequential scans', () => {
+  // Exact scenario reported: MKV, Cues misreported valid, 0 KB/s for 8s at 24:52 (1492s) -> try_mkv_slice
+  assert.equal(
+    decideMidSeekRecoveryAction({
+      elapsedMs: 8200,
+      isMpv: true,
+      hasFirstFrame: true,
+      hasError: false,
+      isSeeking: true,
+      isBuffering: true,
+      cacheDuration: 0,
+      activeDownloadSpeed: 0,
+      targetSeconds: 1492,
+      isMkvMedia: true,
+      midRangeSupported: true,
+      hasMkvCues: true,
+      mkvCuesStatus: 'valid',
+      usingRelay: false,
+      sliceAlreadyAttempted: false,
+      relayAlreadyAttempted: false,
+    }),
+    'try_mkv_slice'
+  );
+
+  // Fast download at 8.5s -> wait until 15s, then slice
+  assert.equal(
+    decideMidSeekRecoveryAction({
+      elapsedMs: 8500,
+      isMpv: true,
+      hasFirstFrame: true,
+      hasError: false,
+      isSeeking: true,
+      isBuffering: true,
+      cacheDuration: 0,
+      activeDownloadSpeed: 2 * 1024 * 1024,
+      targetSeconds: 1492,
+      isMkvMedia: true,
+      midRangeSupported: true,
+      hasMkvCues: true,
+      usingRelay: false,
+      sliceAlreadyAttempted: false,
+      relayAlreadyAttempted: false,
+    }),
+    'none'
+  );
+  assert.equal(
+    decideMidSeekRecoveryAction({
+      elapsedMs: 15200,
+      isMpv: true,
+      hasFirstFrame: true,
+      hasError: false,
+      isSeeking: true,
+      isBuffering: true,
+      cacheDuration: 0,
+      activeDownloadSpeed: 2 * 1024 * 1024,
+      targetSeconds: 1492,
+      isMkvMedia: true,
+      midRangeSupported: true,
+      hasMkvCues: true,
+      usingRelay: false,
+      sliceAlreadyAttempted: false,
+      relayAlreadyAttempted: false,
+    }),
+    'try_mkv_slice'
+  );
+
+  // Non-MKV or < 30s stalled -> try_relay
+  assert.equal(
+    decideMidSeekRecoveryAction({
+      elapsedMs: 8500,
+      isMpv: true,
+      hasFirstFrame: true,
+      hasError: false,
+      isSeeking: true,
+      isBuffering: true,
+      cacheDuration: 0,
+      activeDownloadSpeed: 0,
+      targetSeconds: 20,
+      isMkvMedia: true,
+      midRangeSupported: true,
+      usingRelay: false,
+      sliceAlreadyAttempted: false,
+      relayAlreadyAttempted: false,
+    }),
+    'try_relay'
   );
 });
